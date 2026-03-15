@@ -215,20 +215,29 @@ model PackagePlan {
   id                    Int             @id @default(autoincrement())
   planName              String?
   planCode              String?         @unique
+
+  radgroupreplyId         Int?            @unique   // <-- ADD THIS
+
   connectionType        Int
-  connectionTypeDetails ConnectionType? @relation(fields: [connectionType], references: [id], map: "package_plan_connectiontype_fkey")
+  connectionTypeDetails ConnectionType? @relation(fields: [connectionType], references: [id])
+
   dataLimit             Int?
   downSpeed             Int?
   upSpeed               Int?
+
   ispId                 Int?
-  isp                   ISP?            @relation(fields: [ispId], references: [id], map: "package_plan_isp_fkey")
+  isp                   ISP?            @relation(fields: [ispId], references: [id])
+
   deviceLimit           Int?
   isPopular             Boolean         @default(false)
   description           String?
+
   isActive              Boolean         @default(true)
   isDeleted             Boolean         @default(false)
+
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
+
   packagePlanDetails    PackagePrice[]
 }
 
@@ -1306,6 +1315,7 @@ model nas {
   server      String?
   community   String?
   description String?
+  radiusNasId Int?     @unique
   isActive    Boolean  @default(true)
   isDeleted   Boolean  @default(false)
   isDefault   Boolean  @default(false)

@@ -7,7 +7,8 @@ const {
   listPackagePrices,
   getPackagePriceById,
   updatePackagePrice,
-  deletePackagePrice
+  deletePackagePrice,
+  resyncPackagePrice
 } = require('../controllers/packagePrice.controller');
 
 module.exports = (prisma) => {
@@ -52,6 +53,12 @@ module.exports = (prisma) => {
     '/:id',
     checkPermission('package_price_delete'),
     deletePackagePrice
+  );
+
+  router.post(
+    '/resync',
+    checkPermission('package_price_update'),
+    resyncPackagePrice
   );
 
   return router;

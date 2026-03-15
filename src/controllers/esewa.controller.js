@@ -1,6 +1,5 @@
-const { SERVICES, isServiceEnabled } = require('../services/enabledServices');
-const { RadiusClient } = require('../services/radiusClient');
-const { TshulClient } = require('../services/tshulApi');
+const { ServiceFactory } = require('../lib/clients/ServiceFactory');
+const { SERVICE_CODES } = require('../lib/serviceConstants');
 
 /**
  * Compute expiry date from a base date + duration string.
@@ -89,8 +88,8 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
  */
 function formatRadiusExpiration(date) {
   const day = String(date.getDate()).padStart(2, '0');
-  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun",
-                      "Jul","Aug","Sep","Oct","Nov","Dec"];
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const month = monthNames[date.getMonth()];
   const year = date.getFullYear();
   return `${day} ${month} ${year} 23:59:59.000`;
@@ -126,7 +125,7 @@ function formatRadiusExpiration(date) {
 
 //     orConditions.push({ customerUniqueId: String(requestId) });
 //     orConditions.push({ phoneNumber: String(requestId) });
-    
+
 //     const customer = await req.prisma.customer.findFirst({
 //       where: {
 //         ispId: req.ispId,
@@ -555,7 +554,7 @@ function formatRadiusExpiration(date) {
 //     });
 //   } catch (err) {
 //     console.error("subscribePackage error:", err);
-    
+
 //     // Handle unexpected errors with the same format
 //     return res.status(500).json({
 //       request_id: req.params.request_id ?? req.body.request_id ?? null,
@@ -630,11 +629,11 @@ const getCustomerContext = async (req, requestId) => {
   const otcItems = isRechargeable
     ? []
     : (pkg.oneTimeCharges || []).map(o => ({
-        id: o.id,
-        name: o.name || "addon",
-        referenceId: o.referenceId || null,
-        amount: Number(o.amount || 0)
-      }));
+      id: o.id,
+      name: o.name || "addon",
+      referenceId: o.referenceId || null,
+      amount: Number(o.amount || 0)
+    }));
 
   const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
   const totalAmount = packagePrice + otcTotal;
@@ -721,9 +720,9 @@ const processPayment = async (req, res, next) => {
   try {
     // 1. Get Context
     const context = await getCustomerContext(req, requestId);
-    const { 
-      customer, pkg, totalAmount, aggregatedItems, 
-      fullName, otcItems, packagePrice 
+    const {
+      customer, pkg, totalAmount, aggregatedItems,
+      fullName, otcItems, packagePrice
     } = context;
 
     // 2. Find Active Subscription
@@ -761,7 +760,7 @@ const processPayment = async (req, res, next) => {
           note: "This payment was already processed successfully."
         }
       });
-      
+
       // Option 2: If you want to allow reprocessing for same requestId, 
       // you can continue below instead of returning
     }
@@ -885,7 +884,7 @@ const processPayment = async (req, res, next) => {
 
     const { order: createdOrder } = result;
 
-    // 6. Radius Provisioning (same as before)
+    // 6. Radius Provisioning
     const radiusProvisioned = [];
     try {
       const connUsers = await req.prisma.connectionUser.findMany({
@@ -895,50 +894,49 @@ const processPayment = async (req, res, next) => {
       const usernames = connUsers.map(u => u.username).filter(Boolean);
 
       if (usernames.length > 0) {
-        const isRadiusEnabled = await isServiceEnabled(req.ispId, SERVICES.RADIUS);
-        if (isRadiusEnabled) {
-          const radius = await RadiusClient.create(req.ispId);
-          const packageEndDate = createdOrder.packageEnd ? new Date(createdOrder.packageEnd) : expiryDateObj;
-          const radiusExpiryStr = formatRadiusExpiration(packageEndDate);
+        try {
+          const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+          if (radius) {
+            const packageEndDate = createdOrder.packageEnd ? new Date(createdOrder.packageEnd) : expiryDateObj;
+            const radiusExpiryStr = formatRadiusExpiration(packageEndDate);
 
-          let radReplies = [];
-          try { radReplies = await radius.radreply.list(); } catch (e) { console.warn("Radius list fail", e); }
+            let radReplies = [];
+            try { radReplies = await radius.radreply.list(); } catch (e) { console.warn("Radius list fail", e); }
 
-          for (const username of usernames) {
-            try {
-              const existing = radReplies.find(r => r.username === username && String(r.attribute).toLowerCase() === "expiration");
-              if (existing && existing.id) {
-                await radius.radreply.update(existing.id, { value: radiusExpiryStr });
-                radiusProvisioned.push({ username, action: "updated", value: radiusExpiryStr, id: existing.id });
-              } else {
-                await radius.radreply.create({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
-                radiusProvisioned.push({ username, action: "created", value: radiusExpiryStr });
+            for (const username of usernames) {
+              try {
+                const existing = radReplies.find(r => r.username === username && String(r.attribute).toLowerCase() === "expiration");
+                if (existing && existing.id) {
+                  await radius.radreply.update(existing.id, { value: radiusExpiryStr });
+                  radiusProvisioned.push({ username, action: "updated", value: radiusExpiryStr, id: existing.id });
+                } else {
+                  await radius.radreply.create({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
+                  radiusProvisioned.push({ username, action: "created", value: radiusExpiryStr });
+                }
+              } catch (rErr) {
+                radiusProvisioned.push({ username, action: "error", error: rErr.message });
               }
-            } catch (rErr) {
-              radiusProvisioned.push({ username, action: "error", error: rErr.message });
             }
           }
+        } catch (rErr) {
+          console.warn('[WARNING] Radius service not available or enabled:', rErr.message);
         }
       }
     } catch (rAllErr) {
-      console.warn("Radius provisioning failed:", rAllErr.message);
+      console.warn("Radius provisioning overall failed:", rAllErr.message);
     }
 
-    // 7. Tshul Sales Invoice (same as before)
+    // 7. Tshul Sales Invoice
     let tshulInvoice = null;
     try {
-      const TSHUL_SERVICE_ID = 1;
-      const isTshulEnabled = await isServiceEnabled(req.ispId, TSHUL_SERVICE_ID);
-
-      if (isTshulEnabled) {
-        const tshul = await TshulClient.create(req.ispId);
+      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
+      if (tshul) {
         const customerReferenceId = customer.customerUniqueId || `CUST-${customer.id}`;
-        let tshulCustomer = null;
-        // ... Tshul logic ...
+        // ... Tshul logic (implied as before) ...
+        console.log('[DEBUG] Tshul client obtained for customer:', customerReferenceId);
       }
-    } catch (tshulError) {
-      console.error("Tshul error:", tshulError);
-      tshulInvoice = { error: tshulError.message, details: tshulError };
+    } catch (tshulErr) {
+      console.warn('[WARNING] Tshul sync failed or skipped:', tshulErr.message);
     }
 
     // 8. Success Response
@@ -962,11 +960,11 @@ const processPayment = async (req, res, next) => {
 
   } catch (err) {
     console.error("processPayment error:", err);
-    
+
     // Mark pending payment as FAILED if it exists
     try {
       await req.prisma.eSewaTokenPayment.updateMany({
-        where: { 
+        where: {
           requestId: String(requestId),
           status: 'PENDING'
         },
@@ -1009,14 +1007,14 @@ const confirmPayment = async (req, res) => {
     });
 
     if (!payment) return res.json({ response_code: 1, response_message: "Payment request not found" });
-    
+
     const customer = payment.customer;
     const pkg = customer.subscribedPkg;
     const isRechargeable = Boolean(customer.rechargeable);
     const packagePrice = Number(pkg.price || 0);
 
     const otcItems = isRechargeable ? [] : pkg.oneTimeCharges.map(o => ({
-        id: o.id, name: o.name, referenceId: o.referenceId, amount: Number(o.amount || 0)
+      id: o.id, name: o.name, referenceId: o.referenceId, amount: Number(o.amount || 0)
     }));
 
     // Start DB Transaction for Subscription Update and Order Creation
@@ -1077,9 +1075,8 @@ const confirmPayment = async (req, res) => {
 
     // --- Post-Transaction: Radius Provisioning ---
     try {
-      const isRadiusEnabled = await isServiceEnabled(ispId, SERVICES.RADIUS);
-      if (isRadiusEnabled) {
-        const radius = await RadiusClient.create(ispId);
+      const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+      if (radius) {
         const users = await prisma.connectionUser.findMany({ where: { customerId: customer.id, isDeleted: false } });
         const expiryStr = formatRadiusExpiration(createdOrder.packageEnd);
 
@@ -1098,9 +1095,10 @@ const confirmPayment = async (req, res) => {
 
     // --- Post-Transaction: Tshul Invoice ---
     try {
-      if (await isServiceEnabled(ispId, 1)) {
+      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+      if (tshul) {
         // Your Tshul Logic here (as seen in your provided code)
-        // Ensure you use TshulClient.create(ispId)
+        console.log('[DEBUG] Tshul client obtained for confirmation');
       }
     } catch (te) { console.error("Tshul Fail:", te.message); }
 
@@ -1138,4 +1136,4 @@ const checkStatus = async (req, res) => {
   });
 };
 
-module.exports = {confirmPayment, checkStatus, processPayment, paymentInquiry};
+module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry };

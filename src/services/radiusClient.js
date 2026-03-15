@@ -150,6 +150,21 @@ class RadiusClient {
     }
   }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   // --- Authentication Methods ---
   async #login() {
     try {
@@ -189,7 +204,7 @@ class RadiusClient {
     return this.#token;
   }
 
-  async #apiRequest(method, endpoint, data = null, retry = true) {
+  async #apiRequest(method, endpoint, data = undefined, retry = true) {
     try {
       const token = await this.#getToken();
 
@@ -198,20 +213,22 @@ class RadiusClient {
         url: endpoint.startsWith('/') ? endpoint : `/${endpoint}`,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         },
         timeout: 10000
       };
 
-      if (method.toLowerCase() === 'get') {
+      if (method.toLowerCase() === 'get' && data) {
         config.params = data;
-      } else {
+      }
+
+      if (['post', 'put', 'patch'].includes(method.toLowerCase()) && data) {
         config.data = data;
       }
 
       const response = await this.#api.request(config);
-
       return response.data;
+
     } catch (error) {
       console.error(`[RADIUS API ERROR] ${method} ${endpoint}:`, {
         status: error.response?.status,
@@ -219,7 +236,6 @@ class RadiusClient {
         message: error.message
       });
 
-      // If token expired, try to re-authenticate and retry once
       if (error.response?.status === 401 && retry) {
         console.log('[RADIUS] Token expired, re-authenticating...');
         this.#token = null;
@@ -227,7 +243,7 @@ class RadiusClient {
         return this.#apiRequest(method, endpoint, data, false);
       }
 
-      throw new Error(error.response?.data?.message || error.message || 'API request failed');
+      throw new Error(error.response?.data?.message || error.message);
     }
   }
 
@@ -267,38 +283,146 @@ class RadiusClient {
     }
   }
 
+  // ---------------- RADGROUPREPLY API METHODS ----------------
+
+  // Get all radgroupreply
+  async getRadgroupreply() {
+    return this.#apiRequest('get', '/api/radgroupreply');
+  }
+
+  // Get radgroupreply by ID
+  async getRadgroupreplyById(id) {
+    return this.#apiRequest('get', `/api/radgroupreply/${id}`);
+  }
+
+  // Create radgroupreply
+  async createRadgroupreply(data) {
+    const requiredFields = ['groupname', 'attribute', 'op', 'value'];
+    const missingFields = requiredFields.filter(field => !data[field]);
+    if (missingFields.length > 0) {
+      throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+    }
+    return this.#apiRequest('post', '/api/radgroupreply', data);
+  }
+
+  // Update radgroupreply
+  async updateRadgroupreply(id, data) {
+    return this.#apiRequest('put', `/api/radgroupreply/${id}`, data);
+  }
+
+  // Delete radgroupreply
+  async deleteRadgroupreply(id) {
+    return this.#apiRequest('delete', `/api/radgroupreply/${id}`);
+  }
+
+  // ---------------- RADGROUPCHECK API METHODS ----------------
+
+  // Get all radgroupcheck
+  async getRadgroupcheck() {
+    return this.#apiRequest('get', '/api/radgroupcheck');
+  }
+
+  // Get radgroupcheck by ID
+  async getRadgroupcheckById(id) {
+    return this.#apiRequest('get', `/api/radgroupcheck/${id}`);
+  }
+
+  // Create radgroupcheck
+  async createRadgroupcheck(data) {
+    const requiredFields = ['groupname', 'attribute', 'op', 'value'];
+    const missingFields = requiredFields.filter(field => !data[field]);
+    if (missingFields.length > 0) {
+      throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+    }
+    return this.#apiRequest('post', '/api/radgroupcheck', data);
+  }
+
+  // Update radgroupcheck
+  async updateRadgroupcheck(id, data) {
+    return this.#apiRequest('put', `/api/radgroupcheck/${id}`, data);
+  }
+
+  // Delete radgroupcheck
+  async deleteRadgroupcheck(id) {
+    return this.#apiRequest('delete', `/api/radgroupcheck/${id}`);
+  }
+
   // --- Public API Methods ---
 
-  // Get all radcheck entries
-  async getRadcheck() {
-    return this.#apiRequest('get', '/api/radcheck');
-  }
+  // NAS
 
+  // ---------------- NAS API METHODS ----------------
 
+  // Get all NAS
   async getNas() {
-    return this.#apiRequest('get', '/api/nas');
+    try {
+      return await this.#apiRequest('get', '/api/nas');
+    } catch (error) {
+      console.error('Error getting NAS list:', error);
+      throw new Error(`Failed to get NAS list: ${error.message}`);
+    }
   }
 
+
+  // Get NAS by ID
   async getNasById(id) {
-    return this.#apiRequest('get', `/api/nas/${id}`);
+    try {
+      return await this.#apiRequest('get', `/api/nas/${id}`);
+    } catch (error) {
+      console.error(`Error getting NAS ${id}:`, error);
+      throw new Error(`Failed to get NAS ${id}: ${error.message}`);
+    }
   }
 
+
+  // Create NAS
   async createNas(data) {
     const requiredFields = ['nasname', 'shortname', 'type', 'ports', 'secret'];
+
     const missingFields = requiredFields.filter(field => !data[field]);
 
     if (missingFields.length > 0) {
       throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
     }
-    return this.#apiRequest('post', '/api/nas', data);
+
+    try {
+      return await this.#apiRequest('post', '/api/nas', data);
+    } catch (error) {
+      console.error('Error creating NAS:', error);
+      throw new Error(`Failed to create NAS: ${error.message}`);
+    }
   }
 
+
+  // Update NAS
   async updateNas(id, data) {
-    return this.#apiRequest('put', `/api/nas/${id}`, data);
+    try {
+      return await this.#apiRequest('put', `/api/nas/${id}`, data);
+    } catch (error) {
+      console.error(`Error updating NAS ${id}:`, error);
+      throw new Error(`Failed to update NAS ${id}: ${error.message}`);
+    }
   }
 
+
+  // Delete NAS
   async deleteNas(id) {
-    return this.#apiRequest('delete', `/api/nas/${id}`);
+    console.log('Id', id);
+    try {
+      const response = await this.#apiRequest('delete', `/api/nas/${id}`);
+      console.log('Response', response);
+      return response;
+    } catch (error) {
+      console.error(`Error deleting NAS ${id}:`, error);
+      throw new Error(`Failed to delete NAS ${id}: ${error.message}`);
+    }
+  }
+
+
+
+  // Get all radcheck entries
+  async getRadcheck() {
+    return this.#apiRequest('get', '/api/radcheck');
   }
 
   // Get radcheck by ID
@@ -665,46 +789,6 @@ class RadiusClient {
     } catch (error) {
       console.error('Error listing NAS:', error);
       throw new Error(`Failed to list NAS: ${error.message}`);
-    }
-  }
-
-
-  // Delete NAS
-  async deleteNas(id) {
-    try {
-      await this.deleteNas(id);
-      return {
-        success: true,
-        message: `NAS ${id} deleted successfully`
-      };
-    } catch (error) {
-      console.error(`Error deleting NAS ${id}:`, error);
-      throw new Error(`Failed to delete NAS: ${error.message}`);
-    }
-  }
-
-  // Update NAS
-  async updateNas(id, data) {
-    try {
-      await this.updateNas(id, data);
-      return {
-        success: true,
-        message: `NAS ${id} updated successfully`
-      };
-    } catch (error) {
-      console.error(`Error updating NAS ${id}:`, error);
-      throw new Error(`Failed to update NAS: ${error.message}`);
-    }
-  }
-
-  // Get NAS by ID
-  async getNasById(id) {
-    try {
-      const nasEntry = await this.getNasById(id);
-      return nasEntry;
-    } catch (error) {
-      console.error(`Error getting NAS ${id}:`, error);
-      throw new Error(`Failed to get NAS: ${error.message}`);
     }
   }
 

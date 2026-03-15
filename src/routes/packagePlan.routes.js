@@ -7,7 +7,9 @@ const {
   listPackagePlans,
   getPackagePlanById,
   updatePackagePlan,
-  deletePackagePlan
+  deletePackagePlan,
+  resyncPackagePlan
+
 } = require('../controllers/packagePlan.controller');
 
 module.exports = (prisma) => {
@@ -21,28 +23,34 @@ module.exports = (prisma) => {
 
   // CRUD endpoints with permission checks
   router.post(
-    '/',  
-    checkPermission('package_plans_create'),  
+    '/',
+    checkPermission('package_plans_create'),
     createPackagePlan
   );
   router.get(
-    '/',     
-    checkPermission('package_plans_read'), 
+    '/',
+    checkPermission('package_plans_read'),
     listPackagePlans
   );
   router.get(
-    '/:id',  
-    checkPermission('package_plans_read'), 
+    '/:id',
+    checkPermission('package_plans_read'),
     getPackagePlanById
   );
   router.put(
-    '/:id',  
-    checkPermission('package_plans_update'), 
+    '/:id',
+    checkPermission('package_plans_update'),
     updatePackagePlan
   );
+
+  router.post(
+    '/resync',
+    checkPermission('package_plans_update'),
+    resyncPackagePlan
+  );
   router.delete(
-    '/:id',  
-    checkPermission('package_plans_delete'), 
+    '/:id',
+    checkPermission('package_plans_delete'),
     deletePackagePlan
   );
 
