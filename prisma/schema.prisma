@@ -1,0 +1,1321 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==================== BRANCH MODEL ====================
+model Branch {
+  id               Int                       @id @default(autoincrement())
+  name             String
+  code             String                    @unique
+  email            String?
+  phoneNumber      String?
+  address          String?
+  city             String?
+  state            String?
+  zipCode          String?
+  country          String?
+  contactPerson    String?
+  logoUrl          String?
+  isActive         Boolean                   @default(true)
+  isDeleted        Boolean                   @default(false)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  // Foreign Keys
+  ispId            Int
+  isp              ISP                       @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "branch_isp_fkey")
+
+  // Relations
+  departments      Department[]
+  users            User[]
+  customers        Customer[]
+  leads            Lead[]
+  olts             OLT[]
+  onts             ONT[]
+  splitters        Splitter[]
+  memberships      Membership[]
+  existingISPs     ExistingISP[]
+  connectionUsers  ConnectionUser[]
+  customerDocuments CustomerDocument[]
+  esewaPayments    ESewaTokenPayment[]
+  terminalSessions TerminalSession[]
+  terminalCommands TerminalCommand[]
+
+  @@index([ispId])
+  @@index([code])
+  @@index([isActive])
+  @@map("branches")
+}
+
+// ==================== ISP MODEL ====================
+model ISP {
+  id                Int                 @id @default(autoincrement())
+  companyName       String
+  businessType      String?
+  website           String?
+  contactPerson     String?
+  phoneNumber       String?
+  masterEmail       String              @unique
+  passwordHash      String?
+  description       String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  country           String?
+  asnNumber         String?
+  ipv4Blocks        String?
+  ipv6Blocks        String?
+  upstreamProviders String?
+  logoUrl           String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  // Relations
+  serviceLogs       ServiceLog[]
+  yeastarCallLogs   YeastarCallLog[]
+  yeastarExtensions YeastarExtension[]
+  yeastarTrunks     YeastarTrunk[]
+  yeastarActiveCalls YeastarActiveCall[]
+  yeastarSystemStatus YeastarSystemStatus[]
+  branches          Branch[]
+  departments       Department[]
+  users             User[]
+  connectionTypes   ConnectionType[]
+  oneTimeCharges    OneTimeCharge[]
+  packagePlans      PackagePlan[]
+  packagePrices     PackagePrice[]
+  customers         Customer[]
+  esewaConfig       ESewaConfiguration?
+  esewaPayments     ESewaTokenPayment[]
+  CustomerDocument  CustomerDocument[]
+  leads             Lead[]
+  connectionUsers   ConnectionUser[]
+  services          ISPService[]
+  memberships       Membership[]
+  existingISPs      ExistingISP[]
+  olts              OLT[]
+  onts              ONT[]
+  TerminalSession   TerminalSession[]
+  TerminalCommand   TerminalCommand[]
+  splitters         Splitter[]
+}
+
+// ==================== USER MODEL ====================
+model User {
+  id               Int             @id @default(autoincrement())
+  email            String          @unique
+  passwordHash     String
+  name             String?
+  roleId           Int?
+  role             Role?           @relation(fields: [roleId], references: [id], map: "user_role_fkey")
+  status           UserStatus      @default(pending)
+  lastLogin        DateTime?
+  profilePicture   String?
+  departmentId     Int?
+  department       Department?     @relation(fields: [departmentId], references: [id], map: "user_department_fkey")
+  ispId            Int?
+  isp              ISP?            @relation(fields: [ispId], references: [id], map: "user_isp_fkey")
+  branchId         Int?
+  branch           Branch?         @relation(fields: [branchId], references: [id], map: "user_branch_fkey")
+  isDeleted        Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  yeasterExt       String?
+
+  // Relations
+  refreshTokens    RefreshToken[]
+  leads            Lead[]          @relation("AssignedUser")
+  convertedLeads   Lead[]          @relation("ConvertedByUser")
+  installations    Customer[]      @relation("InstalledBy")
+  assignedFollowUps FollowUp[]     @relation("AssignedFollowUps")
+
+  @@index([branchId])
+  @@index([ispId])
+  @@index([roleId])
+  @@index([status])
+}
+
+// ==================== ROLE & PERMISSION MODELS ====================
+model Role {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  permissions Permission[] @relation("RolePermissions")
+  users       User[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Permission {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  menuName  String
+  roles     Role[]   @relation("RolePermissions")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Department {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  users       User[]
+  ispId       Int?
+  isp         ISP?     @relation(fields: [ispId], references: [id], map: "department_isp_fkey")
+  branchId    Int?
+  branch      Branch?  @relation(fields: [branchId], references: [id], map: "department_branch_fkey")
+  isDeleted   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum UserStatus {
+  active
+  inactive
+  pending
+  disabled
+}
+
+// ==================== AUTH MODELS ====================
+model RefreshToken {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, map: "refresh_token_user_fkey")
+  userId    Int
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ==================== CONNECTION & PACKAGE MODELS ====================
+model ConnectionType {
+  id                    Int           @id @default(autoincrement())
+  name                  String?
+  iconUrl               String?
+  code                  String?
+  isExtra               Boolean       @default(false)
+  description           String?
+  isActive              Boolean       @default(true)
+  isDeleted             Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  ispId                 Int?
+  isp                   ISP?          @relation(fields: [ispId], references: [id], map: "connection_type_isp_fkey")
+  connectionTypeDetails PackagePlan[]
+}
+
+model PackagePlan {
+  id                    Int             @id @default(autoincrement())
+  planName              String?
+  planCode              String?         @unique
+  connectionType        Int
+  connectionTypeDetails ConnectionType? @relation(fields: [connectionType], references: [id], map: "package_plan_connectiontype_fkey")
+  dataLimit             Int?
+  downSpeed             Int?
+  upSpeed               Int?
+  ispId                 Int?
+  isp                   ISP?            @relation(fields: [ispId], references: [id], map: "package_plan_isp_fkey")
+  deviceLimit           Int?
+  isPopular             Boolean         @default(false)
+  description           String?
+  isActive              Boolean         @default(true)
+  isDeleted             Boolean         @default(false)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  packagePlanDetails    PackagePrice[]
+}
+
+model PackagePrice {
+  id                    Int                       @id @default(autoincrement())
+  planId                Int
+  packagePlanDetails    PackagePlan?              @relation(fields: [planId], references: [id], map: "package_price_plan_fkey")
+  price                 Float
+  packageDuration       String?
+  referenceId           String?                   @unique
+  packageName           String?
+  isTrial               Boolean                   @default(false)
+  isActive              Boolean                   @default(true)
+  isDeleted             Boolean                   @default(false)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  ispId                 Int?
+  isp                   ISP?                      @relation(fields: [ispId], references: [id], map: "package_price_isp_fkey")
+  oneTimeCharges        OneTimeCharge[]           @relation("PackageOneTimeCharges")
+  customerSubscriptions CustomerSubscription[]
+  // Renamed unnamed relation and added relation name
+  customer              Customer[]                @relation("PackagePriceCustomers")
+  orders                CustomerOrderManagement[] @relation("PackageOrders")
+  lead                  Lead[]
+  customersSubscribed   Customer[]                @relation("SubscribedPackage")
+}
+
+model OneTimeCharge {
+  id                 Int            @id @default(autoincrement())
+  name               String?
+  code               String?
+  referenceId        String?
+  isTaxable          Boolean        @default(true)
+  iconUrl            String?
+  description        String?
+  amount             Float
+  ispId              Int?
+  isActive           Boolean        @default(true)
+  isDeleted          Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  isp                ISP?           @relation(fields: [ispId], references: [id], map: "one_time_charge_isp_fkey")
+  applicablePackages PackagePrice[] @relation("PackageOneTimeCharges")
+}
+
+// ==================== LEAD & FOLLOW-UP MODELS ====================
+model Lead {
+  id                      Int          @id @default(autoincrement())
+  isActive                Boolean      @default(true)
+  isDeleted               Boolean      @default(false)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  convertedToCustomer     Boolean      @default(false)
+  status                  LeadStatus   @default(new)
+  firstName               String?
+  middleName              String?
+  lastName                String?
+  email                   String?      @unique
+  phoneNumber             String?
+  secondaryContactNumber  String?
+  gender                  String?
+  address                 String?
+  street                  String?
+  district                String?
+  province                String?
+  source                  String?
+  notes                   String?
+  convertedAt             DateTime?
+  nextFollowUp            DateTime?
+  branchId                Int?
+  branch                  Branch?      @relation(fields: [branchId], references: [id], map: "lead_branch_fkey")
+  ispId                   Int?
+  isp                     ISP?         @relation(fields: [ispId], references: [id], map: "lead_isp_fkey")
+  memberShipId            Int?
+  membership              Membership?  @relation(fields: [memberShipId], references: [id], map: "lead_membership_fkey")
+  assignedUserId          Int?
+  assignedUser            User?        @relation("AssignedUser", fields: [assignedUserId], references: [id], map: "lead_assigned_user_fkey")
+  interestedPackageId     Int?
+  interestedPackage       PackagePrice? @relation(fields: [interestedPackageId], references: [id], map: "lead_interested_package_fkey")
+  convertedById           Int?
+  convertedBy             User?        @relation("ConvertedByUser", fields: [convertedById], references: [id], map: "lead_converted_by_fkey")
+  followUps               FollowUp[]
+  customers               Customer[]
+  metadata                Json?
+
+  @@index([status])
+  @@index([convertedToCustomer])
+  @@index([assignedUserId])
+  @@index([ispId])
+  @@index([createdAt])
+  @@index([email])
+  @@index([phoneNumber])
+  @@index([source])
+  @@index([province])
+  @@index([district])
+  @@index([gender])
+  @@index([branchId])
+  @@map("lead")
+}
+
+enum LeadStatus {
+  new
+  contacted
+  qualified
+  unqualified
+  converted
+}
+
+model FollowUp {
+  id             Int            @id @default(autoincrement())
+  leadId         Int
+  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade, map: "followup_lead_fkey")
+  assignedUserId Int
+  assignedUser   User           @relation("AssignedFollowUps", fields: [assignedUserId], references: [id], map: "followup_assigned_user_fkey")
+  type           FollowUpType   @default(CALL)
+  status         FollowUpStatus @default(SCHEDULED)
+  title          String
+  description    String?
+  scheduledAt    DateTime
+  completedAt    DateTime?
+  notes          String?
+  outcome        String?
+  isActive       Boolean        @default(true)
+  isDeleted      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([leadId])
+  @@index([assignedUserId])
+  @@index([scheduledAt])
+}
+
+enum FollowUpType {
+  CALL
+  EMAIL
+  MEETING
+  VISIT
+  OTHER
+}
+
+enum FollowUpStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+model Customer {
+  id               Int      @id @default(autoincrement())
+  customerUniqueId String?  @unique
+  panNo            String?  @unique
+  idNumber         String
+
+  leadId           Int      @unique
+  lead             Lead     @relation(fields: [leadId], references: [id], map: "customer_lead_fkey")
+
+  membershipId     Int?
+  membership       Membership? @relation(fields: [membershipId], references: [id], map: "customer_membership_fkey")
+
+  branchId         Int?
+  branch           Branch?     @relation(fields: [branchId], references: [id], map: "customer_branch_fkey")
+  ispId            Int?
+  isp              ISP?        @relation(fields: [ispId], references: [id], map: "customer_isp_fkey")
+  isRechargeable   Boolean? @default(false)
+
+  installedById    Int?
+  installedBy      User?       @relation("InstalledBy", fields: [installedById], references: [id], map: "customer_installedby_fkey")
+
+  oltId            Int?
+  olt              OLT?        @relation("OLTCustomers", fields: [oltId], references: [id], map: "customer_olt_fkey")
+
+  splitterId       Int?
+  splitter         Splitter?   @relation("SplitterCustomers", fields: [splitterId], references: [id], map: "customer_splitter_fkey")
+
+  existingISPId    Int?
+  existingISP      ExistingISP? @relation("ExistingISPCustomers", fields: [existingISPId], references: [id], map: "customer_existingisp_fkey")
+
+  // Package fields (direct foreign keys)
+  assignedPkg      Int?                 // trial package
+packagePrice     PackagePrice?        @relation("PackagePriceCustomers", fields: [assignedPkg], references: [id], map: "customer_assignedpkg_fkey")
+
+  subscribedPkgId  Int?                 // main (paid) package
+  subscribedPkg    PackagePrice?        @relation("SubscribedPackage", fields: [subscribedPkgId], references: [id], map: "customer_subscribedpkg_fkey")
+
+  devices          CustomerDevice[]
+  serviceDetails   CustomerServiceConnection[]
+  subscribedApps   CustomerSubscribedService[]
+
+  connectionUsers       ConnectionUser[]
+  customerSubscriptions CustomerSubscription[]
+  orders                CustomerOrderManagement[]
+  documents             CustomerDocument[]
+  esewaPayments         ESewaTokenPayment[]
+
+  status           String?   @default("active")
+  isDeleted        Boolean? @default(false)
+  onboardStatus    String?   @default("completed")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([customerUniqueId])
+  @@index([status])
+  @@index([branchId])
+}
+
+model CustomerDevice {
+  id                 Int      @id @default(autoincrement())
+  customerId         Int
+  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "customer_device_customer_fkey")
+  deviceType         String
+  brand              String?
+  model              String?
+  serialNumber       String?  @unique
+  macAddress         String?  @unique
+  ponSerial          String?  // <-- NEW FIELD
+  provisioningStatus String   @default("pending")
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([serialNumber])
+}
+
+model CustomerServiceConnection {
+  id              Int      @id @default(autoincrement())
+  customerId      Int
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "customer_service_connection_customer_fkey")
+  oltId           Int?
+  olt             OLT?     @relation(fields: [oltId], references: [id], map: "customer_service_connection_olt_fkey")
+  splitterId      Int?
+  splitter        Splitter? @relation(fields: [splitterId], references: [id], map: "customer_service_connection_splitter_fkey")
+  oltPort         String?
+  splitterPort    String?
+  vlanId          String?
+  vlanPriority    String?  @default("0")
+  connectionType  String?  @default("fiber")
+  status          String   @default("active")
+  provisioningNotes String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([oltId])
+  @@index([splitterId])
+}
+
+model CustomerSubscribedService {
+  id           Int      @id @default(autoincrement())
+  customerId   Int
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "customer_subscribed_service_customer_fkey")
+  serviceId    Int
+  service      Service  @relation(fields: [serviceId], references: [id], map: "customer_subscribed_service_service_fkey")
+  status       String   @default("active")
+  validUntil   DateTime?
+  serviceData  Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([customerId, serviceId])
+}
+
+model CustomerDocument {
+  id           Int      @id @default(autoincrement())
+  customerId   Int
+  customer     Customer @relation(fields: [customerId], references: [id], map: "customer_document_customer_fkey")
+  documentType String
+  fileName     String
+  filePath     String
+  mimeType     String?
+  size         Int?
+  uploadedAt   DateTime @default(now())
+  isDeleted    Boolean  @default(false)
+  branchId     Int?
+  branch       Branch?  @relation(fields: [branchId], references: [id], map: "customer_document_branch_fkey")
+  ispId        Int?
+  isp          ISP?     @relation(fields: [ispId], references: [id], map: "customer_document_isp_fkey")
+
+  @@unique([customerId, documentType])
+  @@index([customerId])
+  @@index([documentType])
+  @@index([branchId])
+}
+
+model ConnectionUser {
+  id         Int      @id @default(autoincrement())
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id], map: "connection_user_customer_fkey")
+  username   String   @unique
+  password   String
+  branchId   Int?
+  branch     Branch?  @relation(fields: [branchId], references: [id], map: "connection_user_branch_fkey")
+  ispId      Int?
+  isp        ISP?     @relation(fields: [ispId], references: [id], map: "connection_user_isp_fkey")
+  isActive   Boolean  @default(true)
+  isDeleted  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([branchId])
+}
+
+// ==================== OLT & RELATED MODELS ====================
+model OLT {
+  id               Int                 @id @default(autoincrement())
+  name             String
+  ipAddress        String
+  model            String
+  vendor           String
+  serialNumber     String?
+  firmwareVersion  String?
+  status           String              @default("online")
+  lastSeen         DateTime?
+  totalPorts       Int                 @default(0)
+  usedPorts        Int                 @default(0)
+  availablePorts   Int                 @default(0)
+  totalSubscribers Int                 @default(0)
+  activeSubscribers Int                @default(0)
+  sshHost          String?
+  sshPort          Int?                @default(22)
+  sshUsername      String?
+  sshPassword      String?
+  sshEnablePassword String?
+  sshKey           String?
+  sshTimeout       Int?                @default(30000)
+  sshKeepalive     Int?                @default(5000)
+  maxReconnect     Int?                @default(3)
+  commandDelay     Int?                @default(1200)
+  enableConfig     Boolean             @default(true)
+  shellRows        Int?                @default(40)
+  shellCols        Int?                @default(120)
+  telnetEnabled    Boolean             @default(false)
+  telnetPort       Int?                @default(23)
+  snmpEnabled      Boolean             @default(true)
+  snmpCommunity    String?             @default("public")
+  snmpVersion      String?             @default("v2c")
+  webInterface     Boolean             @default(true)
+  webPort          Int?                @default(80)
+  webSSL           Boolean             @default(false)
+  apiEnabled       Boolean             @default(false)
+  apiPort          Int?                @default(8080)
+  region           String?
+  site             String?
+  rack             Int?                @default(1)
+  position         Int?                @default(1)
+  latitude         Float?
+  longitude        Float?
+  locationNotes    String?
+  capabilities     String?
+  autoProvisioning Boolean             @default(false)
+  redundancy       Boolean             @default(false)
+  powerSupply      Int?                @default(1)
+  cooling          String?             @default("active")
+  backupSchedule   String?             @default("none")
+  lastBackup       DateTime?
+  notes            String?
+  lastConnected    DateTime?
+  connectionCount  Int                 @default(0)
+  avgConnectTime   Float?
+  successRate      Float?
+  isDeleted        Boolean             @default(false)
+  isActive         Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  defaultTransport String?             @default("ssh")
+  branchId         Int?
+  branch           Branch?             @relation(fields: [branchId], references: [id], map: "olt_branch_fkey")
+  ispId            Int
+  isp              ISP                 @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "olt_isp_fkey")
+
+  serviceBoards    ServiceBoard[]
+  onts             ONT[]
+  splitters        Splitter[]
+  // Renamed direct customer relation and added opposite
+  customers        Customer[]          @relation("OLTCustomers")
+  // New opposite for CustomerServiceConnection
+  customerServiceConnections CustomerServiceConnection[]
+  terminalSessions TerminalSession[]
+  terminalCommands TerminalCommand[]
+
+  oltProfiles      OLTProfile[]
+  oltVlans         OLTVLAN[]
+
+  @@unique([ispId, ipAddress], name: "olt_ip_unique")
+  @@index([sshHost])
+  @@index([status])
+  @@index([lastConnected])
+  @@index([branchId])
+}
+
+model ServiceBoard {
+  id                Int       @id @default(autoincrement())
+  slot              Int
+  type              String    @default("GPON")
+  portCount         Int
+  usedPorts         Int       @default(0)
+  availablePorts    Int       @default(0)
+  status            String    @default("active")
+  temperature       Float?
+  powerConsumption  Float?
+  firmwareVersion   String?
+  serialNumber      String?
+  oltId             Int
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  olt               OLT       @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "service_board_olt_fkey")
+
+  ports             ServiceBoardPort[]
+
+  @@unique([oltId, slot])
+  @@index([oltId, type])
+  @@index([oltId, status])
+}
+
+model ServiceBoardPort {
+  id             Int       @id @default(autoincrement())
+  boardId        Int
+  portNumber     Int
+  status         String    @default("available")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  board          ServiceBoard @relation(fields: [boardId], references: [id], onDelete: Cascade, map: "service_board_port_board_fkey")
+
+  // New opposite for Splitter
+  splitters      Splitter[]
+
+  @@unique([boardId, portNumber])
+}
+
+model OLTVLAN {
+  id           Int       @id @default(autoincrement())
+  oltId        Int
+  vlanId       Int
+  name         String?
+  description  String?
+  gemIndex     Int?
+  vlanType     String?
+  priority     Int?       @default(0)
+  status       String?    @default("active")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  olt          OLT @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "olt_vlan_olt_fkey")
+
+  @@unique([oltId, vlanId])
+}
+
+model OLTProfile {
+  id           Int       @id @default(autoincrement())
+  oltId        Int
+  profileId    String    @db.VarChar(50)
+  name         String    @db.VarChar(100)
+  type         String    @db.VarChar(20)
+  description  String?   @db.Text
+  upstreamBandwidth   String?   @db.VarChar(50)
+  downstreamBandwidth String?   @db.VarChar(50)
+  tcontType          String?    @db.VarChar(50)
+  services           String?    @db.Text
+  vlans              String?    @db.Text
+  qosProfile         String?    @db.VarChar(50)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  olt          OLT @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "olt_profile_olt_fkey")
+
+  @@unique([oltId, type, profileId])
+  @@unique([oltId, type, name])
+  @@index([type])
+}
+
+model ONT {
+  id               Int         @id @default(autoincrement())
+  ontId            String      @db.VarChar(50)
+  serialNumber     String      @db.VarChar(100)
+  vendor           String?     @db.VarChar(50)
+  model            String?     @db.VarChar(50)
+  status           String      @db.VarChar(20)
+  distance         Int?
+  rxPower          Float?
+  txPower          Float?
+  temperature      Float?
+  uptime           String?
+  lastOnline       DateTime?
+  serviceState     String?     @db.VarChar(50)
+  servicePort      String      @db.VarChar(50)
+  vlan             Int?
+  macAddress       String?     @db.VarChar(50)
+  ipAddress        String?     @db.VarChar(50)
+  description      String?     @db.VarChar(255)
+  capabilities     String?     @db.Text
+  rawData          Json?
+  lastSync         DateTime?
+  isDeleted        Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  oltId            Int
+  ispId            Int
+  branchId         Int?
+  branch           Branch?     @relation(fields: [branchId], references: [id], map: "ont_branch_fkey")
+  olt              OLT         @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "ont_olt_fkey")
+  isp              ISP         @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "ont_isp_fkey")
+  ontDetails       ONTDetails?
+
+  @@unique([oltId, ontId, servicePort], name: "ONT_unique")
+  @@index([oltId])
+  @@index([ispId])
+  @@index([status])
+  @@index([servicePort])
+  @@index([branchId])
+}
+
+model ONTDetails {
+  id                 Int         @id @default(autoincrement())
+  ontId              String      @db.VarChar(50)
+  fsp                String      @db.VarChar(20)
+  serialNumber       String      @db.VarChar(100)
+  description        String?     @db.VarChar(255)
+  controlFlag        String      @db.VarChar(20)
+  runState           String      @db.VarChar(20)
+  configState        String      @db.VarChar(20)
+  matchState         String      @db.VarChar(20)
+  isolationState     String?     @db.VarChar(20)
+  distance           Int?
+  batteryState       String?     @db.VarChar(30)
+  lastUpTime         String?
+  lastDownTime       String?
+  lastDownCause      String?     @db.VarChar(50)
+  lastDyingGaspTime  String?
+  onlineDuration     String?     @db.VarChar(100)
+  systemUptime       String?     @db.VarChar(100)
+  lineProfileId      String?     @db.VarChar(20)
+  lineProfileName    String?     @db.VarChar(100)
+  serviceProfileId   String?     @db.VarChar(20)
+  serviceProfileName String?     @db.VarChar(100)
+  mappingMode        String?     @db.VarChar(20)
+  qosMode            String?     @db.VarChar(20)
+  tr069              String?     @db.VarChar(20)
+  protectSide        String?     @db.VarChar(10)
+  ontIdRef           Int         @unique
+  ont                ONT         @relation(fields: [ontIdRef], references: [id], onDelete: Cascade, map: "ont_details_ont_fkey")
+  tconts             Json?
+  gems               Json?
+  vlanTranslations   Json?
+  servicePorts       Json?
+  opticalDiagnostics Json?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  lastSync           DateTime?
+
+  @@unique([serialNumber], name: "ONTDetails_sn_unique")
+  @@index([ontIdRef])
+  @@index([serialNumber])
+  @@index([runState])
+  @@index([configState])
+  @@index([matchState])
+  @@index([fsp, ontId], name: "ONTDetails_fsp_ontid")
+}
+
+model Splitter {
+  id                  Int         @id @default(autoincrement())
+  name                String
+  splitterId          String      @unique
+  splitRatio          String
+  splitterType        String      @default("PLC")
+  portCount           Int         @default(8)
+  usedPorts           Int         @default(0)
+  availablePorts      Int         @default(8)
+  isMaster            Boolean     @default(false)
+  masterSplitterId    String?
+  location            Json?
+  upstreamFiber       Json?
+  connectedServiceBoard Json?
+  status              String      @default("active")
+  notes               String?
+  isActive            Boolean     @default(true)
+  isDeleted           Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  oltId               Int?
+  olt                 OLT?        @relation(fields: [oltId], references: [id], map: "splitter_olt_fkey")
+  ispId               Int
+  isp                 ISP         @relation(fields: [ispId], references: [id], map: "splitter_isp_fkey")
+  branchId            Int?
+  branch              Branch?     @relation(fields: [branchId], references: [id], map: "splitter_branch_fkey")
+  masterSplitter      Splitter?   @relation("MasterSlave", fields: [masterSplitterId], references: [splitterId], map: "splitter_master_fkey")
+
+  serviceBoardPortId  Int?
+  serviceBoardPort    ServiceBoardPort? @relation(fields: [serviceBoardPortId], references: [id], map: "splitter_service_board_port_fkey")
+
+  slaveSplitters      Splitter[]  @relation("MasterSlave")
+  // Renamed direct customer relation and added opposite
+  customers           Customer[]  @relation("SplitterCustomers")
+  // New opposite for CustomerServiceConnection
+  customerServiceConnections CustomerServiceConnection[]
+
+  @@index([ispId])
+  @@index([splitterId])
+  @@index([oltId])
+  @@index([masterSplitterId])
+  @@index([status])
+  @@index([isMaster])
+  @@index([createdAt])
+  @@index([branchId])
+  @@map("splitters")
+}
+
+// ==================== TERMINAL MODELS ====================
+model TerminalSession {
+  id        Int               @id @default(autoincrement())
+  sessionId String
+  oltId     Int
+  protocol  String            @default("ssh")
+  startTime DateTime          @default(now())
+  endTime   DateTime?
+  status    String            @default("connected")
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  branchId  Int?
+  branch    Branch?           @relation(fields: [branchId], references: [id], map: "terminal_session_branch_fkey")
+  ispId     Int
+  olt       OLT               @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "terminal_session_olt_fkey")
+  isp       ISP               @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "terminal_session_isp_fkey")
+  commands  TerminalCommand[]
+
+  @@unique([sessionId])
+  @@index([branchId])
+}
+
+model TerminalCommand {
+  id         Int               @id @default(autoincrement())
+  sessionId  String
+  oltId      Int
+  command    String
+  output     String?
+  executedAt DateTime          @default(now())
+  createdAt  DateTime          @default(now())
+  branchId   Int?
+  branch     Branch?           @relation(fields: [branchId], references: [id], map: "terminal_command_branch_fkey")
+  ispId      Int
+  olt        OLT               @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "terminal_command_olt_fkey")
+  isp        ISP               @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "terminal_command_isp_fkey")
+  session    TerminalSession?  @relation(fields: [sessionId], references: [sessionId], map: "terminal_command_session_fkey")
+
+  @@index([branchId])
+}
+
+// ==================== MEMBERSHIP & EXISTING ISP MODELS ====================
+model Membership {
+  id                   Int        @id @default(autoincrement())
+  name                 String
+  code                 String     @unique
+  description          String?
+  address              String?
+  details              String?
+  newMemberEnabled     Boolean    @default(true)
+  newMemberIsPercent   Boolean    @default(true)
+  newMemberValue       Float      @default(13)
+  renewalEnabled       Boolean    @default(true)
+  renewalIsPercent     Boolean    @default(true)
+  renewalValue         Float      @default(10.5)
+  branchId             Int?
+  branch               Branch?    @relation(fields: [branchId], references: [id], map: "membership_branch_fkey")
+  ispId                Int?
+  isp                  ISP?       @relation(fields: [ispId], references: [id], map: "membership_isp_fkey")
+  isActive             Boolean    @default(true)
+  isDeleted            Boolean    @default(false)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  customers            Customer[]
+  lead                 Lead[]
+
+  @@unique([code, ispId])
+  @@index([branchId])
+  @@map("memberships")
+}
+
+model ExistingISP {
+  id              Int        @id @default(autoincrement())
+  name            String
+  code            String?    @unique
+  type            String?
+  website         String?
+  email           String?
+  phone           String?
+  address         String?
+  city            String?
+  state           String?
+  coverage        String?
+  services        String?
+  rating          Float?     @default(0.0)
+  customerCount   Int?       @default(0)
+  establishedYear Int?
+  status          String?    @default("active")
+  notes           String?
+  branchId        Int?
+  branch          Branch?    @relation(fields: [branchId], references: [id], map: "existing_isp_branch_fkey")
+  ispId           Int?
+  isp             ISP?       @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "existing_isp_isp_fkey")
+  isActive        Boolean    @default(true)
+  isDeleted       Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  // Renamed direct customer relation
+  customers       Customer[] @relation("ExistingISPCustomers")
+
+  @@index([ispId])
+  @@index([branchId])
+  @@map("existing_isp")
+}
+
+// ==================== SUBSCRIPTION & ORDER MODELS ====================
+model CustomerSubscription {
+  id           Int                       @id @default(autoincrement())
+  customerId   Int
+  customer     Customer                  @relation(fields: [customerId], references: [id], map: "customer_subscription_customer_fkey")
+  package      Int
+  packagePrice PackagePrice              @relation(fields: [package], references: [id], map: "customer_subscription_package_fkey")
+  isTrial      Boolean                   @default(false)
+  planStart    DateTime
+  planEnd      DateTime
+  isActive     Boolean                   @default(true)
+  isInvoicing  Boolean                   @default(true)
+  orders       CustomerOrderManagement[]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+}
+
+model CustomerOrderManagement {
+  id             Int                  @id @default(autoincrement())
+  customerId     Int
+  customer       Customer             @relation(fields: [customerId], references: [id], map: "customer_order_customer_fkey")
+  subscriptionId Int
+  subscription   CustomerSubscription @relation(fields: [subscriptionId], references: [id], map: "customer_order_subscription_fkey")
+  package        Int?
+  packagePrice   PackagePrice?        @relation("PackageOrders", fields: [package], references: [id], map: "customer_order_package_fkey")
+  orderDate      DateTime             @default(now())
+  packageStart   DateTime
+  packageEnd     DateTime
+  totalAmount    Float
+  items          OrderDetail[]
+  isPaid         Boolean              @default(false)
+  isActive       Boolean              @default(true)
+  isDeleted      Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model OrderDetail {
+  id          Int                     @id @default(autoincrement())
+  orderId     Int
+  order       CustomerOrderManagement @relation(fields: [orderId], references: [id], map: "order_detail_order_fkey")
+  itemName    String
+  referenceId String?
+  itemPrice   Float
+  createdAt   DateTime                @default(now())
+}
+
+// ==================== SERVICE MODELS ====================
+model Service {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100) @unique
+  code        String   @db.VarChar(50)  @unique
+  description String?
+  iconUrl     String?
+  category    ServiceCategory
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ispServices ISPService[]
+  // New opposite for CustomerSubscribedService
+  customerSubscribedServices CustomerSubscribedService[]
+
+  @@index([category])
+  @@index([isActive])
+}
+
+enum ServiceCategory {
+  BILLING
+  AUTHENTICATION
+  PAYMENT
+  STREAMING
+  NETWORK
+  VOIP
+  SECURITY
+  COMMUNICATION
+  OTHER
+  ACS
+}
+
+model ISPService {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  serviceId   Int
+  isActive    Boolean  @default(false)
+  isEnabled   Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  baseUrl     String?
+  apiVersion  String   @db.VarChar(10) @default("v1")
+  config      Json?
+
+  isp         ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "isp_service_isp_fkey")
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade, map: "isp_service_service_fkey")
+  credentials ServiceCredential[]
+
+  @@unique([ispId, serviceId])
+  @@index([isActive])
+  @@index([isEnabled])
+}
+
+model ServiceCredential {
+  id             Int      @id @default(autoincrement())
+  credentialType String   @db.VarChar(30)
+  key            String   @db.VarChar(50)
+  value          String   @db.VarChar(255)
+  label          String?  @db.VarChar(100)
+  isEncrypted    Boolean  @default(true)
+  description    String?
+  isActive       Boolean  @default(true)
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  ispServiceId Int
+  ispService   ISPService @relation(fields: [ispServiceId], references: [id], onDelete: Cascade, map: "service_credential_isp_service_fkey")
+
+  @@unique([ispServiceId, key])
+  @@index([credentialType])
+}
+
+model ServiceLog {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  serviceCode String
+  operation   String
+  status      String
+  message     String?
+  data        Json?
+  duration    Int?
+  createdAt   DateTime @default(now())
+  isp         ISP      @relation(fields: [ispId], references: [id], map: "service_log_isp_fkey")
+  @@index([ispId])
+  @@index([serviceCode])
+  @@index([createdAt])
+  @@index([status])
+}
+
+// ==================== YEASTAR MODELS ====================
+model YeastarExtension {
+  id               Int      @id @default(autoincrement())
+  ispId            Int
+  pbxExtensionId   String
+  extensionNumber  String
+  extensionName    String?
+  extensionType    String   @default("SIP")
+  status           String   @default("Idle")
+  agentid          String?
+  isActive         Boolean  @default(true)
+  isDeleted        Boolean  @default(false)
+  lastSync         DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  isp              ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "yeastar_extension_isp_fkey")
+  callLogs         YeastarCallLog[]
+
+  @@unique([ispId, extensionNumber])
+  @@unique([ispId, pbxExtensionId])
+  @@map("yeastar_extensions")
+}
+
+model YeastarTrunk {
+  id                  Int       @id @default(autoincrement())
+  ispId               Int
+  trunkId             String    @unique
+  trunkname           String
+  trunktype           String    @default("register")
+  pbxTrunkId          String
+  host                String?
+  port                String    @default("5060")
+  domain              String?
+  username            String?
+  authname            String?
+  fromuser            String?
+  password            String?
+  extensionsdod       String?
+  extensionsgroupdod  String?
+  status              String    @default("Unknown")
+  registerStatus      String?
+  isActive            Boolean   @default(true)
+  isDeleted           Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  lastSync            DateTime?
+
+  isp                 ISP       @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "yeastar_trunk_isp_fkey")
+
+  @@unique([ispId, trunkname])
+  @@index([ispId])
+  @@index([trunktype])
+  @@index([status])
+  @@index([isActive])
+  @@map("yeastar_trunks")
+}
+
+model YeastarCallLog {
+  id           Int      @id @default(autoincrement())
+  ispId        Int
+  extensionId  Int?
+  callid       String?
+  channelid    String?
+  direction    String?  @db.VarChar(20)
+  caller       String?  @db.VarChar(50)
+  called       String?  @db.VarChar(50)
+  trunkname    String?
+  memberstatus String?
+  callpath     String?
+  duration     Int?
+  startTime    DateTime?
+  endTime      DateTime?
+  status       String?  @db.VarChar(50)
+  eventType    String?  @db.VarChar(100)
+  eventData    Json?
+  rawData      Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  isp         ISP              @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "yeastar_call_log_isp_fkey")
+  extension   YeastarExtension? @relation(fields: [extensionId], references: [id], map: "yeastar_call_log_extension_fkey")
+
+  @@index([ispId])
+  @@index([callid])
+  @@index([channelid])
+  @@index([extensionId])
+  @@index([startTime])
+  @@index([direction])
+  @@index([status])
+  @@map("yeastar_call_logs")
+}
+
+model YeastarActiveCall {
+  id           Int      @id @default(autoincrement())
+  ispId        Int
+  callid       String   @unique
+  channelid    String
+  extension    String?
+  caller       String?
+  called       String?
+  direction    String?  @db.VarChar(20)
+  trunkname    String?
+  status       String   @db.VarChar(50)
+  startTime    DateTime @default(now())
+  duration     Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  isp         ISP @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "yeastar_active_call_isp_fkey")
+
+  @@index([ispId])
+  @@index([channelid])
+  @@index([extension])
+  @@index([isActive])
+  @@map("yeastar_active_calls")
+}
+
+model YeastarSystemStatus {
+  id               Int      @id @default(autoincrement())
+  ispId            Int      @unique
+  pbxIp            String
+  apiPort          Int      @default(80)
+  tcpPort          Int      @default(8333)
+  version          String?
+  totalExtensions  Int      @default(0)
+  activeExtensions Int      @default(0)
+  totalTrunks      Int      @default(0)
+  activeTrunks     Int      @default(0)
+  activeCalls      Int      @default(0)
+  systemUptime     String?
+  lastSync         DateTime @default(now())
+  status           String   @db.VarChar(20) @default("offline")
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  isp             ISP @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "yeastar_system_status_isp_fkey")
+
+  @@index([status])
+  @@map("yeastar_system_status")
+}
+
+// ==================== ESEWA PAYMENT MODELS ====================
+model ESewaTokenPayment {
+  id                   String    @id @default(cuid())
+  ispId                Int
+  customerId           Int
+  customerUniqueId     String    @db.VarChar(100)
+  requestId            String    @unique @db.VarChar(191)
+  amount               Float
+  status               String    @db.VarChar(50)
+  eSewaTransactionCode String?   @db.VarChar(191)
+  packageDetails       Json
+  orderId              String?   @db.VarChar(191)
+  referenceCode        String?   @db.VarChar(191)
+  createdAt            DateTime  @default(now())
+  paidAt               DateTime?
+  branchId             Int?
+  branch               Branch?   @relation(fields: [branchId], references: [id], map: "esewa_payment_branch_fkey")
+  customer             Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "esewa_payment_customer_fkey")
+  isp                  ISP       @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "esewa_payment_isp_fkey")
+
+  @@index([requestId])
+  @@index([customerUniqueId])
+  @@index([eSewaTransactionCode])
+  @@index([status])
+  @@index([customerId])
+  @@index([ispId])
+  @@index([branchId])
+}
+
+model ESewaConfiguration {
+  ispId        Int      @id @unique
+  username     String   @db.VarChar(191)
+  passwordHash String   @db.VarChar(191)
+  clientSecret String   @db.VarChar(191)
+  authMethod   String   @default("BEARER") @db.VarChar(50)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  isp          ISP                 @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "esewa_config_isp_fkey")
+  accessTokens ESewaAccessToken[]
+  refreshTokens ESewaRefreshToken[]
+}
+
+model ESewaAccessToken {
+  id            String   @id @default(cuid())
+  token         String   @db.Text
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  esewaConfig   ESewaConfiguration @relation(fields: [esewaConfigId], references: [ispId], onDelete: Cascade, map: "esewa_access_token_config_fkey")
+
+  @@index([esewaConfigId])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}
+
+model ESewaRefreshToken {
+  id            String   @id @default(cuid())
+  token         String   @db.Text
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  esewaConfig   ESewaConfiguration @relation(fields: [esewaConfigId], references: [ispId], onDelete: Cascade, map: "esewa_refresh_token_config_fkey")
+
+  @@index([esewaConfigId])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}
+
+// ==================== NAS MODEL ====================
+model nas {
+  id          Int      @id @default(autoincrement())
+  nasname     String
+  shortname   String?
+  type        String?
+  ports       String?
+  secret      String?
+  server      String?
+  community   String?
+  description String?
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ispId       Int?
+  branchId    Int?
+
+  @@index([nasname])
+  @@index([ispId])
+  @@index([branchId])
+}

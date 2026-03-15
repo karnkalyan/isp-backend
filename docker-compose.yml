@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kisan-isp-backend:latest
+    container_name: kisan-api
+    restart: unless-stopped
+    ports:
+      - "3200:3200"
+    volumes:
+      # Mount the local uploads folder to the container
+      # This ensures files uploaded through the API are not lost when the container is recreated
+      - ./uploads:/app/uploads
+      
+      # (Optional) Mount the .env file directly if you don't want to copy it during build
+      # - ./.env:/app/.env
+    
+    # Alternatively, you can pass environment variables directly here
+    # env_file:
+    #   - .env
+    
+    # environment:
+    #   - NODE_ENV=production
+    #   - DATABASE_URL=mysql://user:password@host:3306/kisan_isp
+    
+    # If you have a local database in docker-compose, you can depend on it
+    # depends_on:
+    #   - db
+
+# Optional Database Service Example (Uncomment and configure if you want docker to manage your MySQL db)
+#   db:
+#     image: mysql:8.0
+#     container_name: kisan-db
+#     restart: unless-stopped
+#     environment:
+#       MYSQL_ROOT_PASSWORD: rootpassword
+#       MYSQL_DATABASE: kisan_isp
+#       MYSQL_USER: isp_user
+#       MYSQL_PASSWORD: isp_password
+#     ports:
+#       - "3306:3306"
+#     volumes:
+#       - mysql_data:/var/lib/mysql
+
+# volumes:
+#   mysql_data:
