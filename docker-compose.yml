@@ -12,8 +12,10 @@ services:
     volumes:
       - ./uploads:/app/uploads
     environment:
-      # Your app env variables
-      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@127.0.0.1:3306/radius_manager"
+      # Database
+      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@host.docker.internal:3306/radius_manager"
+      
+      # App
       PORT: 3200
       ACCESS_SECRET: "IspMainAdminPanel123@!23"
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
@@ -39,5 +41,6 @@ services:
       OLT_IP: "10.64.0.100"
       OLT_USER: "technicalhakim"
       OLT_PASS: "hakim@1135"
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
