@@ -7,7 +7,8 @@ const {
   updateExistingISP,
   deleteExistingISP,
   getISPStats
-} = require('../controllers/existingISP.controller');
+} = require('../controllers/existingisp.controller'); // Verified Fix
+
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
@@ -16,9 +17,9 @@ module.exports = (prisma) => {
   const router = express.Router();
 
   // Attach prisma client to req
-  router.use((req, res, next) => { 
-    req.prisma = prisma; 
-    next(); 
+  router.use((req, res, next) => {
+    req.prisma = prisma;
+    next();
   });
 
   // Apply authentication globally
