@@ -1,19 +1,43 @@
+version: "3.9"
+
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    image: kisan-isp-backend:latest
     container_name: kisan-api
     restart: unless-stopped
     ports:
       - "3200:3200"
     volumes:
       - ./uploads:/app/uploads
-    env_file:
-      - .env
     environment:
-      - NODE_ENV=production
-      - PORT=3200
-    # Note: Ensure DATABASE_URL in .env points to your VPS database host
-
+      # Your app env variables
+      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@host.docker.internal:3306/radius_manager"
+      PORT: 3200
+      ACCESS_SECRET: "IspMainAdminPanel123@!23"
+      REFRESH_SECRET: "ispMainAdminPanelRefresh123"
+      FREE_RADIUS_API_TOKEN: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      RADIUS_BASE_URL: "http://10.3.2.6:3005/api"
+      CLIENT_ORIGIN: "http://localhost:3000"
+      TSHUL_BASE_URL: "https://kisan-net.tshul.app/api"
+      TSHUL_DEMO_USERNAME: "demo@kisan.net.np"
+      TSHUL_DEMO_PASSWORD: "demo@kisan.net.np@123"
+      RADIUS_USERNAME: "radius"
+      RADIUS_PASSWORD: "Kisan@radius"
+      GOOGLE_CLIENT_ID: "497249566156-jed3q4fsm8ndrip7sdopqtk9gp5rh0eh.apps.googleusercontent.com"
+      ESEWA_JWT_SECRET: "KisanNet@ESEWA2025AUTH"
+      ESEWA_ACCESS_TOKEN_EXPIRY: 250
+      ESEWA_REFRESH_TOKEN_EXPIRY: 550
+      DEFAULT_ISP_ID: 1
+      YEASTAR_PBX_IP: "10.3.2.50"
+      YEASTAR_PBX_PORT: 8088
+      YEASTAR_API_VERSION: "v1.1.0"
+      YEASTAR_USERNAME: "kisan"
+      YEASTAR_PASSWORD: "Kisan@123"
+      YEASTAR_APP_PORT: 8260
+      OLT_IP: "10.64.0.100"
+      OLT_USER: "technicalhakim"
+      OLT_PASS: "hakim@1135"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
