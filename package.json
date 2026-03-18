@@ -4,7 +4,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "seed": "node prisma/seed.js",
+    "servicesSeed": "node prisma/servicesSeed.js"
   },
   "type": "commonjs",
   "dependencies": {

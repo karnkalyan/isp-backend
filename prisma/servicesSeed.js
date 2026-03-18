@@ -13,21 +13,21 @@ async function main() {
   //===================================================================
   console.log("\n--- Section 1: Creating Core ISP and Admin ---");
 
-  const hashedPassword = await bcrypt.hash("kalyan_vickey", 10);
+  const hashedPassword = await bcrypt.hash("arrownet@1234", 10);
 
   const isp = await prisma.iSP.upsert({
     where: { masterEmail: "karnkalyan@gmail.com" },
     update: {},
     create: {
-      companyName: "Simulcast Technologies Pvt. Ltd.",
+      companyName: "ArrowNet Pvt Ltd.",
       businessType: "IT & ISP",
-      website: "https://simulcast.com",
-      contactPerson: "Kalyan Kumar Karn",
-      phoneNumber: "+9779814823222",
-      masterEmail: "karnkalyan@gmail.com",
+      website: "https://arrownet.com.np",
+      contactPerson: "Navin",
+      phoneNumber: "+9779841222266",
+      masterEmail: "navin@arrownet.com.np",
       passwordHash: hashedPassword,
       description: "ISP & IT Solutions provider in Kathmandu",
-      address: "Pepsi Cola",
+      address: "Teku, Kathmandu",
       city: "Kathmandu",
       state: "Bagmati",
       zipCode: "44600",
@@ -51,7 +51,7 @@ async function main() {
     where: { email: "karnkalyan@gmail.com" },
     update: {},
     create: {
-      email: "karnkalyan@gmail.com",
+      email: "navin@arrownet.com.np",
       passwordHash: hashedPassword,
       name: "System Administrator",
       status: "active",

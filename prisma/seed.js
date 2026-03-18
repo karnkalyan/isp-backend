@@ -228,14 +228,14 @@ async function main() {
   }
 
   // --- Create Departments ---
-  // const createdDepartments = {};
-  // for (const dept of departmentsData) {
-  //   const department = await prisma.department.create({
-  //     data: dept,
-  //   });
-  //   createdDepartments[dept.name] = department;
-  //   console.log(`Created Department: ${department.name}`);
-  // }
+  const createdDepartments = {};
+  for (const dept of departmentsData) {
+    const department = await prisma.department.create({
+      data: dept,
+    });
+    createdDepartments[dept.name] = department;
+    console.log(`Created Department: ${department.name}`);
+  }
 
   // --- Create Roles and link Permissions ---
   const createdRoles = {};
