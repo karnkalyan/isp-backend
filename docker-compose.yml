@@ -13,7 +13,7 @@ services:
       - ./uploads:/app/uploads
     environment:
       # Your app env variables
-      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@host.docker.internal:3306/radius_manager"
+      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@127.0.0.1:3306/radius_manager"
       PORT: 3200
       ACCESS_SECRET: "IspMainAdminPanel123@!23"
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
