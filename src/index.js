@@ -65,7 +65,7 @@ app.use(cors({
             callback(null, true);
         } else {
             // Check for subdomains dynamically if needed
-            if (origin.endsWith('.kisan.net.np') || origin.endsWith('.namaste.net.np')) {
+            if (origin.endsWith('.kisan.net.np') || origin.endsWith('.namaste.net.np') || origin.endsWith('.arrownet.com.np')) {
                 callback(null, true);
             } else {
                 callback(new Error('Not allowed by CORS'));

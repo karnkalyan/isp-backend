@@ -19,7 +19,7 @@ services:
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
       FREE_RADIUS_API_TOKEN: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
       RADIUS_BASE_URL: "http://10.3.2.6:3005/api"
-      CLIENT_ORIGIN: "http://localhost:3000"
+      CLIENT_ORIGIN: "cms.arrownet.com.np"
       TSHUL_BASE_URL: "https://kisan-net.tshul.app/api"
       TSHUL_DEMO_USERNAME: "demo@kisan.net.np"
       TSHUL_DEMO_PASSWORD: "demo@kisan.net.np@123"
