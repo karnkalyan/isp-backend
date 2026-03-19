@@ -5,13 +5,9 @@ services:
     restart: unless-stopped
     command:
       - --default-authentication-plugin=mysql_native_password
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
     environment:
       MYSQL_ROOT_PASSWORD: "ArrowNet@DB123!@#"
-      MYSQL_USER: "root"
       MYSQL_DATABASE: "radius_manager"
-      MYSQL_ROOT_HOST: "%"
     ports:
       - "3306:3306"
     volumes:
@@ -38,7 +34,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3200
-      DATABASE_URL: "mysql://root:YOUR_DB_PASSWORD@db:3306/radius_manager"
+      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@db:3306/radius_manager"
 
       ACCESS_SECRET: "IspMainAdminPanel123@!23"
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
