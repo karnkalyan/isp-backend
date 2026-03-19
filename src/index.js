@@ -49,11 +49,10 @@ app.use(cookieParser());
 const allowedOrigins = [
     'https://radius.kisan.net.np',
     'https://radius.namaste.net.np',
-    'http://localhost:4001', // Include your local dev port
+    'https://cms.arrownet.com.np',     // <--- Add Production Frontend
+    'https://api.cms.arrownet.com.np', // <--- Add Production API
     'http://localhost:3000',
-    'http://192.168.200.11:3000',
-    'http://192.168.200.11:4001',
-    'http://192.168.10.3:3000'
+    'http://localhost:4001',
 ];
 
 app.use(cors({
