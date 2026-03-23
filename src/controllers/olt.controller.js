@@ -460,7 +460,7 @@ async function createOlt(req, res, next) {
           sshPort: sshConfig?.port || 22,
           sshUsername: sshConfig?.username || "admin",
           sshPassword: sshConfig?.password || null,
-          sshEnablePassword: sshConfig?.enablePassword || null,
+          sshEnablePassword: sshConfig?.password || null,
           sshKey: sshConfig?.sshKey || null,
           telnetEnabled: telnetConfig?.enabled || false,
           telnetPort: telnetConfig?.port || 23,
