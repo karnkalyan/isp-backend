@@ -86,7 +86,7 @@ class BdcomOLTDriver {
     // --- HIGH LEVEL ACTIONS ---
 
     // Get all registered ONUs
-    async getAllOnu() {
+    async getOntInfoWithOptical() {
         return this.runSession(async (send) => {
             const serviceBoardType = await this.serviceBoardType();
             // Fix: use 'detail' not 'details'
@@ -217,138 +217,142 @@ class BdcomOLTDriver {
 
     // --- PARSERS FOR BDCOM ---
 
-    /**
-     * Parse ONU table from 'show epon onu-information details'
-     * Returns array of ONU objects
-     */
-    parseOntTable(text) {
-        const onuList = [];
-        const lines = text.split('\n');
-        let currentInterface = null;
+/**
+ * Parse ONU table from 'show epon onu-information detail'
+ * Returns an array of ONU objects with Huawei‑compatible keys.
+ */
+parseOntTable(text) {
+    const onuList = [];
+    const lines = text.split('\n');
+    let currentInterface = null;
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trimRight(); // Don't trim fully to preserve indentation
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trimRight();
 
-            // Skip empty lines
-            if (!line) continue;
+        if (!line) continue;
 
-            // Check for interface header
-            const interfaceMatch = line.match(/Interface (EPON\d+\/\d+) has registered \d+ ONUs?:/);
-            if (interfaceMatch) {
-                currentInterface = interfaceMatch[1];
-                continue;
-            }
-
-            // Skip header lines
-            if (line.includes('IntfName') || line.includes('--------') || line.includes('cription')) {
-                continue;
-            }
-
-            // Parse ONU line (starts with EPON interface)
-            if (line.trim().startsWith('EPON')) {
-                const onuData = {
-                    interface: currentInterface,
-                    full_name: '',
-                    vendor_id: 'N/A',
-                    model_id: 'N/A',
-                    mac_address: 'N/A',
-                    loid: null,
-                    description: 'N/A',
-                    bind_type: 'N/A',
-                    status: 'N/A',
-                    dereg_reason: 'N/A',
-                    onu_id: null
-                };
-
-                // Extract the main ONU line (EPON0/10:1       FTTH     1GE-       c07e.4073.03dd N/A                      N/A)
-                const mainLine = line;
-
-                // Parse the first part - interface and ONU ID
-                const fullNameMatch = mainLine.match(/(EPON\d+\/\d+:\d+)/);
-                if (fullNameMatch) {
-                    onuData.full_name = fullNameMatch[1];
-
-                    // Extract ONU ID from full_name
-                    if (onuData.full_name.includes(':')) {
-                        onuData.onu_id = parseInt(onuData.full_name.split(':')[1]);
-                    }
-
-                    // Get the remaining text after the full_name
-                    const remainingText = mainLine.substring(mainLine.indexOf(onuData.full_name) + onuData.full_name.length).trim();
-                    const remainingParts = remainingText.split(/\s+/);
-
-                    // First 3 parts are vendor_id, model_id, mac_address
-                    if (remainingParts.length >= 3) {
-                        onuData.vendor_id = remainingParts[0] || 'N/A';
-                        onuData.model_id = remainingParts[1] || 'N/A';
-                        onuData.mac_address = remainingParts[2] || 'N/A';
-
-                        // Check if there's a LOID (if not N/A)
-                        if (remainingParts.length > 3 && remainingParts[3] !== 'N/A') {
-                            onuData.loid = remainingParts[3];
-                        }
-                    }
-                }
-
-                // Check the next line for description, bind_type, status, dereg_reason
-                if (i + 1 < lines.length) {
-                    const nextLine = lines[i + 1];
-
-                    // Check if next line is indented (starts with spaces) - this is the continuation line
-                    if (nextLine && (nextLine.startsWith('             ') || nextLine.startsWith('              '))) {
-                        const continuationLine = nextLine.trim();
-                        const continuationParts = continuationLine.split(/\s+/);
-
-                        // Format: description bind_type status dereg_reason
-                        // Example: "static(mS)      auto-configured  N/A"
-                        if (continuationParts.length >= 3) {
-                            // Description might be multi-word, so we need to handle it differently
-                            // The pattern is: description is at the beginning, then bind_type, then status, then dereg_reason
-
-                            // Find where bind_type starts (contains 'static' or 'dynamic')
-                            let bindTypeIndex = -1;
-                            for (let j = 0; j < continuationParts.length; j++) {
-                                if (continuationParts[j].includes('static') || continuationParts[j].includes('dynamic')) {
-                                    bindTypeIndex = j;
-                                    break;
-                                }
-                            }
-
-                            if (bindTypeIndex > 0) {
-                                // Description is everything before bindTypeIndex
-                                onuData.description = continuationParts.slice(0, bindTypeIndex).join(' ') || 'N/A';
-                                onuData.bind_type = continuationParts[bindTypeIndex] || 'N/A';
-
-                                // Status is next
-                                if (bindTypeIndex + 1 < continuationParts.length) {
-                                    onuData.status = continuationParts[bindTypeIndex + 1] || 'N/A';
-                                }
-
-                                // Dereg reason is after status
-                                if (bindTypeIndex + 2 < continuationParts.length) {
-                                    onuData.dereg_reason = continuationParts.slice(bindTypeIndex + 2).join(' ') || 'N/A';
-                                }
-                            } else {
-                                // Fallback: just take first 4 parts
-                                onuData.description = continuationParts[0] || 'N/A';
-                                onuData.bind_type = continuationParts[1] || 'N/A';
-                                onuData.status = continuationParts[2] || 'N/A';
-                                onuData.dereg_reason = continuationParts.slice(3).join(' ') || 'N/A';
-                            }
-                        }
-                        i++; // Skip the processed line
-                    }
-                }
-
-                // Parse bind details
-                onuData.bind_details = this.parseBindType(onuData.bind_type);
-
-                onuList.push(onuData);
-            }
+        // Capture interface header
+        const interfaceMatch = line.match(/Interface (EPON\d+\/\d+) has registered \d+ ONUs?:/);
+        if (interfaceMatch) {
+            currentInterface = interfaceMatch[1];
+            continue;
         }
 
-        return onuList;
+        // Skip header lines
+        if (line.includes('IntfName') || line.includes('--------') || line.includes('cription')) {
+            continue;
+        }
+
+        // Parse ONU line (starts with EPON)
+        if (line.trim().startsWith('EPON')) {
+            const onuData = {
+                fsp: this._convertInterfaceToFSP(currentInterface), // e.g., "0/10/0"
+                ont_id: null,
+                sn: 'N/A',
+                control_flag: 'inactive',
+                run_state: 'offline',
+                config_state: 'initial',
+                match_state: 'initial',
+                protect_side: 'no',
+                description: 'N/A'
+            };
+
+            // --- Parse main line (interface, vendor, model, MAC) ---
+            const fullNameMatch = line.match(/(EPON\d+\/\d+:\d+)/);
+            if (fullNameMatch) {
+                const fullName = fullNameMatch[1];
+                if (fullName.includes(':')) {
+                    onuData.ont_id = parseInt(fullName.split(':')[1]);
+                }
+
+                const remainingText = line.substring(line.indexOf(fullName) + fullName.length).trim();
+                const remainingParts = remainingText.split(/\s+/);
+
+                if (remainingParts.length >= 3) {
+                    // The third part is the MAC address -> we map it to 'sn'
+                    onuData.sn = remainingParts[2] || 'N/A';
+                }
+            }
+
+            // --- Parse indented continuation line (description, bind_type, status, dereg_reason) ---
+            if (i + 1 < lines.length) {
+                const nextLine = lines[i + 1];
+                if (nextLine && (nextLine.startsWith('             ') || nextLine.startsWith('              '))) {
+                    const continuationLine = nextLine.trim();
+                    const continuationParts = continuationLine.split(/\s+/);
+
+                    if (continuationParts.length >= 3) {
+                        // Find where bind_type starts (contains 'static' or 'dynamic')
+                        let bindTypeIndex = -1;
+                        for (let j = 0; j < continuationParts.length; j++) {
+                            if (continuationParts[j].includes('static') || continuationParts[j].includes('dynamic')) {
+                                bindTypeIndex = j;
+                                break;
+                            }
+                        }
+
+                        let description = 'N/A';
+                        let bindType = 'N/A';
+                        let status = 'N/A';
+                        let deregReason = 'N/A';
+
+                        if (bindTypeIndex > 0) {
+                            description = continuationParts.slice(0, bindTypeIndex).join(' ') || 'N/A';
+                            bindType = continuationParts[bindTypeIndex] || 'N/A';
+                            status = continuationParts[bindTypeIndex + 1] || 'N/A';
+                            deregReason = continuationParts.slice(bindTypeIndex + 2).join(' ') || 'N/A';
+                        } else {
+                            // Fallback
+                            description = continuationParts[0] || 'N/A';
+                            bindType = continuationParts[1] || 'N/A';
+                            status = continuationParts[2] || 'N/A';
+                            deregReason = continuationParts.slice(3).join(' ') || 'N/A';
+                        }
+
+                        onuData.description = description;
+
+                        // Map BDCOM fields to Huawei equivalents
+                        onuData.control_flag = (bindType.includes('static') || bindType.includes('dynamic')) ? 'active' : 'inactive';
+
+                        if (status === 'auto-configured' && deregReason === 'N/A') {
+                            onuData.run_state = 'online';
+                            onuData.config_state = 'normal';
+                            onuData.match_state = 'match';
+                        } else if (status === 'deregistered' || status === 'lost') {
+                            onuData.run_state = 'offline';
+                            onuData.config_state = 'initial';
+                            onuData.match_state = 'initial';
+                        } else {
+                            onuData.run_state = 'unknown';
+                            onuData.config_state = 'initial';
+                            onuData.match_state = 'initial';
+                        }
+                    }
+                    i++; // Skip the processed continuation line
+                }
+            }
+
+            onuList.push(onuData);
+        }
     }
+
+    return onuList;
+}
+
+/**
+ * Convert BDCOM interface name (e.g., "EPON0/10") to three‑part FSP format (e.g., "0/10/0").
+ */
+_convertInterfaceToFSP(interfaceStr) {
+    if (!interfaceStr) return interfaceStr;
+    const match = interfaceStr.match(/EPON(\d+)\/(\d+)/);
+    if (match) {
+        const frame = match[1];
+        const slot = match[2];
+        // Use port = 0 as placeholder
+        return `${frame}/${slot}/0`;
+    }
+    return interfaceStr;
+}
 
     /**
      * Parse rejected ONU information from 'show epon rejected-onu'

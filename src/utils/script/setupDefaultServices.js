@@ -16,20 +16,20 @@ const DEFAULT_SERVICES = [
         category: "AUTHENTICATION",
         iconUrl: "/icons/radius.svg"
     },
-    {
-        name: "eSewa",
-        code: "ESEWA",
-        description: "Digital payment gateway",
-        category: "PAYMENT",
-        iconUrl: "/icons/esewa.svg"
-    },
-    {
-        name: "Khalti",
-        code: "KHALTI",
-        description: "Digital payment gateway",
-        category: "PAYMENT",
-        iconUrl: "/icons/khalti.svg"
-    },
+    // {
+    //     name: "eSewa",
+    //     code: "ESEWA",
+    //     description: "Digital payment gateway",
+    //     category: "PAYMENT",
+    //     iconUrl: "/icons/esewa.svg"
+    // },
+    // {
+    //     name: "Khalti",
+    //     code: "KHALTI",
+    //     description: "Digital payment gateway",
+    //     category: "PAYMENT",
+    //     iconUrl: "/icons/khalti.svg"
+    // },
     {
         name: "NetTV",
         code: "NETTV",
@@ -37,76 +37,76 @@ const DEFAULT_SERVICES = [
         category: "STREAMING",
         iconUrl: "/icons/nettv.svg"
     },
-    {
-        name: "Vianet",
-        code: "VIANET",
-        description: "Network management",
-        category: "NETWORK",
-        iconUrl: "/icons/vianet.svg"
-    },
-    {
-        name: "Yeastar VoIP",
-        code: "YEASTAR",
-        description: "VoIP PBX system for telephony services",
-        category: "VOIP",
-        iconUrl: "/icons/yeastar.svg"
-    },
-    {
-        name: "MikroTik",
-        code: "MIKROTIK",
-        description: "Router management API",
-        category: "NETWORK",
-        iconUrl: "/icons/mikrotik.svg"
-    },
-    {
-        name: "Huawei OLT",
-        code: "HUAWEI_OLT",
-        description: "Huawei OLT management",
-        category: "NETWORK",
-        iconUrl: "/icons/huawei.svg"
-    },
-    {
-        name: "ZTE OLT",
-        code: "ZTE_OLT",
-        description: "ZTE OLT management",
-        category: "NETWORK",
-        iconUrl: "/icons/zte.svg"
-    },
-    {
-        name: "FortiGate",
-        code: "FORTIGATE",
-        description: "Fortinet firewall management",
-        category: "SECURITY",
-        iconUrl: "/icons/fortigate.svg"
-    },
-    {
-        name: "CRM",
-        code: "CRM",
-        description: "Customer Relationship Management",
-        category: "OTHER",
-        iconUrl: "/icons/crm.svg"
-    },
-    {
-        name: "Ticketing System",
-        code: "TICKETING",
-        description: "Customer support ticketing system",
-        category: "OTHER",
-        iconUrl: "/icons/ticketing.svg"
-    },
-    {
-        name: "SMS Gateway",
-        code: "SMS_GATEWAY",
-        description: "Bulk SMS sending service",
-        category: "COMMUNICATION",
-        iconUrl: "/icons/sms.svg"
-    },
-    {
-        name: "Email Service",
-        code: "EMAIL_SERVICE",
-        description: "Bulk email sending service",
-        category: "COMMUNICATION",
-        iconUrl: "/icons/email.svg"
-    },
+    // {
+    //     name: "Vianet",
+    //     code: "VIANET",
+    //     description: "Network management",
+    //     category: "NETWORK",
+    //     iconUrl: "/icons/vianet.svg"
+    // },
+    // {
+    //     name: "Yeastar VoIP",
+    //     code: "YEASTAR",
+    //     description: "VoIP PBX system for telephony services",
+    //     category: "VOIP",
+    //     iconUrl: "/icons/yeastar.svg"
+    // },
+    // {
+    //     name: "MikroTik",
+    //     code: "MIKROTIK",
+    //     description: "Router management API",
+    //     category: "NETWORK",
+    //     iconUrl: "/icons/mikrotik.svg"
+    // },
+    // {
+    //     name: "Huawei OLT",
+    //     code: "HUAWEI_OLT",
+    //     description: "Huawei OLT management",
+    //     category: "NETWORK",
+    //     iconUrl: "/icons/huawei.svg"
+    // },
+    // {
+    //     name: "ZTE OLT",
+    //     code: "ZTE_OLT",
+    //     description: "ZTE OLT management",
+    //     category: "NETWORK",
+    //     iconUrl: "/icons/zte.svg"
+    // },
+    // {
+    //     name: "FortiGate",
+    //     code: "FORTIGATE",
+    //     description: "Fortinet firewall management",
+    //     category: "SECURITY",
+    //     iconUrl: "/icons/fortigate.svg"
+    // },
+    // {
+    //     name: "CRM",
+    //     code: "CRM",
+    //     description: "Customer Relationship Management",
+    //     category: "OTHER",
+    //     iconUrl: "/icons/crm.svg"
+    // },
+    // {
+    //     name: "Ticketing System",
+    //     code: "TICKETING",
+    //     description: "Customer support ticketing system",
+    //     category: "OTHER",
+    //     iconUrl: "/icons/ticketing.svg"
+    // },
+    // {
+    //     name: "SMS Gateway",
+    //     code: "SMS_GATEWAY",
+    //     description: "Bulk SMS sending service",
+    //     category: "COMMUNICATION",
+    //     iconUrl: "/icons/sms.svg"
+    // },
+    // {
+    //     name: "Email Service",
+    //     code: "EMAIL_SERVICE",
+    //     description: "Bulk email sending service",
+    //     category: "COMMUNICATION",
+    //     iconUrl: "/icons/email.svg"
+    // },
     {
         name: "GenieACS",
         code: "GENIEACS",

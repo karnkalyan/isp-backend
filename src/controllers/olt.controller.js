@@ -1437,6 +1437,7 @@ async function getOntsForOlt(req, res, next) {
  * Sync ONTs from OLT via Driver
  */
 async function syncOntsFromOlt(req, res, next) {
+  console.log("Starting ONT sync process...");
   try {
     const oltId = parseInt(req.params.id);
     if (isNaN(oltId)) return res.status(400).json({ error: "Invalid OLT ID" });
@@ -1452,6 +1453,8 @@ async function syncOntsFromOlt(req, res, next) {
       }
     });
 
+    console.log(`Starting ONT sync for OLT ID: ${oltId}, Name: ${olt?.name}`);
+
     if (!olt) {
       return res.status(404).json({ error: "OLT not found" });
     }
@@ -1461,6 +1464,7 @@ async function syncOntsFromOlt(req, res, next) {
       // Get the appropriate driver
       driver = getDriver(olt);
 
+      console.log(`Connecting to OLT ${olt.name} at ${olt.ipAddress} using ${driver.constructor.name}`);
       // Connect to the OLT
       await driver.connect();
 
@@ -1468,12 +1472,13 @@ async function syncOntsFromOlt(req, res, next) {
       const serviceBoards = olt.serviceBoards;
       const allOnts = [];
       const ontDetailsMap = new Map(); // Store detailed info for each ONT
+      console.log(`Found ${serviceBoards} service boards`);
 
       // For each service board, get ONTs
       for (const board of serviceBoards) {
-        if (board.type.includes('GPON')) {
           const frame = 0; // Huawei typically uses frame 0
           const slot = board.slot;
+          console.log(`Processing board slot ${slot} of type ${board.type}`);
 
           try {
             console.log(`Getting ONTs for board: frame=${frame}, slot=${slot}`);
@@ -1506,7 +1511,7 @@ async function syncOntsFromOlt(req, res, next) {
             console.error(`Error getting ONTs for board ${board.slot}:`, boardError);
             // Continue with other boards
           }
-        }
+        
       }
 
       // Close driver connection
@@ -1585,33 +1590,44 @@ async function syncOntsFromOlt(req, res, next) {
             }
           };
 
-          const isOnline = ontData.run_state === 'online';
+      const isOnline = ontData.run_state === 'online';
 
-          // Prepare basic ONT record
-          const ontRecord = {
-            ontId: ontData.ont_id.toString(),
-            serialNumber: ontData.sn || ontData.serialNumber || '',
-            vendor: olt.vendor,
-            model: ontData.model || 'Unknown',
-            status: isOnline ? 'online' : 'offline',
-            distance: parseDistance(detailedInfo.distance || ontData.distance),
-            rxPower: parsePower(diagnostics.rx_power || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.rx_power)),
-            txPower: parsePower(diagnostics.tx_power || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.tx_power)),
-            temperature: parseTemperature(diagnostics.temperature || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.temperature)),
-            uptime: ontData.online_duration || detailedInfo.online_duration || (isOnline ? 3600 : 0),
-            lastOnline: isOnline ? new Date() : null,
-            serviceState: ontData.control_flag || detailedInfo.control_flag || 'active',
-            servicePort: ontData.fsp,
-            vlan: ontData.vlan || null,
-            macAddress: ontData.macAddress || '',
-            ipAddress: ontData.ipAddress || null,
-            description: ontData.description || detailedInfo.description || '',
-            capabilities: JSON.stringify(ontData.capabilities || []),
-            rawData: ontData,
-            oltId,
-            ispId: req.ispId,
-            lastSync: new Date()
-          };
+// Convert uptime to string
+let uptimeValue = "0";
+if (ontData.online_duration) {
+    uptimeValue = String(ontData.online_duration);
+} else if (detailedInfo.online_duration) {
+    uptimeValue = String(detailedInfo.online_duration);
+} else if (isOnline) {
+    uptimeValue = "3600";
+} else {
+    uptimeValue = "0";
+}
+
+const ontRecord = {
+    ontId: ontData.ont_id.toString(),
+    serialNumber: ontData.sn || ontData.serialNumber || '',
+    vendor: olt.vendor,
+    model: ontData.model || 'Unknown',
+    status: isOnline ? 'online' : 'offline',
+    distance: parseDistance(detailedInfo.distance || ontData.distance),
+    rxPower: parsePower(diagnostics.rx_power || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.rx_power)),
+    txPower: parsePower(diagnostics.tx_power || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.tx_power)),
+    temperature: parseTemperature(diagnostics.temperature || (detailedInfo.optical_diagnostics && detailedInfo.optical_diagnostics.temperature)),
+    uptime: uptimeValue,   // now a string
+    lastOnline: isOnline ? new Date() : null,
+    serviceState: ontData.control_flag || detailedInfo.control_flag || 'active',
+    servicePort: ontData.fsp,
+    vlan: ontData.vlan || null,
+    macAddress: ontData.macAddress || '',
+    ipAddress: ontData.ipAddress || null,
+    description: ontData.description || detailedInfo.description || '',
+    capabilities: JSON.stringify(ontData.capabilities || []),
+    rawData: ontData,
+    oltId,
+    ispId: req.ispId,
+    lastSync: new Date()
+};
 
           // Try to find existing ONT by serial number first, then by ontId+fsp
           let existing = await prisma.oNT.findFirst({
@@ -1831,7 +1847,6 @@ async function syncOntsBasicFromOlt(req, res, next) {
 
       // For each service board, get ONTs
       for (const board of serviceBoards) {
-        if (board.type.includes('GPON')) {
           const frame = 0; // Huawei typically uses frame 0
           const slot = board.slot;
 
@@ -1849,7 +1864,7 @@ async function syncOntsBasicFromOlt(req, res, next) {
             console.error(`Error getting ONTs for board ${board.slot}:`, boardError);
             // Continue with other boards
           }
-        }
+
       }
 
       // Close driver connection
@@ -1914,32 +1929,44 @@ async function syncOntsBasicFromOlt(req, res, next) {
 
           const isOnline = ontData.run_state === 'online';
 
-          // Prepare basic ONT record
-          const ontRecord = {
-            ontId: ontData.ont_id.toString(),
-            serialNumber: ontData.sn || ontData.serialNumber || '',
-            vendor: olt.vendor,
-            model: ontData.model || 'Unknown',
-            status: isOnline ? 'online' : 'offline',
-            distance: parseDistance(ontData.distance),
-            rxPower: parsePower(diagnostics.rx_power),
-            txPower: parsePower(diagnostics.tx_power),
-            temperature: parseTemperature(diagnostics.temperature),
-            uptime: ontData.online_duration || (isOnline ? 3600 : 0),
-            lastOnline: isOnline ? new Date() : null,
-            serviceState: ontData.control_flag || 'active',
-            servicePort: ontData.fsp,
-            vlan: ontData.vlan || null,
-            macAddress: ontData.macAddress || '',
-            ipAddress: ontData.ipAddress || null,
-            description: ontData.description || '',
-            capabilities: JSON.stringify(ontData.capabilities || []),
-            rawData: ontData,
-            oltId,
-            ispId: req.ispId,
-            lastSync: new Date()
-          };
+// Convert uptime to string - no detailed info, just use defaults
+let uptimeValue = "0";
+if (ontData.online_duration) {
+    uptimeValue = String(ontData.online_duration);
+} else if (isOnline) {
+    uptimeValue = "3600";
+} else {
+    uptimeValue = "0";
+}
 
+// Get model and vendor - try to get from ontData if available, else use defaults
+const vendor = ontData.vendor_id || olt.vendor;
+const model = ontData.model_id || 'Unknown';
+
+const ontRecord = {
+    ontId: ontData.ont_id.toString(),
+    serialNumber: ontData.sn || ontData.serialNumber || '',
+    vendor: vendor,
+    model: model,
+    status: isOnline ? 'online' : 'offline',
+    distance: parseDistance(ontData.distance), // ontData may not have distance
+    rxPower: parsePower(diagnostics.rx_power),
+    txPower: parsePower(diagnostics.tx_power),
+    temperature: parseTemperature(diagnostics.temperature),
+    uptime: uptimeValue,
+    lastOnline: isOnline ? new Date() : null,
+    serviceState: ontData.control_flag || 'active',
+    servicePort: ontData.fsp,
+    vlan: ontData.vlan || null,
+    macAddress: ontData.macAddress || '',
+    ipAddress: ontData.ipAddress || null,
+    description: ontData.description || '',
+    capabilities: JSON.stringify(ontData.capabilities || []),
+    rawData: ontData,
+    oltId,
+    ispId: req.ispId,
+    lastSync: new Date()
+};
           // Try to find existing ONT by serial number first, then by ontId+fsp
           let existing = await prisma.oNT.findFirst({
             where: {
@@ -2305,9 +2332,8 @@ async function syncAllOntDetailsFromOlt(req, res, next) {
     const onts = await req.prisma.oNT.findMany({
       where: {
         oltId,
-        isDeleted: false,
-        status: 'online' // Only sync online ONTs for efficiency
-      },
+        isDeleted: false
+            },
       take: 50 // Limit to 50 ONTs per bulk sync to avoid timeout
     });
 
