@@ -72,6 +72,18 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
       connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
       devices: { orderBy: { createdAt: 'desc' } },
       serviceDetails: true,
+      documents: {
+        where: { isDeleted: false },
+        orderBy: { uploadedAt: 'desc' },
+        select: {
+          id: true,
+          documentType: true,
+          fileName: true,
+          mimeType: true,
+          size: true,
+          uploadedAt: true,
+        },
+      },
       customerSubscriptions: {
         orderBy: { createdAt: 'desc' },
         take: 3,

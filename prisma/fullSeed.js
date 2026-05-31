@@ -22,7 +22,7 @@ async function main() {
     await prisma.ticket.deleteMany({});
     await prisma.task.deleteMany({});
     await prisma.followUp.deleteMany({});
-    await prisma.lead.deleteMany({});
+    await prisma.tr069Device.deleteMany({});
 
     // Inventory & Network
     await prisma.inventoryItem.deleteMany({});
@@ -37,13 +37,15 @@ async function main() {
     // Customers & Billing
     await prisma.customerDocument.deleteMany({});
     await prisma.eSewaTokenPayment.deleteMany({});
-    await prisma.customerSubscription.deleteMany({});
+    await prisma.orderDetail.deleteMany({});
     await prisma.customerOrderManagement.deleteMany({});
+    await prisma.customerSubscription.deleteMany({});
     await prisma.customerDevice.deleteMany({});
     await prisma.customerServiceConnection.deleteMany({});
     await prisma.customerSubscribedService.deleteMany({});
     await prisma.connectionUser.deleteMany({});
     await prisma.customer.deleteMany({});
+    await prisma.lead.deleteMany({});
 
     // Plans & Charges
     await prisma.packagePlanBranch.deleteMany({});
@@ -615,6 +617,99 @@ async function main() {
     await prisma.customer.update({
         where: { id: customer.id },
         data: { subscribedPkgId: price50.id }
+    });
+
+    const subscriptionStart = new Date();
+    const subscriptionEnd = new Date(subscriptionStart);
+    subscriptionEnd.setMonth(subscriptionEnd.getMonth() + 1);
+
+    const customerSubscription = await prisma.customerSubscription.create({
+        data: {
+            customerId: customer.id,
+            package: price50.id,
+            planStart: subscriptionStart,
+            planEnd: subscriptionEnd,
+            isActive: true,
+            isInvoicing: true,
+        }
+    });
+
+    await prisma.customerOrderManagement.create({
+        data: {
+            customerId: customer.id,
+            subscriptionId: customerSubscription.id,
+            package: price50.id,
+            packageStart: subscriptionStart,
+            packageEnd: subscriptionEnd,
+            totalAmount: price50.price,
+            isPaid: false,
+            invoiceId: 'INV-K-CUST-001',
+        }
+    });
+
+    await prisma.connectionUser.create({
+        data: {
+            customerId: customer.id,
+            username: 'ram.home@kisan.net.np',
+            password: 'demo-radius-password',
+            branchId: hq.id,
+            ispId: isp.id,
+            isActive: true,
+        }
+    });
+
+    await prisma.customerDevice.create({
+        data: {
+            customerId: customer.id,
+            deviceType: 'ONT',
+            brand: 'Huawei',
+            model: 'EG8141A5',
+            serialNumber: '45434F4D3ABDCF9B',
+            ponSerial: '45434F4D3ABDCF9B',
+            provisioningStatus: 'active',
+            notes: 'Seed ONT linked to customer portal router page',
+        }
+    });
+
+    await prisma.customerServiceConnection.create({
+        data: {
+            customerId: customer.id,
+            connectionType: 'fiber',
+            status: 'active',
+            vlanId: '100',
+            vlanPriority: '0',
+            provisioningNotes: 'Seed FTTH customer connection',
+        }
+    });
+
+    await prisma.customerDocument.create({
+        data: {
+            customerId: customer.id,
+            documentType: 'idProof',
+            fileName: 'ram-bahadur-citizenship.pdf',
+            filePath: 'uploads/customers/documents/seed-ram-citizenship.pdf',
+            mimeType: 'application/pdf',
+            size: 245760,
+            branchId: hq.id,
+            ispId: isp.id,
+        }
+    });
+
+    await prisma.tr069Device.create({
+        data: {
+            serialNumber: '45434F4D3ABDCF9B',
+            oui: '485754',
+            productClass: 'EG8141A5',
+            manufacturer: 'Huawei',
+            modelName: 'EG8141A5',
+            ipAddress: '10.64.0.11',
+            status: 'online',
+            lastContact: new Date(),
+            firmwareVersion: 'V5R019C10S110',
+            ispId: isp.id,
+            leadId: lead.id,
+            updatedAt: new Date(),
+        }
     });
 
     console.log('📦 Packages and Pricing seeded.');
