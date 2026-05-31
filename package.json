@@ -7,7 +7,9 @@
     "dev": "nodemon src/index.js",
     "seed": "node prisma/seed.js",
     "servicesSeed": "node prisma/servicesSeed.js",
-    "fullSeed": "node prisma/fullSeed.js"
+    "fullSeed": "node prisma/kisanNetFullSeed.js",
+    "kisanNetFullSeed": "node prisma/kisanNetFullSeed.js",
+    "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js"
   },
   "type": "commonjs",
   "dependencies": {
