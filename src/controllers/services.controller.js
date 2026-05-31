@@ -2025,11 +2025,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 
@@ -2163,11 +2159,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 
@@ -2508,11 +2500,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 

@@ -739,8 +739,7 @@ async function getCustomerProfile(req, res, next) {
 
     const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(req.prisma, customer);
     const primaryTr069Device = tr069Devices.find((device) => device.serialNumber) || null;
-    const primaryCustomerDevice = customer.devices.find((device) => device.serialNumber || device.ponSerial) || null;
-    const primaryDeviceSerial = primaryTr069Device?.serialNumber || primaryCustomerDevice?.serialNumber || primaryCustomerDevice?.ponSerial || null;
+    const primaryDeviceSerial = primaryTr069Device?.serialNumber || null;
     const activeSubscription = customer.customerSubscriptions.find((subscription) => subscription.isActive) || customer.customerSubscriptions[0] || null;
     const unpaidOrders = customer.orders.filter((order) => !order.isPaid);
     const outstandingAmount = unpaidOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
