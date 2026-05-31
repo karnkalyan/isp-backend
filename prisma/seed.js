@@ -209,6 +209,9 @@ async function main() {
       permissions: [
         { name: 'dashboard_view', menuName: 'dashboard' },
         { name: 'billing_read_self', menuName: 'billing' },
+        { name: 'customer_read', menuName: 'customers' },
+        { name: 'tickets_read_self', menuName: 'tickets' },
+        { name: 'tickets_create', menuName: 'tickets' },
       ],
     },
     {

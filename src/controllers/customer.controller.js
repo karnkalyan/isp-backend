@@ -49,6 +49,105 @@ const upload = multer({
 // Helper functions
 // ----------------------------------------------------------------------
 
+async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) {
+  const email = req.user?.email;
+  if (!email) return null;
+
+  return prisma.customer.findFirst({
+    where: {
+      ispId: req.ispId,
+      isDeleted: false,
+      OR: [
+        { lead: { email } },
+        { connectionUsers: { some: { username: email, isDeleted: false } } },
+      ],
+    },
+    include: {
+      lead: true,
+      isp: { select: { id: true, companyName: true } },
+      branch: { select: { id: true, name: true } },
+      subBranch: { select: { id: true, name: true } },
+      subscribedPkg: { include: { packagePlanDetails: true } },
+      packagePrice: { include: { packagePlanDetails: true } },
+      connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+      devices: { orderBy: { createdAt: 'desc' } },
+      serviceDetails: true,
+      customerSubscriptions: {
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+        include: { packagePrice: { include: { packagePlanDetails: true } } },
+      },
+      orders: {
+        where: { isDeleted: false },
+        orderBy: { orderDate: 'desc' },
+        take: 10,
+        include: { items: true, packagePrice: { include: { packagePlanDetails: true } } },
+      },
+      tickets: {
+        where: { isDeleted: false },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      },
+      ...extraInclude,
+    },
+  });
+}
+
+async function getCustomerOwnedDeviceSerials(prisma, customer) {
+  const serials = new Set();
+  (customer?.devices || []).forEach((device) => {
+    if (device.serialNumber) serials.add(device.serialNumber);
+    if (device.ponSerial) serials.add(device.ponSerial);
+  });
+
+  if (customer?.leadId) {
+    const tr069Devices = await prisma.tr069Device.findMany({
+      where: {
+        leadId: customer.leadId,
+        ispId: customer.ispId,
+        isDeleted: false,
+      },
+      select: {
+        serialNumber: true,
+        modelName: true,
+        manufacturer: true,
+        productClass: true,
+        ipAddress: true,
+        status: true,
+        lastContact: true,
+      },
+    });
+
+    tr069Devices.forEach((device) => {
+      if (device.serialNumber) serials.add(device.serialNumber);
+    });
+
+    return { serials: Array.from(serials), tr069Devices };
+  }
+
+  return { serials: Array.from(serials), tr069Devices: [] };
+}
+
+async function assertCustomerOwnsSerial(req, res, next) {
+  try {
+    const serialNumber = req.params.serialNumber;
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer profile not found for this user.' });
+    }
+
+    const { serials } = await getCustomerOwnedDeviceSerials(req.prisma, customer);
+    if (!serials.includes(serialNumber)) {
+      return res.status(403).json({ success: false, error: 'You do not have access to this device.' });
+    }
+
+    req.customerProfile = customer;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 /**
  * Compute expiry date from a base date + duration string.
  */
@@ -625,6 +724,46 @@ async function createCustomer(req, res, next) {
       error: 'Failed to create customer',
       details: err.message,
     });
+  }
+}
+
+async function getCustomerProfile(req, res, next) {
+  try {
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Customer profile not found for this login.',
+      });
+    }
+
+    const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(req.prisma, customer);
+    const primaryTr069Device = tr069Devices.find((device) => device.serialNumber) || null;
+    const primaryCustomerDevice = customer.devices.find((device) => device.serialNumber || device.ponSerial) || null;
+    const primaryDeviceSerial = primaryTr069Device?.serialNumber || primaryCustomerDevice?.serialNumber || primaryCustomerDevice?.ponSerial || null;
+    const activeSubscription = customer.customerSubscriptions.find((subscription) => subscription.isActive) || customer.customerSubscriptions[0] || null;
+    const unpaidOrders = customer.orders.filter((order) => !order.isPaid);
+    const outstandingAmount = unpaidOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
+
+    return res.json({
+      success: true,
+      data: {
+        ...customer,
+        primaryDeviceSerial,
+        deviceSerials: serials,
+        tr069Devices,
+        activeSubscription,
+        billingSummary: {
+          outstandingAmount,
+          unpaidCount: unpaidOrders.length,
+          lastOrder: customer.orders[0] || null,
+          recentOrders: customer.orders,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('getCustomerProfile error:', err);
+    return next(err);
   }
 }
 
@@ -1838,6 +1977,8 @@ module.exports = {
   createCustomer,
   provisionCustomer,
   listCustomers,
+  getCustomerProfile,
+  assertCustomerOwnsSerial,
   getCustomerById,
   getCustomerByPhoneNumber,
   updateCustomer,

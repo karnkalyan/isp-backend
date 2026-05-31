@@ -85,7 +85,7 @@ function flattenCustomerList(tickets) {
  */
 async function createTicket(req, res, next) {
     try {
-        let { title, description, priority, category, customerId, leadId, assignedToId, targetBranchId } = req.body;
+        let { title, description, priority, category, customerId, leadId, assignedToId, targetBranchId, notifyEmail } = req.body;
         const ispId = req.ispId;
         let branchId = targetBranchId ? parseInt(targetBranchId) : (req.branchId || null);
         const createdById = req.user?.id;
@@ -160,6 +160,7 @@ async function createTicket(req, res, next) {
                 createdById,
                 ispId,
                 branchId,
+                updatedAt: new Date(),
             },
             include: {
                 customer: customerIncludeBasic,

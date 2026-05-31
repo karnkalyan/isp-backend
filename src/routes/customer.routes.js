@@ -17,14 +17,19 @@ const {
   deleteDocument,
   uploadCustomerDocuments,
   getCustomerByPhoneNumber,
-  getCustomerStatusSummary
+  getCustomerStatusSummary,
+  getCustomerProfile,
+  assertCustomerOwnsSerial
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
+const { ServiceController } = require('../controllers/services.controller');
+const ticketController = require('../controllers/ticket.controller');
 
 module.exports = (prisma) => {
   const router = express.Router();
+  const serviceController = new ServiceController(prisma);
 
   // Attach prisma client to req
   router.use((req, res, next) => {
@@ -34,6 +39,33 @@ module.exports = (prisma) => {
 
   // Apply isAuthenticated globally for customer routes
   router.use(isAuthenticated(prisma));
+
+  router.get('/profile', getCustomerProfile);
+
+  router.get('/profile/genieacs/:serialNumber/deviceinfo', assertCustomerOwnsSerial, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getGenieACSDeviceInfo(req, res);
+  });
+  router.get('/profile/genieacs/:serialNumber/waninfo', assertCustomerOwnsSerial, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getGenieACSDeviceWanInfo(req, res);
+  });
+  router.get('/profile/genieacs/:serialNumber/wlaninfo', assertCustomerOwnsSerial, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getGenieACSDeviceWlanInfo(req, res);
+  });
+  router.get('/profile/genieacs/:serialNumber/laninfo', assertCustomerOwnsSerial, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getGenieACSDeviceLANInfo(req, res);
+  });
+  router.get('/profile/genieacs/:serialNumber/connected-devices-info', assertCustomerOwnsSerial, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getGenieACSDeviceConnectedDevicesInfo(req, res);
+  });
+  router.post('/profile/genieacs/:serialNumber/update-wifi', assertCustomerOwnsSerial, (req, res) => {
+    return serviceController.updateSpecificSSID(req, res);
+  });
+  router.post('/profile/tickets', ticketController.createTicket);
 
   // Customer CRUD endpoints
   router.post('/',
