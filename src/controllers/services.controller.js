@@ -1853,6 +1853,7 @@ class ServiceController {
 
   async getGenieACSDeviceWanInfo(req, res) {
     try {
+      res.set('Cache-Control', 'no-store');
       const ispId = req.ispId;
       const { serialNumber } = req.params;
 
@@ -1935,11 +1936,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 
