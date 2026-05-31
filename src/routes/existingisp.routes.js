@@ -27,9 +27,9 @@ module.exports = (prisma) => {
 
   // CRUD endpoints
   router.post('/', checkPermission('existingisp_create'), createExistingISP);
-  router.get('/', checkPermission('existingisp_read'), getAllExistingISPs);
-  router.get('/stats', checkPermission('existingisp_read'), getISPStats);
-  router.get('/:id', checkPermission('existingisp_read'), getExistingISPById);
+  router.get('/', getAllExistingISPs);
+  router.get('/stats', getISPStats);
+  router.get('/:id', getExistingISPById);
   router.put('/:id', checkPermission('existingisp_update'), updateExistingISP);
   router.delete('/:id', checkPermission('existingisp_delete'), deleteExistingISP);
 

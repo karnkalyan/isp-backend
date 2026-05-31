@@ -23,8 +23,8 @@ module.exports = (prisma) => {
   // CRUD endpoints
   router.put('/:id',  checkPermission('connection_types_update'), updateConnection);
   router.post('/',  checkPermission('connection_types_create'),  createConnection);
-  router.get('/',     checkPermission('connection_types_read'), listConnections);
-  router.get('/:id',  checkPermission('connection_types_read'), getConnectionById);
+  router.get('/',     listConnections);
+  router.get('/:id',  getConnectionById);
   router.delete('/:id',  checkPermission('connection_types_delete'), deleteConnection);
 
   return router;

@@ -29,12 +29,10 @@ module.exports = (prisma) => {
   );
   router.get(
     '/',
-    checkPermission('package_plans_read'),
     listPackagePlans
   );
   router.get(
     '/:id',
-    checkPermission('package_plans_read'),
     getPackagePlanById
   );
   router.put(

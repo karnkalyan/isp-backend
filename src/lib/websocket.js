@@ -73,7 +73,7 @@ class WebSocketManager {
                     name: true,
                     ispId: true,
                     isDeleted: true,
-                    yeasterExt: true,
+                    yeastarExt: true,
                     role: {
                         select: {
                             name: true,                // ✅ role.name guaranteed

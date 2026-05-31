@@ -1,5 +1,6 @@
 // controllers/splitter.controller.js
 const splitterModel = require('../model/splitter.model');
+const { getBranchFilter } = require('../utils/branchHelper');
 
 /**
  * List splitters with pagination and search
@@ -17,9 +18,11 @@ async function listSplitters(req, res, next) {
       sortOrder = 'desc'
     } = req.query;
 
+    const branchFilter = await getBranchFilter(req);
     const where = {
       isDeleted: false,
-      ispId: req.ispId
+      ispId: req.ispId,
+      ...branchFilter
     };
 
     if (status && status !== 'all') {
@@ -47,31 +50,33 @@ async function listSplitters(req, res, next) {
     const [splitters, total] = await Promise.all([
       req.prisma.splitter.findMany({
         where,
-        include: {
-          olt: {
-            select: {
-              id: true,
-              name: true,
-              ipAddress: true
-            }
-          },
-          _count: {
-            select: {
-              customers: {
-                where: { status: 'active' }
-              },
-              slaveSplitters: {
-                where: { isDeleted: false }
-              }
-            }
-          }
-        },
         orderBy: { [sortBy]: sortOrder },
         skip,
         take: parseInt(limit)
       }),
       req.prisma.splitter.count({ where })
     ]);
+
+    const oltIds = [...new Set(splitters.map(splitter => splitter.oltId).filter(Boolean))];
+    const olts = oltIds.length
+      ? await req.prisma.olt.findMany({
+          where: { id: { in: oltIds } },
+          select: { id: true, name: true, ipAddress: true }
+        })
+      : [];
+    const oltById = new Map(olts.map(olt => [olt.id, olt]));
+    const customerCounts = await req.prisma.customer.groupBy({
+      by: ['splitterId'],
+      where: { splitterId: { in: splitters.map(splitter => splitter.id) }, status: 'active' },
+      _count: true
+    });
+    const customerCountBySplitter = new Map(customerCounts.map(row => [row.splitterId, row._count]));
+    const slaveCounts = await req.prisma.splitter.groupBy({
+      by: ['masterSplitterId'],
+      where: { masterSplitterId: { in: splitters.map(splitter => splitter.splitterId) }, isDeleted: false },
+      _count: true
+    });
+    const slaveCountByMaster = new Map(slaveCounts.map(row => [row.masterSplitterId, row._count]));
 
     const formattedSplitters = await Promise.all(
       splitters.map(async (splitter) => {
@@ -123,9 +128,9 @@ async function listSplitters(req, res, next) {
           serviceBoard,
           status: splitter.status,
           notes: splitter.notes || '',
-          olt: splitter.olt,
-          totalCustomers: splitter._count.customers,
-          slaveCount: splitter._count.slaveSplitters,
+          olt: splitter.oltId ? oltById.get(splitter.oltId) || null : null,
+          totalCustomers: customerCountBySplitter.get(splitter.id) || 0,
+          slaveCount: slaveCountByMaster.get(splitter.splitterId) || 0,
           createdAt: splitter.createdAt.toISOString(),
           updatedAt: splitter.updatedAt.toISOString()
         };
@@ -313,7 +318,8 @@ async function createSplitter(req, res, next) {
       status = "active",
       notes = "",
       portCount = 8,
-      usedPorts = 0
+      usedPorts = 0,
+      branchId
     } = req.body;
 
     // Calculate port count from split ratio if not provided
@@ -425,7 +431,8 @@ async function createSplitter(req, res, next) {
       status,
       notes,
       oltId,
-      ispId: req.ispId
+      ispId: req.ispId,
+      branchId: branchId ? Number(branchId) : (req.selectedBranchId || null)
     };
 
     const splitter = await req.prisma.$transaction(async (prisma) => {

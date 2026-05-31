@@ -1,10 +1,118 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 
+async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
+  const finalIds = [];
+  if (!Array.isArray(requestedCharges) || requestedCharges.length === 0) {
+    return finalIds;
+  }
+
+  for (const item of requestedCharges) {
+    const id = (typeof item === 'object' && item !== null) ? item.id : item;
+    const amount = (typeof item === 'object' && item !== null) ? item.amount : undefined;
+
+    if (!id) continue;
+
+    const original = await prisma.OneTimeCharge.findFirst({
+      where: { id: Number(id), isDeleted: false }
+    });
+    if (!original) continue;
+
+    // Check if amount is overridden and differs from the original amount
+    const isAmountChanged = amount !== undefined && amount !== null && amount !== '' && parseFloat(amount) !== original.amount;
+
+    if (isAmountChanged) {
+      // Create a new OneTimeCharge item for this specific overridden amount
+      const cleanCode = original.code ? original.code.replace(/[\s-]/g, '') : 'ADDON';
+      const cleanAmount = String(amount).replace('.', '_');
+      const newCode = `${cleanCode}${cleanAmount}`;
+      const referenceId = `INT-${newCode}`;
+
+      // Check if it already exists to avoid collision
+      const exists = await prisma.OneTimeCharge.findFirst({
+        where: { referenceId, ispId, isDeleted: false }
+      });
+
+      if (exists) {
+        finalIds.push(exists.id);
+      } else {
+        const newRecord = await prisma.OneTimeCharge.create({
+          data: {
+            name: `${original.name} (${amount})`,
+            code: newCode,
+            referenceId,
+            description: original.description,
+            amount: parseFloat(amount),
+            isTaxable: original.isTaxable,
+            forPackageCreation: false,
+            ispId,
+            isActive: true,
+            isDeleted: false,
+            updatedAt: new Date()
+          }
+        });
+        
+        // Also sync it to Tshul!
+        try {
+          const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+          if (tshul) {
+            const itemPayload = {
+              Name: newRecord.name,
+              Code: newCode,
+              Unit: 'Psc',
+              ReferenceId: referenceId,
+              ItemGroupReferenceId: 'TI-001',
+              IsTaxable: newRecord.isTaxable,
+              IsExcisable: false,
+              IsPurchaseItem: false,
+              IsSalesItem: true,
+              IsServiceItem: true,
+              ReorderLevel: 0,
+              ReorderQty: 0,
+              IsBatchApplied: false,
+              IsBatchPerQuantity: false,
+              IsExpirable: false,
+              PurchaseRate: 0.00,
+              SalesMargin: 0.00,
+              SalesRate: newRecord.amount || 0,
+              IsBOM: false
+            };
+            await tshul.item.create(itemPayload);
+          }
+        } catch (tshulErr) {
+          console.warn('[WARNING] Tshul sync failed for new custom addon charge:', tshulErr.message);
+        }
+
+        finalIds.push(newRecord.id);
+      }
+    } else {
+      // Amount is unchanged or not overridden, use the original ID
+      finalIds.push(original.id);
+    }
+  }
+
+  return finalIds;
+}
+
 async function createPackagePrice(req, res, next) {
   try {
-    const { planId, price, packageDuration, isTrial } = req.body;
+    const {
+      planId,
+      price,
+      packageDuration,
+      isTrial,
+      packageName,
+      isActive,
+      initialTotalWithTax,
+      renewAmountWithTax,
+      oneTimeCharges = [],
+      oneTimeChargeIds = []
+    } = req.body;
     const ispId = Number(req.ispId);
+
+    if (!planId || price === undefined || !packageDuration) {
+      return res.status(400).json({ error: 'planId, price and packageDuration are required' });
+    }
 
     // Fetch plan details
     const plan = await req.prisma.PackagePlan.findUnique({
@@ -15,9 +123,9 @@ async function createPackagePrice(req, res, next) {
 
     // === build a sanitized, short baseRefId ===
     const cleanPlanCode = plan.planCode.replace(/[\s-]/g, '');       // remove spaces & hyphens
-    const cleanDuration = packageDuration.replace(/[\s-]/g, '');     // remove spaces & hyphens                             // e.g. '4f8aZ3kL'
-    const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;    // e.g. 'INT-KDJFLKJ12MNTH'
-    const referenceId = `${baseRefId}`;                 // final e.g. 'INT-KDJFLKJ12MNTH-4f8aZ3kL'
+    const cleanDuration = packageDuration.replace(/[\s-]/g, '');     // remove spaces & hyphens
+    const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
+    const referenceId = `${baseRefId}`;
 
     // (optional) ensure uniqueness
     const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId } });
@@ -29,17 +137,31 @@ async function createPackagePrice(req, res, next) {
         packageDuration: String(packageDuration),
         planId: Number(planId),
         price: parseFloat(price),
+        initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+        renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+        packageName: packageName || `${plan.planName} - ${packageDuration}`,
+        isActive: isActive !== false,
         ispId: ispId,
-        packageName: `${plan.planName} - ${packageDuration}`,
         referenceId,
-        isTrial
+        isTrial: isTrial === true,
+        updatedAt: new Date()
       }
     });
 
-    // Build item payload
+    // Link addon charges (oneTimeCharges)
+    const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
+    const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
+    if (resolvedChargeIds.length > 0) {
+      await req.prisma.packageonetimecharges.createMany({
+        data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+        skipDuplicates: true
+      });
+    }
+
+    // Build item payload for Tshul
     const itemPayload = {
       Name: record.packageName,
-      Code: `${cleanPlanCode}${cleanDuration}`, // keeps it short
+      Code: `${cleanPlanCode}${cleanDuration}`,
       Unit: 'Mbps',
       ReferenceId: referenceId,
       ItemGroupReferenceId: 'TI-001',
@@ -58,7 +180,6 @@ async function createPackagePrice(req, res, next) {
       SalesRate: record.price,
       IsBOM: false
     };
-
 
     try {
       const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
@@ -88,8 +209,6 @@ async function createPackagePrice(req, res, next) {
   }
 }
 
-
-
 // List package prices without one-time charges
 async function listPackagePrices(req, res, next) {
   try {
@@ -98,21 +217,38 @@ async function listPackagePrices(req, res, next) {
       select: {
         id: true,
         price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
         packageDuration: true,
+        packageName: true,
+        isActive: true,
         planId: true,
         referenceId: true,
-        packageName: true,
         isTrial: true,
-        packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } },
-        oneTimeCharges: { select: { id: true, name: true } }
+        packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } }
       }
     });
-    return res.json(list);
+
+    // Enrich with linked addon charges (oneTimeCharges)
+    const enriched = await Promise.all(list.map(async (p) => {
+      const links = await req.prisma.packageonetimecharges.findMany({
+        where: { A: p.id }
+      }).catch(() => []);
+      const chargeIds = links.map(link => link.B);
+      const charges = chargeIds.length ? await req.prisma.OneTimeCharge.findMany({
+        where: { id: { in: chargeIds }, isDeleted: false }
+      }) : [];
+      return {
+        ...p,
+        oneTimeCharges: charges
+      };
+    }));
+
+    return res.json(enriched);
   } catch (err) {
     return next(err);
   }
 }
-
 
 // Get single package price without charges
 async function getPackagePriceById(req, res, next) {
@@ -125,18 +261,35 @@ async function getPackagePriceById(req, res, next) {
       select: {
         id: true,
         price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
+        packageDuration: true,
+        packageName: true,
+        isActive: true,
+        planId: true,
+        referenceId: true,
         isTrial: true,
-        packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } },
-        oneTimeCharges: { select: { id: true, name: true } }
+        packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } }
       }
     });
     if (!item) return res.status(404).json({ error: 'Price record not found' });
-    return res.json(item);
+
+    const links = await req.prisma.packageonetimecharges.findMany({
+      where: { A: item.id }
+    }).catch(() => []);
+    const chargeIds = links.map(link => link.B);
+    const charges = chargeIds.length ? await req.prisma.OneTimeCharge.findMany({
+      where: { id: { in: chargeIds }, isDeleted: false }
+    }) : [];
+
+    return res.json({
+      ...item,
+      oneTimeCharges: charges
+    });
   } catch (err) {
     return next(err);
   }
 }
-
 
 // Update package price
 async function updatePackagePrice(req, res, next) {
@@ -144,40 +297,47 @@ async function updatePackagePrice(req, res, next) {
     const id = Number(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-    const { planId, price, isTrial } = req.body;
+    const {
+      planId,
+      price,
+      isTrial,
+      packageName,
+      isActive,
+      initialTotalWithTax,
+      renewAmountWithTax,
+      oneTimeCharges,
+      oneTimeChargeIds
+    } = req.body;
 
     const existing = await req.prisma.PackagePrice.findUnique({
-      where: { id },
-      include: { packagePlanDetails: true }
+      where: { id }
     });
-
-    if (!existing) return res.status(404).json({ error: 'Package price not found' });
+    if (!existing) return res.status(404).json({ error: 'NOT_FOUND' });
 
     const updated = await req.prisma.PackagePrice.update({
       where: { id },
       data: {
-        price: price !== undefined ? parseFloat(price) : undefined,
         planId: planId !== undefined ? Number(planId) : undefined,
-        isTrial: isTrial !== undefined ? Boolean(isTrial) : undefined
+        price: price !== undefined ? parseFloat(price) : undefined,
+        initialTotalWithTax: initialTotalWithTax !== undefined ? (initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null) : undefined,
+        renewAmountWithTax: renewAmountWithTax !== undefined ? (renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null) : undefined,
+        packageName: packageName !== undefined ? packageName : undefined,
+        isActive: isActive !== undefined ? Boolean(isActive) : undefined,
+        isTrial: isTrial !== undefined ? isTrial : undefined,
+        updatedAt: new Date()
       }
     });
 
-    try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul && updated.referenceId) {
-
-        const updatePayload = {
-          SalesRate: updated.price,
-          Name: `${existing.packagePlanDetails?.planName || 'Plan'} - ${updated.packageDuration || existing.packageDuration}`
-        };
-
-        const response = await tshul.item.update(updated.referenceId, updatePayload);
-        if (response && response.Error) {
-          console.error("T-Shul update sync failed:", response.Error);
-        }
+    const chargesToResolve = oneTimeCharges !== undefined ? oneTimeCharges : oneTimeChargeIds;
+    if (chargesToResolve !== undefined) {
+      const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, Number(req.ispId || updated.ispId), chargesToResolve);
+      await req.prisma.packageonetimecharges.deleteMany({ where: { A: id } });
+      if (resolvedChargeIds.length > 0) {
+        await req.prisma.packageonetimecharges.createMany({
+          data: resolvedChargeIds.map(cid => ({ A: id, B: Number(cid) })),
+          skipDuplicates: true
+        });
       }
-    } catch (err) {
-      console.error("T-Shul update sync error:", err.message);
     }
 
     return res.json(updated);
@@ -186,224 +346,168 @@ async function updatePackagePrice(req, res, next) {
   }
 }
 
-// Soft-delete package price
+// Soft delete package price
 async function deletePackagePrice(req, res, next) {
   try {
     const id = Number(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-    const existing = await req.prisma.PackagePrice.findFirst({
-      where: { id, ispId: req.ispId }
+    await req.prisma.PackagePrice.update({
+      where: { id },
+      data: { isDeleted: true, updatedAt: new Date() }
     });
 
-    if (!existing) return res.status(404).json({ error: 'Package price not found' });
-
-    await req.prisma.PackagePrice.update({ where: { id }, data: { isDeleted: true } });
-
-    try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul && existing.referenceId) {
-        const response = await tshul.item.delete(existing.referenceId);
-        if (response && response.Error) {
-          console.error("T-Shul delete sync failed:", response.Error);
-        }
-      }
-    } catch (err) {
-      console.error("T-Shul delete sync error:", err.message);
-    }
-
-    return res.json({ message: 'Deleted price record', id });
+    return res.json({ success: true });
   } catch (err) {
     return next(err);
   }
 }
 
-// ================= RESYNC PACKAGE PRICE & EXTRA CHARGES =================
+// Resync prices with T-Shul
 async function resyncPackagePrice(req, res, next) {
   try {
-    const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-    if (!tshul) return res.status(400).json({ error: 'T-Shul service not enabled or configured' });
+    const ispId = Number(req.ispId);
+    const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+    if (!tshul) return res.status(400).json({ error: 'T-Shul service not available' });
 
-    const tshulItems = await tshul.item.list();
-    console.log(`[DEBUG] Fetched ${tshulItems?.length || 0} items from T-Shul`);
-
-    if (tshulItems && tshulItems.Error) {
-      console.error('[ERROR] T-Shul list fetch failed:', tshulItems.Error);
-      return res.status(500).json({ error: `Failed to fetch items from T-Shul: ${tshulItems.Error}` });
-    }
-
-    // Helper for resilient comparison
-    const normalize = (val) => String(val || '').replace(/[\s-_]/g, '').toLowerCase();
-
-    // 1. Fetch Local Data
-    const localPrices = await req.prisma.PackagePrice.findMany({
-      where: { ispId: req.ispId, isDeleted: false }
-    });
-    const localCharges = await req.prisma.OneTimeCharge.findMany({
-      where: { ispId: req.ispId, isDeleted: false }
-    });
-    const localPlans = await req.prisma.PackagePlan.findMany({
-      where: { ispId: req.ispId, isDeleted: false }
+    const prices = await req.prisma.PackagePrice.findMany({
+      where: { ispId, isDeleted: false },
+      include: { packagePlanDetails: true }
     });
 
-    console.log(`[DEBUG] Local: Plans=${localPlans.length}, Prices=${localPrices.length}, Charges=${localCharges.length}`);
-
-    let updatedLocalPrices = 0;
-    let updatedLocalCharges = 0;
-    let createdLocalPrices = 0;
-    let createdLocalCharges = 0;
-    let createdTshulPrices = 0;
-    let createdTshulCharges = 0;
-
-    // 2. T-Shul -> Local (Sync Prices from T-Shul to local DB)
-    for (const item of tshulItems || []) {
-      if (!item.ReferenceId) continue;
-      const normalizedRef = normalize(item.ReferenceId);
-
-      if (item.Unit === 'Mbps') {
-        const local = localPrices.find(p => normalize(p.referenceId) === normalizedRef);
-        if (local) {
-          if (Math.abs(local.price - item.SalesRate) > 0.01 || (item.SalesRate === 0 && !local.isTrial)) {
-            console.log(`[SYNC] Updating Local Price for ${local.packageName}: ${local.price} -> ${item.SalesRate} (Trial: ${item.SalesRate === 0})`);
-            await req.prisma.PackagePrice.update({
-              where: { id: local.id },
-              data: { 
-                price: item.SalesRate,
-                isTrial: item.SalesRate === 0
-              }
-            });
-            updatedLocalPrices++;
-          }
-        } else {
-          // Attempt to IMPORT missing PackagePrice
-          // Strategy: Try Plan Code first, then Plan Name
-          const planMatch = localPlans.find(plan => 
-            normalizedRef.includes(normalize(plan.planCode)) || 
-            normalize(item.Name).includes(normalize(plan.planName))
-          );
-
-          if (planMatch) {
-            console.log(`[SYNC] Importing Mbps item as Local PackagePrice: "${item.Name}" matches plan "${planMatch.planName}" (Trial: ${item.SalesRate === 0})`);
-            
-            // Extract duration from name (e.g., "Plan Name - 12 month" -> "12 month")
-            const durationArr = item.Name.split(' - ');
-            const duration = durationArr.length > 1 ? durationArr[durationArr.length - 1] : '1 month';
-
-            await req.prisma.PackagePrice.create({
-              data: {
-                ispId: req.ispId,
-                planId: planMatch.id,
-                price: item.SalesRate,
-                packageDuration: duration,
-                packageName: item.Name,
-                referenceId: item.ReferenceId,
-                isActive: true,
-                isTrial: item.SalesRate === 0
-              }
-            });
-            createdLocalPrices++;
-          } else {
-            console.log(`[DEBUG] Skipped Mbps item: "${item.Name}" (Ref: ${item.ReferenceId}) - No matching PackagePlan found.`);
-          }
-        }
-      } else {
-        const local = localCharges.find(c => normalize(c.referenceId) === normalizedRef);
-        if (local) {
-          if (Math.abs(local.amount - item.SalesRate) > 0.01) {
-            console.log(`[SYNC] Updating Local Charge for ${local.name}: ${local.amount} -> ${item.SalesRate}`);
-            await req.prisma.OneTimeCharge.update({
-              where: { id: local.id },
-              data: { amount: item.SalesRate }
-            });
-            updatedLocalCharges++;
-          }
-        } else {
-          // IMPORT missing OneTimeCharge
-          console.log(`[SYNC] Importing T-Shul item as Local ExtraCharge: ${item.Name}`);
-          await req.prisma.OneTimeCharge.create({
-            data: {
-              ispId: req.ispId,
-              name: item.Name,
-              code: item.Code,
-              amount: item.SalesRate,
-              referenceId: item.ReferenceId,
-              isTaxable: item.IsTaxable,
-              isActive: true
-            }
-          });
-          createdLocalCharges++;
-        }
+    let successCount = 0;
+    for (const p of prices) {
+      const payload = {
+        Name: `${p.packagePlanDetails?.planName || 'Plan'} - ${p.packageDuration}`,
+        Code: p.referenceId?.split('-')[1] || p.id.toString(),
+        Unit: 'Mbps',
+        ReferenceId: p.referenceId,
+        IsSalesItem: true,
+        SalesRate: p.price
+      };
+      try {
+        await tshul.item.create(payload);
+        successCount++;
+      } catch (e) {
+        console.warn(`Sync failed for price ${p.id}:`, e.message);
       }
     }
 
-    // 3. Local -> T-Shul (Push missing local records to T-Shul)
-    // Push missing PackagePrices
-    for (const local of localPrices) {
-      if (!local.referenceId) continue;
-      const normalizedLocal = normalize(local.referenceId);
-      const existsInTshul = (tshulItems || []).find(item => normalize(item.ReferenceId) === normalizedLocal);
-
-      if (!existsInTshul) {
-        console.log(`[SYNC] Pushing missing PackagePrice to T-Shul: ${local.packageName}`);
-        const cleanRefId = local.referenceId.replace('INT-', '');
-        const payload = {
-          Name: local.packageName,
-          Code: cleanRefId,
-          Unit: 'Mbps',
-          ReferenceId: local.referenceId,
-          ItemGroupReferenceId: 'TI-001',
-          IsTaxable: true,
-          SalesRate: local.price,
-          IsSalesItem: true,
-          IsServiceItem: true
-        };
-        const result = await tshul.item.create(payload);
-        if (result && !result.Error) createdTshulPrices++;
-      }
-    }
-
-    // Push missing OneTimeCharges
-    for (const local of localCharges) {
-      if (!local.referenceId) continue;
-      const normalizedLocal = normalize(local.referenceId);
-      const existsInTshul = (tshulItems || []).find(item => normalize(item.ReferenceId) === normalizedLocal);
-
-      if (!existsInTshul) {
-        console.log(`[SYNC] Pushing missing ExtraCharge to T-Shul: ${local.name}`);
-        const payload = {
-          Name: local.name,
-          Code: local.code || local.referenceId.replace('INT-', ''),
-          Unit: 'Psc',
-          ReferenceId: local.referenceId,
-          ItemGroupReferenceId: 'TI-001',
-          IsTaxable: local.isTaxable,
-          SalesRate: local.amount,
-          IsSalesItem: true,
-          IsServiceItem: true
-        };
-        const result = await tshul.item.create(payload);
-        if (result && !result.Error) createdTshulCharges++;
-      }
-    }
-
-    res.json({
-      message: "T-Shul items resync completed",
-      stats: {
-        packagePrices: {
-          updatedLocal: updatedLocalPrices,
-          createdLocal: createdLocalPrices,
-          createdTshul: createdTshulPrices
-        },
-        extraCharges: {
-          updatedLocal: updatedLocalCharges,
-          createdLocal: createdLocalCharges,
-          createdTshul: createdTshulCharges
-        }
-      }
-    });
-
+    return res.json({ success: true, synced: successCount, total: prices.length });
   } catch (err) {
-    console.error('[ERROR] Resync failed:', err.message);
+    return next(err);
+  }
+}
+
+async function createBulkPackagePrices(req, res, next) {
+  try {
+    const { planId, prices } = req.body;
+    const ispId = Number(req.ispId);
+
+    if (!planId || !Array.isArray(prices) || prices.length === 0) {
+      return res.status(400).json({ error: 'planId and prices array are required' });
+    }
+
+    const plan = await req.prisma.PackagePlan.findUnique({
+      where: { id: Number(planId) },
+      select: { planName: true, planCode: true }
+    });
+    if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+    const results = [];
+
+    for (const p of prices) {
+      const {
+        duration,
+        price,
+        initialTotalWithTax,
+        renewAmountWithTax,
+        oneTimeCharges = [],
+        oneTimeChargeIds = []
+      } = p;
+      if (price === undefined || !duration) continue;
+
+      const cleanPlanCode = plan.planCode.replace(/[\s-]/g, '');
+      const cleanDuration = duration.replace(/[\s-]/g, '');
+      const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
+      const referenceId = `${baseRefId}`;
+
+      const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
+      const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
+
+      const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId, isDeleted: false } });
+      if (exists) {
+        const record = await req.prisma.PackagePrice.update({
+          where: { id: exists.id },
+          data: {
+            price: parseFloat(price),
+            initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+            renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+            packageName: `${plan.planName} - ${duration}`,
+            isActive: true,
+            isDeleted: false,
+            updatedAt: new Date()
+          }
+        });
+
+        await req.prisma.packageonetimecharges.deleteMany({ where: { A: record.id } });
+        if (resolvedChargeIds.length > 0) {
+          await req.prisma.packageonetimecharges.createMany({
+            data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+            skipDuplicates: true
+          });
+        }
+
+        results.push(record);
+        continue;
+      }
+
+      const record = await req.prisma.PackagePrice.create({
+        data: {
+          packageDuration: String(duration),
+          planId: Number(planId),
+          price: parseFloat(price),
+          initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+          renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+          packageName: `${plan.planName} - ${duration}`,
+          isActive: true,
+          ispId: ispId,
+          referenceId,
+          isTrial: false,
+          updatedAt: new Date()
+        }
+      });
+
+      if (resolvedChargeIds.length > 0) {
+        await req.prisma.packageonetimecharges.createMany({
+          data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+          skipDuplicates: true
+        });
+      }
+
+      results.push(record);
+
+      try {
+        const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+        if (tshul) {
+          const itemPayload = {
+            Name: record.packageName,
+            Code: `${cleanPlanCode}${cleanDuration}`,
+            Unit: 'Mbps',
+            ReferenceId: referenceId,
+            ItemGroupReferenceId: 'TI-001',
+            IsTaxable: true,
+            IsSalesItem: true,
+            IsServiceItem: true,
+            SalesRate: record.price
+          };
+          await tshul.item.create(itemPayload).catch(() => {});
+        }
+      } catch (err) {}
+    }
+
+    return res.status(201).json({ success: true, count: results.length, data: results });
+  } catch (err) {
     next(err);
   }
 }
@@ -414,5 +518,6 @@ module.exports = {
   getPackagePriceById,
   updatePackagePrice,
   deletePackagePrice,
-  resyncPackagePrice
+  resyncPackagePrice,
+  createBulkPackagePrices
 };

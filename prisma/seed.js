@@ -140,12 +140,31 @@ async function main() {
     { name: 'yeaster_delete', menuName: 'yeaster' },
     { name: 'yeaster_manage', menuName: 'yeaster' },
 
+    // asterisk permission
+    { name: 'asterisk_read', menuName: 'asterisk' },
+    { name: 'asterisk_manage', menuName: 'asterisk' },
+
     // NAS permission
     { name: 'nas_read', menuName: 'NAS' },
     { name: 'nas_create', menuName: 'NAS' },
     { name: 'nas_update', menuName: 'NAS' },
     { name: 'nas_delete', menuName: 'NAS' },
+    { name: 'tasks_read', menuName: 'tasks' },
+    { name: 'tasks_create', menuName: 'tasks' },
+    { name: 'tasks_update', menuName: 'tasks' },
+    { name: 'tasks_delete', menuName: 'tasks' },
+    { name: 'tasks_read_self', menuName: 'tasks' },
 
+    // Bulk Inventory, Drums, Audit Log permissions
+    { name: 'bulk_inventory_read', menuName: 'bulk_inventory' },
+    { name: 'bulk_inventory_create', menuName: 'bulk_inventory' },
+    { name: 'bulk_inventory_update', menuName: 'bulk_inventory' },
+    { name: 'bulk_inventory_delete', menuName: 'bulk_inventory' },
+    { name: 'drums_read', menuName: 'drums' },
+    { name: 'drums_create', menuName: 'drums' },
+    { name: 'drums_update', menuName: 'drums' },
+    { name: 'drums_delete', menuName: 'drums' },
+    { name: 'audit_log_read', menuName: 'audit_log' }
   ];
 
   // --- 2. Define Roles with their specific granular permissions ---
@@ -192,6 +211,14 @@ async function main() {
         { name: 'billing_read_self', menuName: 'billing' },
       ],
     },
+    {
+      name: 'Field Staff',
+      permissions: [
+        { name: 'dashboard_view', menuName: 'dashboard' },
+        { name: 'tasks_read_self', menuName: 'tasks' },
+        { name: 'tasks_update', menuName: 'tasks' }, // Can update status of their tasks
+      ],
+    },
   ];
 
   // --- 3. Define Departments ---
@@ -210,7 +237,7 @@ async function main() {
 
   await prisma.role.deleteMany({});
   await prisma.permission.deleteMany({});
-  // await prisma.department.deleteMany({});
+  await prisma.department.deleteMany({});
 
 
 

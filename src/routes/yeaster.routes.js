@@ -40,7 +40,7 @@ module.exports = (prisma) => {
   /* ========== CALL MANAGEMENT ROUTES ========== */
 
   // Core call operations
-  router.post('/calls/make', checkPermission('yeaster_manage'), (req, res) =>
+  router.post('/calls/make', (req, res) =>
     controller.makeCall(req, res));
 
   router.get('/calls/:callid', checkPermission('yeaster_read'), (req, res) =>
@@ -98,7 +98,7 @@ module.exports = (prisma) => {
     controller.getCallLogs(req, res));
 
   /* ========== EXTENSION MANAGEMENT ROUTES ========== */
-  router.get('/extensions', checkPermission('yeaster_read'), (req, res) =>
+  router.get('/extensions', (req, res) =>
     controller.listExtensions(req, res));
 
   router.get('/extensions/db', checkPermission('yeaster_read'), (req, res) =>

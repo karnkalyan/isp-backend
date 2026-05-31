@@ -1,5 +1,26 @@
 const bcrypt = require('bcrypt');
 
+function normalizeBranchIds(value, primaryBranchId) {
+  if (value === undefined || value === null || value === '') return [];
+
+  let raw = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = raw.split(',');
+    }
+  }
+
+  const values = Array.isArray(raw) ? raw : [raw];
+  const primary = primaryBranchId ? Number(primaryBranchId) : null;
+  const ids = values
+    .map((branchId) => Number(branchId))
+    .filter((branchId) => Number.isInteger(branchId) && branchId > 0 && branchId !== primary);
+
+  return [...new Set(ids)];
+}
+
 // Create User
 async function createUser(req, res, next) {
   try {
@@ -8,9 +29,12 @@ async function createUser(req, res, next) {
       email,
       roleId, // Destructure as roleId from frontend
       status = 'pending',
-      departmentId, // UPDATED: Destructure as departmentId
+      departmentId,
+      branchId, // Primary branch
+      branchIds = [], // Additional branches
       password,
     } = req.body;
+    const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
 
     // Removed: const authenticatedIspId = req.ispId;
     // Directly using req.ispId where needed
@@ -30,9 +54,13 @@ async function createUser(req, res, next) {
         roleId: Number(roleId),
         status,
         departmentId: departmentId ? Number(departmentId) : null,
-        ispId: req.ispId, // Use req.ispId directly
+        branchId: branchId ? Number(branchId) : null,
+        ispId: req.ispId,
         profilePicture,
-        passwordHash: hashed
+        passwordHash: hashed,
+        userBranches: {
+          create: additionalBranchIds.map(bId => ({ branchId: bId }))
+        }
       },
       select: {
         id: true,
@@ -41,8 +69,12 @@ async function createUser(req, res, next) {
         roleId: true,
         status: true,
         departmentId: true,
+        branchId: true,
         ispId: true,
         profilePicture: true,
+        userBranches: {
+          select: { branchId: true }
+        },
         createdAt: true
       }
     });
@@ -53,6 +85,8 @@ async function createUser(req, res, next) {
   }
 }
 
+const { getBranchFilter } = require('../utils/branchHelper');
+
 // Get All Users with relations, filtered by ispId (retains authenticatedIspId variable)
 async function getAllUsers(req, res, next) {
   try {
@@ -62,34 +96,28 @@ async function getAllUsers(req, res, next) {
       return res.status(403).json({ error: 'Access denied: User not associated with an ISP.' });
     }
 
+    const branchFilter = await getBranchFilter(req);
+
+    const where = {
+      isDeleted: false,
+      ispId: authenticatedIspId,
+      ...branchFilter
+    };
+
     const users = await req.prisma.user.findMany({
-      where: {
-        isDeleted: false,
-        ispId: authenticatedIspId // Filter by the authenticated user's ISP ID
-      },
+      where,
       select: {
         id: true,
         name: true,
         email: true,
+        roleId: true,
         status: true,
         lastLogin: true,
         profilePicture: true,
         createdAt: true,
-
-        // Relations
-        isp: {
-          select: {
-            id: true,
-            companyName: true,
-            businessType: true,
-            website: true,
-            phoneNumber: true,
-            contactPerson: true,
-            city: true,
-            state: true,
-            country: true,
-          },
-        },
+        ispId: true,
+        departmentId: true,
+        branchId: true,
         department: {
           select: {
             id: true,
@@ -110,10 +138,36 @@ async function getAllUsers(req, res, next) {
             },
           },
         },
+        branch: {
+          select: { id: true, name: true, code: true }
+        },
+        userBranches: {
+          select: { 
+            branchId: true,
+            branch: { 
+              select: { id: true, name: true, code: true } 
+            } 
+          }
+        }
       },
     });
 
-    res.json(users);
+    const isp = await req.prisma.iSP.findUnique({
+      where: { id: authenticatedIspId },
+      select: {
+        id: true,
+        companyName: true,
+        businessType: true,
+        website: true,
+        phoneNumber: true,
+        contactPerson: true,
+        city: true,
+        state: true,
+        country: true,
+      }
+    });
+
+    res.json(users.map(user => ({ ...user, isp })));
   } catch (err) {
     next(err);
   }
@@ -143,8 +197,12 @@ async function getUserById(req, res, next) {
         status: true,
         lastLogin: true,
         departmentId: true,
+        branchId: true,
         ispId: true,
         profilePicture: true,
+        userBranches: {
+          select: { branchId: true }
+        },
         createdAt: true
       }
     });
@@ -167,9 +225,12 @@ async function updateUser(req, res, next) {
       roleId,
       status,
       departmentId,
+      branchId,
+      branchIds, // Array of branch IDs
       password,
-      ispId // Allow ispId from body if the intention is for admins to change it
+      ispId
     } = req.body;
+    const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
 
     // Removed: const authenticatedIspId = req.ispId;
 
@@ -177,10 +238,17 @@ async function updateUser(req, res, next) {
       ...(name !== undefined && { name }),
       ...(email !== undefined && { email }),
       ...(status !== undefined && { status }),
-      ...(departmentId !== undefined && { departmentId: Number(departmentId) }),
+      ...(departmentId !== undefined && { departmentId: departmentId ? Number(departmentId) : null }),
+      ...(branchId !== undefined && { branchId: branchId ? Number(branchId) : null }),
       ...(ispId !== undefined && { ispId: Number(ispId) }),
       ...(password !== undefined && { passwordHash: await bcrypt.hash(password, 10) }),
-      ...(req.file && { profilePicture: `/uploads/${req.file.filename}` })
+      ...(req.file && { profilePicture: `/uploads/${req.file.filename}` }),
+      ...(branchIds !== undefined && {
+        userBranches: {
+          deleteMany: {},
+          create: additionalBranchIds.map(bId => ({ branchId: bId }))
+        }
+      })
     };
 
     if (roleId !== undefined) {
@@ -197,8 +265,12 @@ async function updateUser(req, res, next) {
         roleId: true,
         status: true,
         departmentId: true,
+        branchId: true,
         ispId: true,
         profilePicture: true,
+        userBranches: {
+          select: { branchId: true }
+        },
         updatedAt: true
       }
     });

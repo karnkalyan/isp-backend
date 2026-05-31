@@ -1,11 +1,14 @@
 const { TshulClient } = require('../../services/tshulApi');
 const { RadiusClient } = require('../../services/radiusClient');
 const YeastarService = require('../../services/yeaster.service');
+const AsteriskService = require('../../services/asterisk.service');
 const { NetTVClient } = require('../../services/nettvClient');
 const { MikrotikClient } = require('../../services/mikrotikClient');
 const { EsewaClient } = require('../../services/esewa.services');
 const { KhaltiClient } = require('../../services/khalti.services');
 const { GenieACSClient } = require('../../services/genieacs.service');
+const { AakashSmsClient } = require('../../services/akashsms.service');
+const { SparrowSmsClient } = require('../../services/sparrowsms.service');
 const { SERVICE_CODES } = require('../serviceConstants');
 const prisma = require('../../../prisma/client');
 
@@ -13,7 +16,7 @@ class ServiceFactory {
     /**
      * Get a service client by service code
      */
-    static async getClient(serviceCode, ispId) {
+    static async getClient(serviceCode, ispId, prismaClient = prisma) {
         if (!ispId) {
             throw new Error('ISP ID is required. Make sure middleware sets req.ispId');
         }
@@ -31,7 +34,10 @@ class ServiceFactory {
                     return await RadiusClient.create(ispId);
 
                 case SERVICE_CODES.YEASTAR:
-                    return await YeastarService.create(ispId, prisma);
+                    return await YeastarService.create(ispId, prismaClient);
+
+                case SERVICE_CODES.ASTERISK:
+                    return await AsteriskService.create(ispId, prismaClient);
 
                 case SERVICE_CODES.NETTV:
                     return await NetTVClient.create(ispId);
@@ -46,7 +52,13 @@ class ServiceFactory {
                     return await KhaltiClient.create(ispId);
 
                 case SERVICE_CODES.GENIEACS: // Added
-                    return await GenieACSClient.create(ispId, prisma);
+                    return await GenieACSClient.create(ispId, prismaClient);
+
+                case SERVICE_CODES.AAKASHSMS:
+                    return await AakashSmsClient.create(ispId);
+
+                case SERVICE_CODES.SPARROWSMS:
+                    return await SparrowSmsClient.create(ispId);
 
                 // Add more service clients as needed
 
@@ -62,7 +74,7 @@ class ServiceFactory {
     /**
      * Get service status for an ISP
      */
-    static async getServiceStatus(serviceCode, ispId) {
+    static async getServiceStatus(serviceCode, ispId, prismaClient = prisma) {
         if (!ispId) {
             throw new Error('ISP ID is required');
         }
@@ -76,7 +88,10 @@ class ServiceFactory {
                     return await RadiusClient.getServiceStatus(ispId);
 
                 case SERVICE_CODES.YEASTAR:
-                    return await YeastarService.getServiceStatus(ispId, prisma);
+                    return await YeastarService.getServiceStatus(ispId, prismaClient);
+
+                case SERVICE_CODES.ASTERISK:
+                    return await AsteriskService.getServiceStatus(ispId, prismaClient);
 
                 case SERVICE_CODES.NETTV:
                     return await NetTVClient.getServiceStatus(ispId);
@@ -91,7 +106,13 @@ class ServiceFactory {
                     return await KhaltiClient.getServiceStatus(ispId);
 
                 case SERVICE_CODES.GENIEACS: // Added
-                    return await GenieACSClient.getServiceStatus(ispId, prisma);
+                    return await GenieACSClient.getServiceStatus(ispId, prismaClient);
+
+                case SERVICE_CODES.AAKASHSMS:
+                    return await AakashSmsClient.getServiceStatus(ispId);
+
+                case SERVICE_CODES.SPARROWSMS:
+                    return await SparrowSmsClient.getServiceStatus(ispId);
 
                 default:
                     return {
@@ -113,9 +134,9 @@ class ServiceFactory {
     /**
      * Test service connection
      */
-    static async testServiceConnection(serviceCode, ispId) {
+    static async testServiceConnection(serviceCode, ispId, prismaClient = prisma) {
         try {
-            const client = await this.getClient(serviceCode, ispId);
+            const client = await this.getClient(serviceCode, ispId, prismaClient);
 
             if (client && typeof client.testConnection === 'function') {
                 const result = await client.testConnection();
@@ -230,8 +251,13 @@ class ServiceFactory {
                                 break;
 
                             case SERVICE_CODES.YEASTAR:
-                                const yeastarStatus = await YeastarClient.getServiceStatus(ispId);
+                                const yeastarStatus = await YeastarService.getServiceStatus(ispId, prisma);
                                 Object.assign(status, yeastarStatus);
+                                break;
+
+                            case SERVICE_CODES.ASTERISK:
+                                const asteriskStatus = await AsteriskService.getServiceStatus(ispId, prisma);
+                                Object.assign(status, asteriskStatus);
                                 break;
 
                             case SERVICE_CODES.MIKROTIK:
@@ -242,6 +268,16 @@ class ServiceFactory {
                             case SERVICE_CODES.TSHUL:
                                 const tshulStatus = await TshulClient.getServiceStatus(ispId);
                                 Object.assign(status, tshulStatus);
+                                break;
+
+                            case SERVICE_CODES.AAKASHSMS:
+                                const aakashStatus = await AakashSmsClient.getServiceStatus(ispId);
+                                Object.assign(status, aakashStatus);
+                                break;
+
+                            case SERVICE_CODES.SPARROWSMS:
+                                const sparrowStatus = await SparrowSmsClient.getServiceStatus(ispId);
+                                Object.assign(status, sparrowStatus);
                                 break;
 
                             default:
@@ -293,6 +329,7 @@ class ServiceFactory {
             RADIUS: ['list_users', 'create_user', 'update_user', 'delete_user', 'check_authentication'],
             NETTV: ['list_subscribers', 'get_subscriber', 'create_subscriber', 'add_stb', 'assign_package'],
             YEASTAR: ['list_extensions', 'get_active_calls', 'make_call', 'hangup_call', 'get_call_logs'],
+            ASTERISK: ['list_extensions', 'get_active_calls', 'make_call', 'hangup_call', 'get_call_logs'],
             MIKROTIK: ['get_resources', 'get_interfaces', 'get_dhcp_leases', 'create_user', 'get_firewall_rules'],
             ESEWA: ['initiate_payment', 'verify_payment', 'get_transaction_status'],
             KHALTI: ['initiate_payment', 'verify_payment', 'lookup_transaction'],
@@ -349,6 +386,13 @@ class ServiceFactory {
                 description: 'VoIP PBX system for telephony services',
                 icon: '📞',
                 documentation: 'https://yeastar.com'
+            },
+            ASTERISK: {
+                name: 'Asterisk VoIP',
+                category: 'VOIP',
+                description: 'Asterisk VoIP PBX system with AMI/ARI integration',
+                icon: '📞',
+                documentation: 'https://asterisk.org'
             },
             MIKROTIK: {
                 name: 'MikroTik',

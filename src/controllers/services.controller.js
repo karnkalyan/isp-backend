@@ -6,6 +6,25 @@ class ServiceController {
     this.prisma = prisma;
   }
 
+  sendGenieACSError(res, error, fallbackError = 'GenieACS request failed') {
+    const message = error?.message || fallbackError;
+    const notFoundMatch = message.match(/Device with serial\s+(.+?)\s+not found/i);
+
+    if (notFoundMatch) {
+      return res.status(404).json({
+        success: false,
+        error: 'Device not found',
+        message: `Device with serial ${notFoundMatch[1]} not found in GenieACS`
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: fallbackError,
+      message
+    });
+  }
+
   // ==================== SERVICE CATALOG ====================
   async getAllServices(req, res) {
     try {
@@ -108,8 +127,14 @@ class ServiceController {
             where: { isActive: true, isDeleted: false },
             select: { id: true, credentialType: true, key: true, label: true, isEncrypted: true, description: true, createdAt: true }
           }
-        },
-        orderBy: { service: { name: 'asc' } }
+        }
+      });
+
+      // Sort in memory to avoid Prisma nested relation sorting compatibility issues
+      ispServices.sort((a, b) => {
+        const nameA = a.service?.name || '';
+        const nameB = b.service?.name || '';
+        return nameA.localeCompare(nameB);
       });
 
       const transformedServices = ispServices.map(ispService => ({
@@ -169,6 +194,48 @@ class ServiceController {
         where: { ispId_serviceId: { ispId, serviceId: service.id } }
       });
 
+      // If service is an SMS service and is marked as default, unmark other SMS services
+      if ((serviceCode === SERVICE_CODES.AAKASHSMS || serviceCode === SERVICE_CODES.SPARROWSMS) && config && config.isDefault === true) {
+        const otherCode = serviceCode === SERVICE_CODES.AAKASHSMS ? SERVICE_CODES.SPARROWSMS : SERVICE_CODES.AAKASHSMS;
+        const otherService = await this.prisma.service.findUnique({
+          where: { code: otherCode }
+        });
+        if (otherService) {
+          const otherIspService = await this.prisma.iSPService.findUnique({
+            where: { ispId_serviceId: { ispId, serviceId: otherService.id } }
+          });
+          if (otherIspService) {
+            const otherConfig = otherIspService.config && typeof otherIspService.config === 'object' ? otherIspService.config : {};
+            otherConfig.isDefault = false;
+            await this.prisma.iSPService.update({
+              where: { id: otherIspService.id },
+              data: { config: otherConfig }
+            });
+          }
+        }
+      }
+
+      // If service is a VOIP service and is marked as default, unmark other VOIP services
+      if ((serviceCode === SERVICE_CODES.YEASTAR || serviceCode === SERVICE_CODES.ASTERISK) && config && config.isDefault === true) {
+        const otherCode = serviceCode === SERVICE_CODES.YEASTAR ? SERVICE_CODES.ASTERISK : SERVICE_CODES.YEASTAR;
+        const otherService = await this.prisma.service.findUnique({
+          where: { code: otherCode }
+        });
+        if (otherService) {
+          const otherIspService = await this.prisma.iSPService.findUnique({
+            where: { ispId_serviceId: { ispId, serviceId: otherService.id } }
+          });
+          if (otherIspService) {
+            const otherConfig = otherIspService.config && typeof otherIspService.config === 'object' ? otherIspService.config : {};
+            otherConfig.isDefault = false;
+            await this.prisma.iSPService.update({
+              where: { id: otherIspService.id },
+              data: { config: otherConfig }
+            });
+          }
+        }
+      }
+
       let result;
       if (existing) {
         result = await this.prisma.iSPService.update({
@@ -194,6 +261,47 @@ class ServiceController {
           },
           include: { service: true }
         });
+      }
+
+      // Auto-provision credentials if none exist yet for this service
+      const credentialCount = await this.prisma.serviceCredential.count({
+        where: { ispServiceId: result.id, isDeleted: false }
+      });
+
+      if (credentialCount === 0) {
+        const defaultCreds = DEFAULT_CREDENTIALS[serviceCode] || [];
+        const parsedConfig = typeof result.config === 'string' ? JSON.parse(result.config) : (result.config || {});
+        const demoCredentials = parsedConfig?.defaultCredentials || parsedConfig?.demoCredentials || {};
+
+        const credentialsToCreate = [];
+        for (const c of defaultCreds) {
+          let val = '';
+          if (c.key === 'base_url') {
+            val = result.baseUrl || '';
+          } else if (demoCredentials[c.key] !== undefined) {
+            val = demoCredentials[c.key];
+          }
+
+          if (val) {
+            credentialsToCreate.push({
+              ispServiceId: result.id,
+              credentialType: c.credentialType || 'api_key',
+              key: c.key,
+              value: String(val),
+              label: c.label || c.key,
+              isEncrypted: c.isEncrypted !== false,
+              isActive: true,
+              isDeleted: false
+            });
+          }
+        }
+
+        if (credentialsToCreate.length > 0) {
+          await this.prisma.serviceCredential.createMany({
+            data: credentialsToCreate,
+            skipDuplicates: true
+          });
+        }
       }
 
       return res.json({
@@ -568,6 +676,43 @@ class ServiceController {
       return res.json({ success: true, data: systemInfo });
     } catch (error) {
       console.error('Error getting Yeastar system info:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get system info', message: error.message });
+    }
+  }
+
+  // Asterisk Operations
+  async getAsteriskExtensions(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.ASTERISK, ispId);
+      const extensions = await client.listExtensions();
+      return res.json({ success: true, data: extensions });
+    } catch (error) {
+      console.error('Error getting Asterisk extensions:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get extensions', message: error.message });
+    }
+  }
+
+  async getAsteriskActiveCalls(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.ASTERISK, ispId);
+      const activeCalls = await client.getActiveCalls();
+      return res.json({ success: true, data: activeCalls });
+    } catch (error) {
+      console.error('Error getting Asterisk active calls:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get active calls', message: error.message });
+    }
+  }
+
+  async getAsteriskSystemInfo(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.ASTERISK, ispId);
+      const systemInfo = await client.syncSystemStatus();
+      return res.json({ success: true, data: systemInfo });
+    } catch (error) {
+      console.error('Error getting Asterisk system info:', error);
       return res.status(500).json({ success: false, error: 'Failed to get system info', message: error.message });
     }
   }
@@ -1220,6 +1365,44 @@ class ServiceController {
     try {
       const ispId = req.ispId;
       const { search, status, refreshDevice } = req.query;
+
+      const genieService = await this.prisma.iSPService.findFirst({
+        where: {
+          ispId,
+          service: { code: SERVICE_CODES.GENIEACS },
+          isDeleted: false,
+          isActive: true,
+          isEnabled: true
+        },
+        include: { service: true }
+      });
+
+      if (!genieService) {
+        return res.json({
+          success: false,
+          total: 0,
+          devices: [],
+          message: "GenieACS service is not configured for this ISP."
+        });
+      }
+
+      const serviceCredentials = await this.prisma.serviceCredential.findMany({
+        where: { ispServiceId: genieService.id, isActive: true, isDeleted: false }
+      });
+      const credentials = serviceCredentials.reduce((acc, credential) => {
+        acc[credential.key] = credential.value;
+        return acc;
+      }, {});
+
+      if (!genieService.baseUrl && !credentials.base_url) {
+        return res.json({
+          success: false,
+          total: 0,
+          devices: [],
+          message: "GenieACS base URL is not configured for this ISP."
+        });
+      }
+
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
 
       const ONLINE_THRESHOLD = 5 * 60 * 1000;
@@ -1496,11 +1679,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 
@@ -1666,11 +1845,7 @@ class ServiceController {
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to get device",
-        message: error.message
-      });
+      return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
 
@@ -3167,9 +3342,98 @@ class ServiceController {
     }
   }
 
+  // ==================== SMS OPERATIONS ====================
+  async resolveSmsProvider(ispId, requestedProvider) {
+    if (requestedProvider) {
+      const code = requestedProvider.toUpperCase();
+      if (code === SERVICE_CODES.AAKASHSMS || code === SERVICE_CODES.SPARROWSMS) {
+        return code;
+      }
+    }
+
+    const services = await this.prisma.iSPService.findMany({
+      where: {
+        ispId: ispId,
+        service: {
+          code: { in: [SERVICE_CODES.AAKASHSMS, SERVICE_CODES.SPARROWSMS] }
+        },
+        isActive: true,
+        isEnabled: true,
+        isDeleted: false
+      },
+      include: {
+        service: true,
+        credentials: {
+          where: { isActive: true, isDeleted: false }
+        }
+      }
+    });
+
+    if (!services || services.length === 0) {
+      throw new Error('No SMS services configured or enabled for this ISP.');
+    }
+
+    const configuredServices = services.filter(s => {
+      return s.credentials.some(c => c.key === 'auth_token' && c.value);
+    });
+
+    if (configuredServices.length === 0) {
+      throw new Error('No SMS services have valid credentials.');
+    }
+
+    const defaultService = configuredServices.find(s => {
+      const cfg = s.config && typeof s.config === 'object' ? s.config : {};
+      return cfg.isDefault === true;
+    });
+
+    if (defaultService) {
+      return defaultService.service.code;
+    }
+
+    const aakash = configuredServices.find(s => s.service.code === SERVICE_CODES.AAKASHSMS);
+    if (aakash) {
+      return SERVICE_CODES.AAKASHSMS;
+    }
+
+    return configuredServices[0].service.code;
+  }
+
+  async sendBulkSms(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { to, text, type = 'customer', provider } = req.body;
+
+      if (!to || !text) {
+        return res.status(400).json({ success: false, error: 'to and text are required' });
+      }
+
+      const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
+      const client = await ServiceFactory.getClient(resolvedProvider, ispId);
+      const result = await client.sendBulkSms(to, text);
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error sending bulk SMS:', error);
+      return res.status(500).json({ success: false, error: 'Failed to send SMS', message: error.message });
+    }
+  }
+
+  async getSmsCredit(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { provider } = req.query;
+
+      const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
+      const client = await ServiceFactory.getClient(resolvedProvider, ispId);
+      const result = await client.getCredit();
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting SMS credit:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get SMS credit', message: error.message });
+    }
+  }
+
 }
-
-
-
 
 module.exports = { ServiceController };

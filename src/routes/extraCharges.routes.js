@@ -7,7 +7,8 @@ const {
   listOneTimeCharges,
   getOneTimeChargeById,
   updateOneTimeCharge,
-  deleteOneTimeCharge
+  deleteOneTimeCharge,
+  syncOneTimeCharges
 } = require('../controllers/extraCharges.controller');
 
 module.exports = (prisma) => {
@@ -21,31 +22,37 @@ module.exports = (prisma) => {
 
   router.post(
     '/',
-    checkPermission('one_time_charges_create'),
+    checkPermission('package_plans_create'),
     createOneTimeCharge
+  );
+
+  router.post(
+    '/sync',
+    checkPermission('package_plans_create'),
+    syncOneTimeCharges
   );
 
   router.get(
     '/',
-    checkPermission('one_time_charges_read'),
+    checkPermission('package_plans_read'),
     listOneTimeCharges
   );
 
   router.get(
     '/:id',
-    checkPermission('one_time_charges_read'),
+    checkPermission('package_plans_read'),
     getOneTimeChargeById
   );
 
   router.put(
     '/:id',
-    checkPermission('one_time_charges_update'),
+    checkPermission('package_plans_update'),
     updateOneTimeCharge
   );
 
   router.delete(
     '/:id',
-    checkPermission('one_time_charges_delete'),
+    checkPermission('package_plans_delete'),
     deleteOneTimeCharge
   );
 

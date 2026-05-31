@@ -1,7 +1,6 @@
 const SSHSession = require('../../core/ssh/SSHSession');
 const TelnetSession = require('../../core/telnet/TelnetSession');
-const prisma = require('../../../prisma/client'); // Adjust the path as necessary
-
+const prisma = require('../../../prisma/client');
 
 class BdcomOLTDriver {
     constructor(device) {
@@ -17,11 +16,10 @@ class BdcomOLTDriver {
 
         const SessionClass = transport === 'telnet' ? TelnetSession : SSHSession;
 
-        // Determine the correct port based on transport
         let port;
         if (transport === 'telnet') {
             port = this.device.telnetPort || 23;
-        } else { // ssh
+        } else {
             port = this.device.sshPort || 22;
         }
 
@@ -29,7 +27,7 @@ class BdcomOLTDriver {
 
         this.ssh = new SessionClass({
             host: this.device.sshHost,
-            port: port,
+            port,
             username: this.device.sshUsername,
             password: this.device.sshPassword,
             enablePassword: this.device.sshEnablePassword,
@@ -39,74 +37,286 @@ class BdcomOLTDriver {
         await this.ssh.connect();
     }
 
-
     async serviceBoardType(slot = 0) {
-
         const serviceBoard = await prisma.serviceBoard.findFirst({
             where: { oltId: this.device.id, slot },
         });
 
         if (!serviceBoard) {
-            return {
-                success: false,
-                message: 'Device not found'
-            };
+            return 'epon';
         }
 
-        return serviceBoard.type.toLowerCase();
+        return String(serviceBoard.type || 'epon').toLowerCase();
     }
 
-    /**
-     * BDCOM Specific Session Wrapper
-     * Sets up the environment (enable, scroll, config) before running tasks.
-     */
     async runSession(callback) {
         if (!this.ssh) throw new Error("SSH not connected");
 
         return this.ssh.runShellSession(async (send) => {
-            // Check if we need to enter enable mode
-            await send('enable');
-
-            // Disable pagination
-            await send('terminal length 0');
-
-            // Enter config mode if needed
-            await send('config');
+            await send('enable').catch(() => { });
+            await send('terminal length 0').catch(() => { });
+            await send('config').catch(() => { });
 
             try {
-                const result = await callback(send);
-                return result;
+                return await callback(send);
             } finally {
-                // Try 'end' instead of 'return' for BDCOM
-                await send('end');
-                // Or maybe just don't send anything here
+                await send('end').catch(() => { });
             }
         });
     }
+
     // --- HIGH LEVEL ACTIONS ---
 
-    // Get all registered ONUs
     async getOntInfoWithOptical() {
         return this.runSession(async (send) => {
             const serviceBoardType = await this.serviceBoardType();
-            // Fix: use 'detail' not 'details'
-            const raw = await send(`show ${serviceBoardType} onu-information detail`);
-            console.log('RAW ONU OUTPUT:', JSON.stringify(raw));
-            return this.parseOntTable(raw);
+
+            if (serviceBoardType !== 'epon') {
+                throw new Error('This parser currently supports BDCOM EPON only');
+            }
+
+            const rawInfo = await send(`show ${serviceBoardType} onu-information detail`);
+            const rawActive = await send(`show ${serviceBoardType} active-onu`);
+            const rawInactive = await send(`show ${serviceBoardType} inactive-onu`);
+
+            console.log('RAW ONU OUTPUT:', rawInfo);
+            console.log('RAW ACTIVE OUTPUT:', rawActive);
+            console.log('RAW INACTIVE OUTPUT:', rawInactive);
+
+            const onuList = this.parseOntTable(rawInfo);
+            const activeMap = this.parseActiveOnu(rawActive);
+            const inactiveMap = this.parseInactiveOnu(rawInactive);
+
+            const interfaces = [...new Set(onuList.map(o => o.interface).filter(Boolean))];
+            const opticalMap = {};
+            const onuCtcOpticalMap = {};
+
+            for (const intf of interfaces) {
+                const match = intf.match(/^EPON(\d+)\/(\d+)$/i);
+                if (!match) continue;
+
+                const frame = match[1];
+                const port = match[2];
+
+                try {
+                    const rawOptical = await send(`show ${serviceBoardType} optical-transceiver-diagnosis interface epon ${frame}/${port}`);
+                    opticalMap[intf.toUpperCase()] = this.parseOpticalPort(rawOptical);
+                } catch (e) {
+                    console.log(`Optical fetch failed for ${intf}:`, e.message);
+                    opticalMap[intf.toUpperCase()] = {
+                        olt: {
+                            interface: intf.toUpperCase(),
+                            temperature: null,
+                            voltage: null,
+                            current: null,
+                            tx_power: null
+                        },
+                        onus: {}
+                    };
+                }
+
+                try {
+                    const rawOnuCtcOptical = await send(`show ${serviceBoardType} onu-ctc-optical-transceiver-diagnosis interface epon ${frame}/${port}`);
+                    onuCtcOpticalMap[intf.toUpperCase()] = this.parseOnuCtcOpticalPort(rawOnuCtcOptical);
+                } catch (e) {
+                    console.log(`ONU CTC optical fetch failed for ${intf}:`, e.message);
+                    onuCtcOpticalMap[intf.toUpperCase()] = {};
+                }
+            }
+
+            return onuList.map((onu) => {
+                const key = (onu.full_name || '').toUpperCase();
+                const intf = (onu.interface || '').toUpperCase();
+
+                const active = activeMap[key] || null;
+                const inactive = inactiveMap[key] || null;
+                const optical = opticalMap[intf] || { olt: {}, onus: {} };
+                const onuOptical = optical.onus[key] || {};
+                const onuCtcOptical = (onuCtcOpticalMap[intf] || {})[key] || {};
+
+                let run_state = 'unknown';
+                if ((onu.status || '').toLowerCase() === 'auto-configured') {
+                    run_state = 'online';
+                } else if (['deregistered', 'lost'].includes((onu.status || '').toLowerCase())) {
+                    run_state = 'offline';
+                }
+
+                return {
+                    ...onu,
+                    control_flag: onu.bind_type ? 'active' : 'inactive',
+                    run_state,
+                    config_state: run_state === 'online' ? 'normal' : 'initial',
+                    match_state: run_state === 'online' ? 'match' : 'initial',
+                    protect_side: 'no',
+
+                    oam_status: active?.oam_status || null,
+                    distance: active?.distance ?? null,
+                    rtt: active?.rtt ?? null,
+                    alive_time: active?.alive_time || null,
+                    absent_time: inactive?.absent_time || null,
+
+                    last_reg_time: active?.last_reg_time || inactive?.last_reg_time || null,
+                    last_dereg_time: active?.last_dereg_time || inactive?.last_dereg_time || null,
+                    last_dereg_reason: active?.last_dereg_reason || inactive?.last_dereg_reason || onu.dereg_reason || null,
+
+                    offline_reason: run_state === 'offline'
+                        ? (active?.last_dereg_reason || inactive?.last_dereg_reason || onu.dereg_reason || null)
+                        : null,
+
+                    rx_power: onuCtcOptical.rx_power ?? onuOptical.rx_power ?? null,
+                    tx_power: onuCtcOptical.tx_power ?? null,
+                    temperature: onuCtcOptical.temperature ?? null,
+                    voltage: onuCtcOptical.voltage ?? null,
+                    current: onuCtcOptical.current ?? null,
+
+                    olt_temperature: optical.olt?.temperature ?? null,
+                    olt_voltage: optical.olt?.voltage ?? null,
+                    olt_current: optical.olt?.current ?? null,
+                    olt_tx_power: optical.olt?.tx_power ?? null,
+
+                    optical_diagnostics: {
+                        rx_power: onuCtcOptical.rx_power ?? onuOptical.rx_power ?? null,
+                        tx_power: onuCtcOptical.tx_power ?? null,
+                        temperature: onuCtcOptical.temperature ?? null,
+                        voltage: onuCtcOptical.voltage ?? null,
+                        current: onuCtcOptical.current ?? null,
+                        olt_temperature: optical.olt?.temperature ?? null,
+                        olt_voltage: optical.olt?.voltage ?? null,
+                        olt_current: optical.olt?.current ?? null,
+                        olt_tx_power: optical.olt?.tx_power ?? null
+                    }
+                };
+            });
         });
     }
 
-    // Get Unregistered/Rejected ONUs
+    async getOntInfoBySN(serial) {
+        return this.runSession(async (send) => {
+            const serviceBoardType = await this.serviceBoardType();
+
+            if (serviceBoardType !== 'epon') {
+                throw new Error('This parser currently supports BDCOM EPON only');
+            }
+
+            const normalizedSerial = String(serial || '').trim().toLowerCase();
+
+            const rawInfo = await send(`show ${serviceBoardType} onu-information detail`);
+            const rawActive = await send(`show ${serviceBoardType} active-onu`);
+            const rawInactive = await send(`show ${serviceBoardType} inactive-onu`);
+
+            const onuList = this.parseOntTable(rawInfo);
+            const activeMap = this.parseActiveOnu(rawActive);
+            const inactiveMap = this.parseInactiveOnu(rawInactive);
+
+            const onu = onuList.find(item =>
+                (item.sn || '').toLowerCase() === normalizedSerial ||
+                (item.mac_address || '').toLowerCase() === normalizedSerial
+            );
+
+            if (!onu) return null;
+
+            let optical = {
+                olt: {
+                    interface: onu.interface,
+                    temperature: null,
+                    voltage: null,
+                    current: null,
+                    tx_power: null
+                },
+                onus: {}
+            };
+
+            let onuCtcOpticalMap = {};
+
+            const match = (onu.interface || '').match(/^EPON(\d+)\/(\d+)$/i);
+            if (match) {
+                const frame = match[1];
+                const port = match[2];
+
+                try {
+                    const rawOptical = await send(`show ${serviceBoardType} optical-transceiver-diagnosis interface epon ${frame}/${port}`);
+                    optical = this.parseOpticalPort(rawOptical);
+                } catch (e) {
+                    console.log('Error getting optical info:', e.message);
+                }
+
+                try {
+                    const rawOnuCtcOptical = await send(`show ${serviceBoardType} onu-ctc-optical-transceiver-diagnosis interface epon ${frame}/${port}`);
+                    onuCtcOpticalMap = this.parseOnuCtcOpticalPort(rawOnuCtcOptical);
+                } catch (e) {
+                    console.log('Error getting ONU CTC optical info:', e.message);
+                }
+            }
+
+            const active = activeMap[(onu.full_name || '').toUpperCase()] || null;
+            const inactive = inactiveMap[(onu.full_name || '').toUpperCase()] || null;
+            const onuOptical = optical.onus[(onu.full_name || '').toUpperCase()] || {};
+            const onuCtcOptical = onuCtcOpticalMap[(onu.full_name || '').toUpperCase()] || {};
+
+            let run_state = 'unknown';
+            if ((onu.status || '').toLowerCase() === 'auto-configured') {
+                run_state = 'online';
+            } else if (['deregistered', 'lost'].includes((onu.status || '').toLowerCase())) {
+                run_state = 'offline';
+            }
+
+            return {
+                ...onu,
+                control_flag: onu.bind_type ? 'active' : 'inactive',
+                run_state,
+                config_state: run_state === 'online' ? 'normal' : 'initial',
+                match_state: run_state === 'online' ? 'match' : 'initial',
+                protect_side: 'no',
+
+                oam_status: active?.oam_status || null,
+                distance: active?.distance ?? null,
+                rtt: active?.rtt ?? null,
+                alive_time: active?.alive_time || null,
+                absent_time: inactive?.absent_time || null,
+
+                last_reg_time: active?.last_reg_time || inactive?.last_reg_time || null,
+                last_dereg_time: active?.last_dereg_time || inactive?.last_dereg_time || null,
+                last_dereg_reason: active?.last_dereg_reason || inactive?.last_dereg_reason || onu.dereg_reason || null,
+
+                offline_reason: run_state === 'offline'
+                    ? (active?.last_dereg_reason || inactive?.last_dereg_reason || onu.dereg_reason || null)
+                    : null,
+
+                rx_power: onuCtcOptical.rx_power ?? onuOptical.rx_power ?? null,
+                tx_power: onuCtcOptical.tx_power ?? null,
+                temperature: onuCtcOptical.temperature ?? null,
+                voltage: onuCtcOptical.voltage ?? null,
+                current: onuCtcOptical.current ?? null,
+
+                olt_temperature: optical.olt?.temperature ?? null,
+                olt_voltage: optical.olt?.voltage ?? null,
+                olt_current: optical.olt?.current ?? null,
+                olt_tx_power: optical.olt?.tx_power ?? null,
+
+                service_ports: [],
+                optical_diagnostics: {
+                    rx_power: onuCtcOptical.rx_power ?? onuOptical.rx_power ?? null,
+                    tx_power: onuCtcOptical.tx_power ?? null,
+                    temperature: onuCtcOptical.temperature ?? null,
+                    voltage: onuCtcOptical.voltage ?? null,
+                    current: onuCtcOptical.current ?? null,
+                    olt_temperature: optical.olt?.temperature ?? null,
+                    olt_voltage: optical.olt?.voltage ?? null,
+                    olt_current: optical.olt?.current ?? null,
+                    olt_tx_power: optical.olt?.tx_power ?? null
+                }
+            };
+        });
+    }
+
     async autofindall(slot) {
         return this.runSession(async (send) => {
             const serviceBoardType = await this.serviceBoardType(slot);
             const raw = await send(`show ${serviceBoardType} rejected-onu`);
-
             console.log("Raw Rejected ONT", raw);
             return this.parseRejectONT(raw);
         });
     }
-
 
     async autofind(frame, slot, port) {
         return this.runSession(async (send) => {
@@ -116,71 +326,19 @@ class BdcomOLTDriver {
         });
     }
 
-    // Get ONU information by MAC address
-    async getOntInfoBySN(serial) {
-        return this.runSession(async (send) => {
-            const serviceBoardType = await this.serviceBoardType();
-
-            // Fix 1: Proper comparison (use ===, not =)
-            // Fix 2: Correct logic - if it's epon, use mac-address, otherwise use sn
-            const boardType = serviceBoardType === 'epon' ? 'mac-address' : 'sn';
-
-            // 1. Get Basic Info
-            const rawOntInfo = await send(`show ${serviceBoardType} onu-information ${boardType} ${serial}`);
-
-            console.log("rawOntInfo", rawOntInfo);
-
-            // Fix 3: Use serial instead of undefined macAddress
-            const ont = this.parseOntInfoByMAC(rawOntInfo, serial);
-
-            if (!ont.fsp || ont.fsp === "N/A" || !ont.ont_id) {
-                return null;
-            }
-
-
-            const ISEPON = serviceBoardType === 'epon' ? 'EPON' : 'GPON';
-
-            // Parse interface and ONU ID
-            const [f, s, p] = ont.fsp.replace(ISEPON, '').split('/');
-
-            if (f && s && p) {
-                // 2. Get Service Ports
-                try {
-                    const servicePortRaw = await send(`show ${serviceBoardType} service-port port ${ont.fsp} ont ${ont.ont_id}`);
-                    ont.service_ports = this.parseServicePortByOnt(servicePortRaw);
-                } catch (e) {
-                    console.log('Error getting service ports:', e.message);
-                    ont.service_ports = [];
-                }
-
-                // 3. Get Optical Info
-                try {
-                    const opticalRaw = await send(`show ${serviceBoardType} onu-optical-info interface ${ont.fsp} onu ${ont.ont_id}`);
-                    ont.optical_diagnostics = this.parseOpticalInfo(opticalRaw);
-                } catch (e) {
-                    console.log('Error getting optical info:', e.message);
-                    ont.optical_diagnostics = { rx_power: "N/A", tx_power: "N/A" };
-                }
-            }
-
-            return ont;
-        });
-    }
-    // Register a new ONU
     async registerONT(data) {
         const { slot, port, serial } = data;
 
         const serviceBoardType = await this.serviceBoardType();
-
         const registerParam = serviceBoardType === 'epon' ? 'mac' : 'sn';
+
         return this.runSession(async (send) => {
             const results = { ont_registration: {} };
 
-            // 1. Add ONT
             await send(`interface ${serviceBoardType} ${slot}/${port}`);
             const ontCommand = `${serviceBoardType} bind-onu ${registerParam} ${serial}`;
 
-            console.log("Registation Param CLI", ontCommand)
+            console.log("Registation Param CLI", ontCommand);
             results.ont_registration.result = (await send(ontCommand)).trim();
             await send('quit');
 
@@ -188,16 +346,14 @@ class BdcomOLTDriver {
         });
     }
 
-    // Delete an ONU
     async deleteOnt(data) {
         const { slot, port, serial } = data;
 
         return this.runSession(async (send) => {
             const processLogs = { ont_deletion: "" };
             const serviceBoardType = await this.serviceBoardType();
-            // Delete ONT (Must be done in Interface mode)
+
             await send(`interface ${serviceBoardType} ${slot}/${port}`);
-            // SSHSession handles the (y/n) prompt automatically
             const deleteOutput = await send(`no ${serviceBoardType} bind-onu mac ${serial}`);
             processLogs.ont_deletion = deleteOutput.trim();
 
@@ -207,7 +363,6 @@ class BdcomOLTDriver {
         });
     }
 
-    // Execute arbitrary command
     async executeCommand(command) {
         return this.runSession(async (send) => {
             const output = await send(command);
@@ -215,177 +370,326 @@ class BdcomOLTDriver {
         });
     }
 
-    // --- PARSERS FOR BDCOM ---
+    // --- HELPERS ---
 
-/**
- * Parse ONU table from 'show epon onu-information detail'
- * Returns an array of ONU objects with Huawei‑compatible keys.
- */
-parseOntTable(text) {
-    const onuList = [];
-    const lines = text.split('\n');
-    let currentInterface = null;
+    _normalizeOutput(text) {
+        return String(text || '')
+            .replace(/\r/g, '')
+            .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+            .replace(/[^\x20-\x7E\n]/g, '');
+    }
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trimRight();
+    _mergeWrappedRows(text, rowStartRegex) {
+        const lines = this._normalizeOutput(text).split('\n');
+        const merged = [];
+        let current = '';
 
-        if (!line) continue;
+        for (const rawLine of lines) {
+            const line = rawLine.trimRight();
+            if (!line) continue;
 
-        // Capture interface header
-        const interfaceMatch = line.match(/Interface (EPON\d+\/\d+) has registered \d+ ONUs?:/);
-        if (interfaceMatch) {
-            currentInterface = interfaceMatch[1];
-            continue;
+            if (
+                line.startsWith('Interface ') ||
+                line.includes('IntfName') ||
+                line.includes('--------') ||
+                line.startsWith('Bind Flag:') ||
+                line.startsWith('lS -') ||
+                line.startsWith('fS -') ||
+                line.startsWith('HO-')
+            ) {
+                if (current) {
+                    merged.push(current.trim());
+                    current = '';
+                }
+                merged.push(line);
+                continue;
+            }
+
+            if (rowStartRegex.test(line.trim())) {
+                if (current) {
+                    merged.push(current.trim());
+                }
+                current = line.trim();
+            } else {
+                if (current) {
+                    current += ' ' + line.trim();
+                } else {
+                    merged.push(line.trim());
+                }
+            }
         }
 
-        // Skip header lines
-        if (line.includes('IntfName') || line.includes('--------') || line.includes('cription')) {
-            continue;
+        if (current) {
+            merged.push(current.trim());
         }
 
-        // Parse ONU line (starts with EPON)
-        if (line.trim().startsWith('EPON')) {
-            const onuData = {
-                fsp: this._convertInterfaceToFSP(currentInterface), // e.g., "0/10/0"
-                ont_id: null,
-                sn: 'N/A',
-                control_flag: 'inactive',
-                run_state: 'offline',
-                config_state: 'initial',
-                match_state: 'initial',
-                protect_side: 'no',
-                description: 'N/A'
+        return merged;
+    }
+
+    _convertInterfaceToFSP(interfaceStr) {
+        if (!interfaceStr) return interfaceStr;
+        const match = interfaceStr.match(/EPON(\d+)\/(\d+)/i);
+        if (match) {
+            const frame = match[1];
+            const slot = match[2];
+            return `${frame}/${slot}/0`;
+        }
+        return interfaceStr;
+    }
+
+    _toInt(value) {
+        const n = parseInt(value, 10);
+        return isNaN(n) ? null : n;
+    }
+
+    _toFloat(value) {
+        const n = parseFloat(value);
+        return isNaN(n) ? null : n;
+    }
+
+    // --- PARSERS ---
+
+    parseOntTable(text) {
+        const onuList = [];
+        const lines = this._mergeWrappedRows(text, /^EPON\d+\/\d+:\d+/i);
+
+        for (const line of lines) {
+            if (!line) continue;
+
+            if (
+                line.startsWith('Interface ') ||
+                line.includes('IntfName') ||
+                line.includes('--------') ||
+                line.startsWith('Bind Flag:')
+            ) {
+                continue;
+            }
+
+            if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
+
+            const match = line.match(
+                /^(EPON\d+\/\d+:\d+)\s+(\S+)\s+(\S+)\s+([0-9a-fA-F.]+)\s+(\S+)\s+(.+?)\s+(static\(\w+\)|dynamic\(\w+\)|static|dynamic)\s+(auto-configured|deregistered|lost)\s+(\S+.*)$/i
+            );
+
+            if (!match) {
+                console.log('Skipping unparsable ONU row:', line);
+                continue;
+            }
+
+            const full_name = match[1].toUpperCase();
+            const vendor_id = match[2];
+            const model_id = match[3];
+            const mac_address = match[4].toLowerCase();
+            const loid = match[5] === 'N/A' ? null : match[5];
+            const description = match[6] === 'N/A' ? null : match[6];
+            const bind_type = match[7];
+            const status = match[8];
+            const dereg_reason = match[9] === 'N/A' ? null : match[9];
+
+            const [interfaceName, ontIdStr] = full_name.split(':');
+
+            onuList.push({
+                fsp: this._convertInterfaceToFSP(interfaceName),
+                interface: interfaceName.toUpperCase(),
+                full_name,
+                ont_id: parseInt(ontIdStr, 10),
+                sn: mac_address,
+                mac_address,
+                vendor_id,
+                model_id,
+                loid,
+                description,
+                bind_type,
+                bind_details: this.parseBindType(bind_type),
+                status,
+                dereg_reason
+            });
+        }
+
+        console.log('PARSED ONU COUNT:', onuList.length);
+        return onuList;
+    }
+
+    parseActiveOnu(text) {
+        const result = {};
+        const lines = this._mergeWrappedRows(text, /^EPON\d+\/\d+:\d+/i);
+
+        for (const line of lines) {
+            if (!line) continue;
+
+            if (
+                line.startsWith('Interface ') ||
+                line.includes('IntfName') ||
+                line.includes('--------')
+            ) {
+                continue;
+            }
+
+            if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
+
+            const match = line.match(
+                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(auto-configured|deregistered|lost)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
+            );
+
+            if (!match) {
+                console.log('Skipping unparsable ACTIVE row:', line);
+                continue;
+            }
+
+            result[match[1].toUpperCase()] = {
+                full_name: match[1].toUpperCase(),
+                mac_address: match[2].toLowerCase(),
+                status: match[3],
+                oam_status: match[4],
+                distance: parseInt(match[5], 10),
+                rtt: parseInt(match[6], 10),
+                last_reg_time: match[7],
+                last_dereg_time: match[8],
+                last_dereg_reason: match[9],
+                alive_time: match[10]
             };
-
-            // --- Parse main line (interface, vendor, model, MAC) ---
-            const fullNameMatch = line.match(/(EPON\d+\/\d+:\d+)/);
-            if (fullNameMatch) {
-                const fullName = fullNameMatch[1];
-                if (fullName.includes(':')) {
-                    onuData.ont_id = parseInt(fullName.split(':')[1]);
-                }
-
-                const remainingText = line.substring(line.indexOf(fullName) + fullName.length).trim();
-                const remainingParts = remainingText.split(/\s+/);
-
-                if (remainingParts.length >= 3) {
-                    // The third part is the MAC address -> we map it to 'sn'
-                    onuData.sn = remainingParts[2] || 'N/A';
-                }
-            }
-
-            // --- Parse indented continuation line (description, bind_type, status, dereg_reason) ---
-            if (i + 1 < lines.length) {
-                const nextLine = lines[i + 1];
-                if (nextLine && (nextLine.startsWith('             ') || nextLine.startsWith('              '))) {
-                    const continuationLine = nextLine.trim();
-                    const continuationParts = continuationLine.split(/\s+/);
-
-                    if (continuationParts.length >= 3) {
-                        // Find where bind_type starts (contains 'static' or 'dynamic')
-                        let bindTypeIndex = -1;
-                        for (let j = 0; j < continuationParts.length; j++) {
-                            if (continuationParts[j].includes('static') || continuationParts[j].includes('dynamic')) {
-                                bindTypeIndex = j;
-                                break;
-                            }
-                        }
-
-                        let description = 'N/A';
-                        let bindType = 'N/A';
-                        let status = 'N/A';
-                        let deregReason = 'N/A';
-
-                        if (bindTypeIndex > 0) {
-                            description = continuationParts.slice(0, bindTypeIndex).join(' ') || 'N/A';
-                            bindType = continuationParts[bindTypeIndex] || 'N/A';
-                            status = continuationParts[bindTypeIndex + 1] || 'N/A';
-                            deregReason = continuationParts.slice(bindTypeIndex + 2).join(' ') || 'N/A';
-                        } else {
-                            // Fallback
-                            description = continuationParts[0] || 'N/A';
-                            bindType = continuationParts[1] || 'N/A';
-                            status = continuationParts[2] || 'N/A';
-                            deregReason = continuationParts.slice(3).join(' ') || 'N/A';
-                        }
-
-                        onuData.description = description;
-
-                        // Map BDCOM fields to Huawei equivalents
-                        onuData.control_flag = (bindType.includes('static') || bindType.includes('dynamic')) ? 'active' : 'inactive';
-
-                        if (status === 'auto-configured' && deregReason === 'N/A') {
-                            onuData.run_state = 'online';
-                            onuData.config_state = 'normal';
-                            onuData.match_state = 'match';
-                        } else if (status === 'deregistered' || status === 'lost') {
-                            onuData.run_state = 'offline';
-                            onuData.config_state = 'initial';
-                            onuData.match_state = 'initial';
-                        } else {
-                            onuData.run_state = 'unknown';
-                            onuData.config_state = 'initial';
-                            onuData.match_state = 'initial';
-                        }
-                    }
-                    i++; // Skip the processed continuation line
-                }
-            }
-
-            onuList.push(onuData);
         }
+
+        return result;
     }
 
-    return onuList;
-}
+    parseInactiveOnu(text) {
+        const result = {};
+        const lines = this._mergeWrappedRows(text, /^EPON\d+\/\d+:\d+/i);
 
-/**
- * Convert BDCOM interface name (e.g., "EPON0/10") to three‑part FSP format (e.g., "0/10/0").
- */
-_convertInterfaceToFSP(interfaceStr) {
-    if (!interfaceStr) return interfaceStr;
-    const match = interfaceStr.match(/EPON(\d+)\/(\d+)/);
-    if (match) {
-        const frame = match[1];
-        const slot = match[2];
-        // Use port = 0 as placeholder
-        return `${frame}/${slot}/0`;
+        for (const line of lines) {
+            if (!line) continue;
+
+            if (
+                line.startsWith('Interface ') ||
+                line.includes('IntfName') ||
+                line.includes('--------')
+            ) {
+                continue;
+            }
+
+            if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
+
+            const match = line.match(
+                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(deregistered|lost)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
+            );
+
+            if (!match) {
+                console.log('Skipping unparsable INACTIVE row:', line);
+                continue;
+            }
+
+            result[match[1].toUpperCase()] = {
+                full_name: match[1].toUpperCase(),
+                mac_address: match[2].toLowerCase(),
+                status: match[3],
+                last_reg_time: match[4],
+                last_dereg_time: match[5],
+                last_dereg_reason: match[6],
+                absent_time: match[7]
+            };
+        }
+
+        return result;
     }
-    return interfaceStr;
-}
 
-    /**
-     * Parse rejected ONU information from 'show epon rejected-onu'
-     * Returns array of rejected ONU objects
-     */
+    parseOpticalPort(text) {
+        const result = {
+            olt: {
+                interface: null,
+                temperature: null,
+                voltage: null,
+                current: null,
+                tx_power: null
+            },
+            onus: {}
+        };
+
+        const lines = this._normalizeOutput(text).split('\n');
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.includes('Temperature(degree)')) continue;
+            if (line.includes('RxPower(dBm)')) continue;
+            if (line.includes('-----------')) continue;
+
+            let m = line.match(/^epon(\d+\/\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)$/i);
+            if (m) {
+                result.olt = {
+                    interface: `EPON${m[1]}`.toUpperCase(),
+                    temperature: this._toFloat(m[2]),
+                    voltage: this._toFloat(m[3]),
+                    current: this._toFloat(m[4]),
+                    tx_power: this._toFloat(m[5])
+                };
+                continue;
+            }
+
+            m = line.match(/^epon(\d+\/\d+:\d+)\s+([-\d.]+)$/i);
+            if (m) {
+                result.onus[`EPON${m[1]}`.toUpperCase()] = {
+                    rx_power: this._toFloat(m[2])
+                };
+            }
+        }
+
+        return result;
+    }
+
+    parseOnuCtcOpticalPort(text) {
+        const result = {};
+        const lines = this._normalizeOutput(text).split('\n');
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.includes('IntfName')) continue;
+            if (line.includes('Temp(degree)')) continue;
+            if (line.includes('------------')) continue;
+
+            const match = line.match(
+                /^epon(\d+\/\d+:\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)$/i
+            );
+
+            if (!match) continue;
+
+            result[`EPON${match[1]}`.toUpperCase()] = {
+                temperature: this._toFloat(match[2]),
+                voltage: this._toFloat(match[3]),
+                current: this._toFloat(match[4]), // Bias current
+                tx_power: this._toFloat(match[5]),
+                rx_power: this._toFloat(match[6])
+            };
+        }
+
+        return result;
+    }
+
     parseRejectONT(text) {
         const rejectedONUs = [];
-        const lines = text.split('\n');
+        const lines = this._normalizeOutput(text).split('\n');
         let currentInterface = null;
 
         for (const line of lines) {
             const trimmedLine = line.trim();
 
-            // Check for interface header
             const interfaceMatch = trimmedLine.match(/ONU rejected to register on interface (EPON\d+\/\d+):/);
             if (interfaceMatch) {
                 currentInterface = interfaceMatch[1];
                 continue;
             }
 
-            // Skip header lines
             if (trimmedLine.includes('INDEX') || trimmedLine.includes('-----') || !trimmedLine) {
                 continue;
             }
 
-            // Parse the data line - based on your actual output:
-            // "1     c4cd.503e.7f3e 2026-02-26 15:05:25 (N/A)                    (N/A)"
             const parts = trimmedLine.split(/\s+/).filter(p => p.length > 0);
 
             if (parts.length >= 6 && /^\d+$/.test(parts[0])) {
                 rejectedONUs.push({
                     interface: currentInterface,
-                    index: parseInt(parts[0]),
+                    index: parseInt(parts[0], 10),
                     ont_id_details: parts[1],
                     discovered_at: `${parts[2]} ${parts[3]}`,
                     loid: parts[4] === '(N/A)' ? null : parts[4],
@@ -397,128 +701,12 @@ _convertInterfaceToFSP(interfaceStr) {
         return rejectedONUs;
     }
 
-    /**
-     * Parse ONU information by MAC address
-     * Returns ONU object with basic information
-     */
-
     parseOntInfoByMAC(text, macAddress) {
-        const ont = {
-            fsp: "N/A",
-            ont_id: null,
-            full_name: null,
-            interface: "N/A",
-            vendor_id: "N/A",
-            model_id: "N/A",
-            mac_address: macAddress,
-            description: "N/A",
-            bind_type: "N/A",
-            status: "N/A",
-            dereg_reason: "N/A",
-            bind_details: {},
-            service_ports: [],
-            optical_diagnostics: { rx_power: "N/A", tx_power: "N/A" }
-        };
-
-        const lines = text.split('\n');
-
-        // First, find the interface header line
-        let headerIndex = -1;
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const interfaceMatch = line.match(/Interface (EPON\d+\/\d+) has registered \d+ ONUs?:/);
-            if (interfaceMatch) {
-                ont.interface = interfaceMatch[1];
-                headerIndex = i;
-                break;
-            }
-        }
-
-        if (headerIndex === -1) {
-            console.log('Interface header not found');
-            return ont; // or return null?
-        }
-
-        // Now look for the ONU line containing the MAC address after the header
-        for (let i = headerIndex + 1; i < lines.length; i++) {
-            const line = lines[i];
-
-            // Skip header/separator lines
-            if (line.includes('IntfName') || line.includes('-----') || line.includes('-------------') || line.trim() === '') {
-                continue;
-            }
-
-            // Check if this line contains the MAC and starts with EPON (actual ONU entry)
-            if (line.includes(macAddress) && line.trim().startsWith('EPON')) {
-                // Extract full_name (EPON0/10:5)
-                const fullNameMatch = line.match(/(EPON\d+\/\d+:\d+)/);
-                if (fullNameMatch) {
-                    ont.full_name = fullNameMatch[1];
-                    const [fsp, id] = ont.full_name.split(':');
-                    ont.fsp = fsp;
-                    ont.ont_id = parseInt(id);
-                }
-
-                // Get the remaining part after full_name
-                const remainingPart = line.substring(line.indexOf(ont.full_name) + ont.full_name.length).trim();
-                const parts = remainingPart.split(/\s+/);
-
-                // Basic fields: vendor, model, mac, description, bind_type
-                if (parts.length >= 5) {
-                    ont.vendor_id = parts[0] || 'N/A';
-                    ont.model_id = parts[1] || 'N/A';
-                    ont.mac_address = parts[2] || macAddress;
-                    ont.description = parts[3] === 'N/A' ? 'N/A' : parts[3];
-                    ont.bind_type = parts[4] || 'N/A';
-
-                    // Status may be split across lines (e.g., "aut" on this line, "o-configured N/A" on next)
-                    let statusParts = parts.slice(5);
-                    let statusLine = statusParts.join(' ');
-
-                    // Check next line for continuation
-                    if (i + 1 < lines.length) {
-                        const nextLine = lines[i + 1].trim();
-                        // If next line doesn't start with EPON, it's a continuation
-                        if (nextLine && !nextLine.startsWith('EPON') && !nextLine.includes('IntfName') && !nextLine.includes('-----')) {
-                            statusLine += ' ' + nextLine;
-                            i++; // skip the next line in the loop
-                        }
-                    }
-
-                    // Split combined status line into tokens
-                    const combinedTokens = statusLine.split(/\s+/);
-
-                    // Last token is usually dereg_reason (N/A, power-off, wire-down, etc.)
-                    const lastToken = combinedTokens[combinedTokens.length - 1];
-                    const knownReasons = ['N/A', 'power-off', 'wire-down', 'dying-gasp', 'los'];
-                    if (knownReasons.includes(lastToken)) {
-                        ont.dereg_reason = lastToken;
-                        ont.status = combinedTokens.slice(0, -1).join(' ');
-                    } else {
-                        ont.status = statusLine;
-                        ont.dereg_reason = 'N/A';
-                    }
-
-                    // Clean up common status formatting
-                    ont.status = ont.status.replace(/\s+/g, ' ').trim();
-                    if (ont.status === 'aut o-configured' || ont.status === 'aut') {
-                        ont.status = 'auto-configured';
-                    }
-                }
-                break;
-            }
-        }
-
-        // Parse bind details
-        ont.bind_details = this.parseBindType(ont.bind_type);
-
-        return ont;
+        const all = this.parseOntTable(text);
+        const normalized = String(macAddress || '').toLowerCase();
+        return all.find(item => (item.mac_address || '').toLowerCase() === normalized) || null;
     }
 
-    /**
-     * Parse bind type string to extract binding details
-     * Returns object with binding information
-     */
     parseBindType(bindType) {
         const result = {
             type: 'unknown',
@@ -532,7 +720,6 @@ _convertInterfaceToFSP(interfaceStr) {
             return result;
         }
 
-        // Check for static/dynamic in the bindType string
         if (bindType.includes('static')) {
             result.is_static = true;
             result.type = 'static';
@@ -541,7 +728,6 @@ _convertInterfaceToFSP(interfaceStr) {
             result.type = 'dynamic';
         }
 
-        // Check bind method flags
         if (bindType.includes('(mS)')) {
             result.method = 'mac-address';
             result.is_static = true;
@@ -567,10 +753,6 @@ _convertInterfaceToFSP(interfaceStr) {
         return result;
     }
 
-    /**
-     * Parse optical information from ONU
-     * Returns object with optical diagnostics
-     */
     parseOpticalInfo(text) {
         const optical = {
             rx_power: "N/A",
@@ -580,7 +762,7 @@ _convertInterfaceToFSP(interfaceStr) {
             current: "N/A"
         };
 
-        const lines = text.split('\n');
+        const lines = this._normalizeOutput(text).split('\n');
         for (const line of lines) {
             const rxMatch = line.match(/Rx optical power\(dBm\)\s*:\s*([-\d.]+)/i);
             if (rxMatch) optical.rx_power = `${rxMatch[1]} dBm`;
@@ -601,13 +783,9 @@ _convertInterfaceToFSP(interfaceStr) {
         return optical;
     }
 
-    /**
-     * Parse service port information for a specific ONT
-     * Returns array of service port objects
-     */
     parseServicePortByOnt(text) {
         const results = [];
-        const lines = text.replace(/\r/g, '').replace(/---- More.*?\n/g, '').split('\n');
+        const lines = this._normalizeOutput(text).replace(/---- More.*?\n/g, '').split('\n');
 
         for (const line of lines) {
             const trimmed = line.trim();
@@ -615,13 +793,13 @@ _convertInterfaceToFSP(interfaceStr) {
                 const parts = trimmed.split(/\s+/);
                 if (parts.length >= 8) {
                     results.push({
-                        index: parseInt(parts[0]) || null,
-                        vlan: parseInt(parts[1]) || null,
+                        index: parseInt(parts[0], 10) || null,
+                        vlan: parseInt(parts[1], 10) || null,
                         vlan_attr: parts[2] || 'N/A',
                         port_type: parts[3] || 'N/A',
                         fsp: parts[4]?.replace(/\s+/g, '') || 'N/A',
-                        ont_id: parseInt(parts[5]) || null,
-                        gem_index: parseInt(parts[6]) || null,
+                        ont_id: parseInt(parts[5], 10) || null,
+                        gem_index: parseInt(parts[6], 10) || null,
                         flow_type: parts[7] || 'N/A',
                         flow_para: parts[8] || 'N/A',
                         rx: parts[9] || 'N/A',
@@ -635,13 +813,13 @@ _convertInterfaceToFSP(interfaceStr) {
         return results;
     }
 
-    /**
-     * Parse service port table (generic)
-     * Returns array of service port objects
-     */
     parseServicePortTable(text) {
         const results = [];
-        const clean = text.replace(/\r/g, '').replace(/---- More.*?\n/g, '').split('\n').filter(l => /^\s*\d+\s+\d+/.test(l));
+        const clean = this._normalizeOutput(text)
+            .replace(/---- More.*?\n/g, '')
+            .split('\n')
+            .filter(l => /^\s*\d+\s+\d+/.test(l));
+
         const regex = /^\s*(\d+)\s+(\d+)\s+(\w+)\s+(\w+)\s+(\d+\/\d+\s*\/\d+)\s+(\d+)\s+(\d+)\s+(\w+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(up|down)/i;
 
         for (const line of clean) {
@@ -667,13 +845,9 @@ _convertInterfaceToFSP(interfaceStr) {
         return results;
     }
 
-    /**
-     * Parse extended ONU information
-     * Returns object with extended ONU data
-     */
     parseExtendedInfo(text) {
         const results = {};
-        const blocks = text.split(/-----------------------------------------------------------------------------/);
+        const blocks = this._normalizeOutput(text).split(/-----------------------------------------------------------------------------/);
         let currentFSP = "";
 
         blocks.forEach(block => {
@@ -700,12 +874,8 @@ _convertInterfaceToFSP(interfaceStr) {
         return results;
     }
 
-    /**
-     * Parse autofind information
-     * Returns array of autofound ONU objects
-     */
     parseAutofind(text) {
-        const entries = text.split(/----------------------------------------------------------------------------/);
+        const entries = this._normalizeOutput(text).split(/----------------------------------------------------------------------------/);
         const results = [];
 
         entries.forEach(entry => {
@@ -725,10 +895,6 @@ _convertInterfaceToFSP(interfaceStr) {
         return results;
     }
 
-    /**
-     * Parse ONU information by SN (for Huawei compatibility)
-     * Returns object with ONU details
-     */
     parseOntInfoBySN(text) {
         const kv = (key) => this.extractValue(text, key);
         const ont = {
@@ -792,10 +958,6 @@ _convertInterfaceToFSP(interfaceStr) {
         return ont;
     }
 
-    /**
-     * Parse optical table information
-     * Returns object with optical data keyed by ONU ID
-     */
     parseOpticalTable(text, singleOntId = null) {
         const results = {};
         const tableRegex = /^\s*(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(\d+)/gm;
@@ -838,14 +1000,10 @@ _convertInterfaceToFSP(interfaceStr) {
         return results;
     }
 
-    /**
-     * Extract value by label from text
-     * Returns extracted value or "N/A"
-     */
     extractValue(text, label) {
         const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`${escapedLabel}\\s*:\\s*([^\\r\\n]+)`, 'i');
-        const match = text.match(regex);
+        const match = String(text || '').match(regex);
         return match ? match[1].trim() : "N/A";
     }
 }

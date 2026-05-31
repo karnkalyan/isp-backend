@@ -9,10 +9,10 @@ async function getCustomerPackageDetails(prisma, ispId, customerId) {
       subscribedPkg: {
         select: {
           id: true,
-          packageName: true,
           price: true,
           packageDuration: true,
           referenceId: true,
+          packagePlanDetails: { select: { planName: true } },
           oneTimeCharges: {
             where: { isDeleted: false },
             select: { id: true, name: true, amount: true, referenceId: true }
@@ -86,7 +86,7 @@ async function createSubscriptionOrder(prisma, ispId, customerId) {
 
   const orderItemsData = [
     {
-      itemName: pkg.packageName || "Base Package",
+      itemName: pkg.packagePlanDetails?.planName ? `${pkg.packagePlanDetails.planName} - ${pkg.packageDuration}` : "Base Package",
       referenceId: pkg.referenceId || null,
       itemPrice: packagePrice
     },

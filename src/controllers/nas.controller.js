@@ -1,5 +1,7 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
+const { getBranchFilter } = require('../utils/branchHelper');
+
 
 
 // ================= CREATE NAS =================
@@ -19,7 +21,7 @@ async function createNas(req, res, next) {
             isDeleted: false,
             isDefault: req.body.isDefault ?? false,
             ispId: req.ispId,
-            branchId: req.user?.branchId
+            branchId: req.body.branchId ? Number(req.body.branchId) : (req.selectedBranchId || null)
         };
 
         const nas = await req.prisma.nas.create({ data });
@@ -64,11 +66,12 @@ async function createNas(req, res, next) {
 async function listNas(req, res, next) {
 
     try {
-
+        const branchFilter = await getBranchFilter(req);
         const list = await req.prisma.nas.findMany({
             where: {
                 ispId: req.ispId,
-                isDeleted: false
+                isDeleted: false,
+                ...branchFilter
             },
             orderBy: { createdAt: "desc" }
         });

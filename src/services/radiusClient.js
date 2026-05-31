@@ -290,6 +290,19 @@ class RadiusClient {
     return this.#apiRequest('get', '/api/radgroupreply');
   }
 
+  // Get radgroupreply by groupname
+  async getRadgroupreplyByGroupname(groupname) {
+    try {
+      const all = await this.getRadgroupreply();
+      if (Array.isArray(all)) {
+        return all.filter(entry => entry.groupname === groupname);
+      }
+      return [];
+    } catch (error) {
+      throw new Error(`Failed to get radgroupreply for group ${groupname}: ${error.message}`);
+    }
+  }
+
   // Get radgroupreply by ID
   async getRadgroupreplyById(id) {
     return this.#apiRequest('get', `/api/radgroupreply/${id}`);
@@ -643,7 +656,35 @@ class RadiusClient {
     }
   }
 
+  /**
+   * Update User Expiration in Radius
+   */
+  async updateExpiration(username, date) {
+    try {
+      const radcheck = await this.getRadcheckByUsername(username);
+      const expirationEntry = radcheck.find(e => e.attribute === 'Expiration');
+      
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const formattedDate = `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+
+      if (expirationEntry) {
+        return await this.updateRadcheck(expirationEntry.id, { value: formattedDate });
+      } else {
+        return await this.createRadcheck({
+          username,
+          attribute: 'Expiration',
+          op: ':=',
+          value: formattedDate
+        });
+      }
+    } catch (error) {
+      console.error(`Error updating expiration for user ${username}:`, error.message);
+      throw error;
+    }
+  }
+
   // Get user details
+
   async getUser(username) {
     try {
       const [

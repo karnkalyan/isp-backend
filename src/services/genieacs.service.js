@@ -36,8 +36,8 @@ class GenieACSClient {
     /**
      * Create a GenieACS client instance for an ISP
      */
-    static async create(req, prisma) {
-        const ispId = req.ispId;
+    static async create(reqOrIspId, prisma) {
+        const ispId = typeof reqOrIspId === 'object' ? reqOrIspId.ispId : reqOrIspId;
         try {
             const ispService = await prisma.iSPService.findFirst({
                 where: {
@@ -47,9 +47,6 @@ class GenieACSClient {
                     isActive: true
                 },
                 include: {
-                    credentials: {
-                        where: { isActive: true, isDeleted: false }
-                    },
                     service: true
                 }
             });
@@ -60,7 +57,10 @@ class GenieACSClient {
 
             // Extract credentials
             const credentials = {};
-            ispService.credentials.forEach(cred => {
+            const serviceCredentials = await prisma.serviceCredential.findMany({
+                where: { ispServiceId: ispService.id, isActive: true, isDeleted: false }
+            });
+            serviceCredentials.forEach(cred => {
                 credentials[cred.key] = cred.value;
             });
 
@@ -165,11 +165,6 @@ class GenieACSClient {
                     ispId: ispId,
                     service: { code: SERVICE_CODES.GENIEACS },
                     isDeleted: false
-                },
-                include: {
-                    credentials: {
-                        where: { isActive: true, isDeleted: false }
-                    }
                 }
             });
 
@@ -183,8 +178,11 @@ class GenieACSClient {
 
             // Check credentials
             const baseUrl = ispService.baseUrl;
-            const usernameCred = ispService.credentials.find(c => c.key === 'username');
-            const passwordCred = ispService.credentials.find(c => c.key === 'password');
+            const credentials = await prisma.serviceCredential.findMany({
+                where: { ispServiceId: ispService.id, isActive: true, isDeleted: false }
+            });
+            const usernameCred = credentials.find(c => c.key === 'username');
+            const passwordCred = credentials.find(c => c.key === 'password');
 
             const hasBaseUrl = !!baseUrl;
             const hasUsername = !!usernameCred?.value;

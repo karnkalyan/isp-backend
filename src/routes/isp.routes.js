@@ -71,7 +71,6 @@ module.exports = (prisma) => {
 
     router.get(
     '/active',
-    checkPermission('isp_read'), // Example permission check
     activeIsp
   );
 

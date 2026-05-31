@@ -1,4 +1,5 @@
 // src/controllers/departmentController.js
+const { getBranchFilter } = require('../utils/branchHelper');
 
 // Create a new department
 async function createDepartment(req, res, next) {
@@ -63,12 +64,20 @@ async function listDepartments(req, res, next) {
         const limitNumber = parseInt(limit);
         const skip = (pageNumber - 1) * limitNumber;
 
+        const branchFilter = await getBranchFilter(req);
         const whereClause = {
             ispId: req.ispId,
             isDeleted: false
         };
 
-        // Filter by branch if provided
+        if (branchFilter) {
+            whereClause.OR = [
+                { branchId: null },
+                branchFilter
+            ];
+        }
+
+        // Filter by branch if provided (override branchFilter if explicitly requested and allowed)
         if (branchId && !isNaN(Number(branchId))) {
             whereClause.branchId = Number(branchId);
         }
@@ -218,6 +227,26 @@ async function updateDepartment(req, res, next) {
             return res.status(404).json({ error: 'Department not found' });
         }
 
+        // --- GLOBAL DATA PROTECTION ---
+        const roleName = req.user.role?.toLowerCase() || '';
+        const isGlobalUser = roleName === 'administrator' || roleName === 'global manager' || roleName.startsWith('global ');
+        
+        // If it's a global department (branchId is null) and the user is NOT a global user, block update
+        if (existingDepartment.branchId === null && !isGlobalUser) {
+            return res.status(403).json({ error: 'Access denied: Cannot modify global department' });
+        }
+
+        // If user is restricted to a branch, ensure they only modify departments within their hierarchy
+        if (!isGlobalUser) {
+            const branchFilter = await getBranchFilter(req);
+            if (branchFilter && existingDepartment.branchId !== null) {
+                const allowedBranchIds = branchFilter.branchId.in;
+                if (!allowedBranchIds.includes(existingDepartment.branchId)) {
+                    return res.status(403).json({ error: 'Access denied: Department belongs to another branch hierarchy' });
+                }
+            }
+        }
+
         // Check if new name conflicts with other non-deleted departments
         if (req.body.name && req.body.name !== existingDepartment.name) {
             const nameExists = await req.prisma.Department.findFirst({
@@ -302,6 +331,24 @@ async function deleteDepartment(req, res, next) {
 
         if (!existingDepartment) {
             return res.status(404).json({ error: 'Department not found or already deleted' });
+        }
+
+        // --- GLOBAL DATA PROTECTION ---
+        const roleName = req.user.role?.toLowerCase() || '';
+        const isGlobalUser = roleName === 'administrator' || roleName === 'global manager' || roleName.startsWith('global ');
+
+        if (existingDepartment.branchId === null && !isGlobalUser) {
+            return res.status(403).json({ error: 'Access denied: Cannot delete global department' });
+        }
+
+        if (!isGlobalUser) {
+            const branchFilter = await getBranchFilter(req);
+            if (branchFilter && existingDepartment.branchId !== null) {
+                const allowedBranchIds = branchFilter.branchId.in;
+                if (!allowedBranchIds.includes(existingDepartment.branchId)) {
+                    return res.status(403).json({ error: 'Access denied: Department belongs to another branch hierarchy' });
+                }
+            }
         }
 
         // Check if department has active users (non-deleted)

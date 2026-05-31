@@ -415,8 +415,8 @@ async function getAllFollowUps(req, res, next) {
       }
     };
 
-    // ROLE-BASED FILTERING
-    if (userRole !== 'Administrator') {
+    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    if (!isAdmin) {
       // For non-admin users, show only their assigned follow-ups
       where.assignedUserId = userId;
     }
@@ -716,8 +716,8 @@ async function getFollowUpStats(req, res, next) {
       }
     };
 
-    // Role-based filtering
-    const whereAll = userRole === 'Administrator'
+    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    const whereAll = isAdmin
       ? whereBase
       : { ...whereBase, assignedUserId: userId };
 
@@ -834,8 +834,8 @@ async function getUpcomingFollowUps(req, res, next) {
       }
     };
 
-    // Role-based filtering
-    if (userRole !== 'Administrator') {
+    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    if (!isAdmin) {
       where.assignedUserId = userId;
     }
 

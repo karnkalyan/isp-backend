@@ -11,6 +11,7 @@ const {
   getVendors,
   getModelsByVendor,
   getOntsForOlt,
+  getActiveSessions,
   syncOntsFromOlt,           // Keep old one for backward compatibility
   syncOntsBasicFromOlt,      // New: Sync basic ONT info
   syncOntDetailsFromOlt,     // New: Sync specific ONT details
@@ -48,19 +49,20 @@ module.exports = (prisma) => {
   router.put('/:id/status', checkPermission('olt_update'), updateOltStatus);
 
   // OLT Management Routes
-  router.get('/', checkPermission('olt_read'), listOlts);
-  router.get('/stats', checkPermission('olt_read'), getOltStats);
-  router.get('/vendors', checkPermission('olt_read'), getVendors);
-  router.get('/vendors/:vendor/models', checkPermission('olt_read'), getModelsByVendor);
+  router.get('/', listOlts);
+  router.get('/stats', getOltStats);
+  router.get('/vendors', getVendors);
+  router.get('/vendors/:vendor/models', getModelsByVendor);
+  router.get('/active-sessions', getActiveSessions);
 
   router.post('/', checkPermission('olt_update'), createOlt);
-  router.get('/:id', checkPermission('olt_read'), getOltById);
+  router.get('/:id', getOltById);
   router.put('/:id', checkPermission('olt_update'), updateOlt);
   router.delete('/:id', checkPermission('olt_update'), deleteOlt);
 
   // OLT Status and Ports
   router.put('/:id/status', checkPermission('olt_update'), updateOltStatus);
-  router.get('/:id/ports', checkPermission('olt_read'), getOltPortsStatus);
+  router.get('/:id/ports', getOltPortsStatus);
 
   // OLT ONT Management
   router.get('/:id/onts', checkPermission('olt_read'), getOntsForOlt);
@@ -74,6 +76,7 @@ module.exports = (prisma) => {
   // OLT SSH/Connection Testing
   router.post('/:id/test-ssh', checkPermission('olt_read'), testSshConnection);
 
+  // OLT System Info and Sessions
   router.get('/:id/system-info', checkPermission('olt_read'), getOltSystemInfo);
   router.get('/:id/gpon-port/:port', checkPermission('olt_read'), getGponPortInfo);
   router.post('/:id/execute-batch', checkPermission('olt_update'), executeBatchCommands);

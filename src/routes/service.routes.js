@@ -19,9 +19,9 @@ module.exports = (prisma) => {
     router.get('/isp/status', checkPermission('services_read'), serviceController.getAllServiceStatuses.bind(serviceController));
     router.get('/isp/status/:serviceCode', checkPermission('services_read'), serviceController.getServiceStatus.bind(serviceController));
 
-    router.post('/isp/configure', checkPermission('services_create'), serviceController.configureServiceForISP.bind(serviceController));
-    router.post('/isp/:serviceCode/credentials', checkPermission('services_update'), serviceController.setServiceCredentials.bind(serviceController));
-    router.patch('/isp/:serviceCode/activation', checkPermission('services_update'), serviceController.toggleServiceActivation.bind(serviceController));
+    router.post('/isp/configure', checkPermission('services_manage'), serviceController.configureServiceForISP.bind(serviceController));
+    router.post('/isp/:serviceCode/credentials', checkPermission('services_manage'), serviceController.setServiceCredentials.bind(serviceController));
+    router.patch('/isp/:serviceCode/activation', checkPermission('services_manage'), serviceController.toggleServiceActivation.bind(serviceController));
     router.get('/isp/:serviceCode/test', checkPermission('services_read'), serviceController.testServiceConnection.bind(serviceController));
 
     // ==================== PROVISIONING & BULK OPERATIONS ====================
@@ -38,7 +38,7 @@ module.exports = (prisma) => {
     router.get('/nettv/countries', checkPermission('services_read'), serviceController.countriesProvince.bind(serviceController));
     router.get('/nettv/subscribers', checkPermission('services_read'), serviceController.getNetTVSubscribers.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));
-    router.post('/nettv/subscribers', checkPermission('services_create'), serviceController.createNetTVSubscriber.bind(serviceController));
+    router.post('/nettv/subscribers', checkPermission('services_manage'), serviceController.createNetTVSubscriber.bind(serviceController));
 
     // Mikrotik Operations
     router.get('/mikrotik/resources', checkPermission('services_read'), serviceController.getMikrotikResources.bind(serviceController));
@@ -52,16 +52,16 @@ module.exports = (prisma) => {
 
     // Tshul Operations
     router.get('/tshul/customers', checkPermission('services_read'), serviceController.getTshulCustomers.bind(serviceController));
-    router.post('/tshul/customers', checkPermission('services_create'), serviceController.createTshulCustomer.bind(serviceController));
+    router.post('/tshul/customers', checkPermission('services_manage'), serviceController.createTshulCustomer.bind(serviceController));
     router.get('/tshul/customers/:refrenceId', checkPermission('services_read'), serviceController.getTshulCustomersbyId.bind(serviceController));
 
     // Radius Operations
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));
-    router.get('/radius/act/:username', checkPermission('services_create'), serviceController.getRadiusAccountbyUser.bind(serviceController));
+    router.get('/radius/act/:username', checkPermission('services_manage'), serviceController.getRadiusAccountbyUser.bind(serviceController));
     router.get('/radius/users/:username', checkPermission('services_read'), serviceController.getRadiusUser.bind(serviceController));
-    router.post('/radius/users', checkPermission('services_create'), serviceController.createRadiusUser.bind(serviceController));
+    router.post('/radius/users', checkPermission('services_manage'), serviceController.createRadiusUser.bind(serviceController));
 
-    router.delete('/radius/users/:username', checkPermission('services_delete'), serviceController.deleteRadiusUser.bind(serviceController));
+    router.delete('/radius/users/:username', checkPermission('services_manage'), serviceController.deleteRadiusUser.bind(serviceController));
     router.get('/radius/stats', checkPermission('services_read'), serviceController.getRadiusStats.bind(serviceController));
     router.post('/radius/test-auth', checkPermission('services_test'), serviceController.testRadiusAuth.bind(serviceController));
 
@@ -121,6 +121,13 @@ module.exports = (prisma) => {
 
 
     router.post('/genieacs/devices/:serialNumber/update-wifi', checkPermission('services_manage'), serviceController.updateSpecificSSID.bind(serviceController));
+
+    // ==================== SMS OPERATIONS ====================
+    router.get('/aakashsms/credit', checkPermission('services_read'), serviceController.getSmsCredit.bind(serviceController));
+    router.post('/aakashsms/send-bulk', checkPermission('services_manage'), serviceController.sendBulkSms.bind(serviceController));
+
+    router.get('/sms/credit', checkPermission('services_read'), serviceController.getSmsCredit.bind(serviceController));
+    router.post('/sms/send-bulk', checkPermission('services_manage'), serviceController.sendBulkSms.bind(serviceController));
 
     // ==================== HEALTH CHECK ====================
     router.get('/health', (req, res) => {

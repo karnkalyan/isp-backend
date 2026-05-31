@@ -15,6 +15,7 @@ const {
 // Middlewares
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
+const checkAnyPermission = require('../middlewares/checkAnyPermission');
 
 // Multer setup
 const storage = multer.diskStorage({
@@ -39,8 +40,19 @@ const createUserValidation = [
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters long.'),
   body('roleId').isInt({ gt: 0 }).withMessage('Role ID must be a positive integer.'), // Assuming roleId is sent as an integer string
   body('ispId').optional().isInt({ gt: 0 }).withMessage('ISP ID must be a positive integer if provided.'),
-  body('status').optional().isIn(['active', 'pending', 'disabled']).withMessage('Invalid status.'),
-  body('department').optional().isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
+  body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
+  body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
+  body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
+  body('branchIds').optional({ values: 'falsy' }).custom((value) => {
+    const values = Array.isArray(value) ? value : [value];
+    return values.every((item) => {
+      if (typeof item === 'string' && item.trim().startsWith('[')) {
+        const parsed = JSON.parse(item);
+        return Array.isArray(parsed) && parsed.every((id) => Number.isInteger(Number(id)) && Number(id) > 0);
+      }
+      return Number.isInteger(Number(item)) && Number(item) > 0;
+    });
+  }).withMessage('Additional branch IDs must be positive integers.'),
 ];
 
 // Validation for UPDATING a user (password is OPTIONAL)
@@ -51,10 +63,20 @@ const updateUserValidation = [
   body('password').optional().isLength({ min: 8 }).withMessage('Password must be at least 8 characters long if provided.'),
   body('roleId').optional().isInt({ gt: 0 }).withMessage('Role ID must be a positive integer if provided.'),
   body('ispId').optional().isInt({ gt: 0 }).withMessage('ISP ID must be a positive integer if provided.'),
-  body('status').optional().isIn(['active', 'pending', 'disabled']).withMessage('Invalid status.'),
-  body('department').optional().isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
+  body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
+  body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
+  body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
+  body('branchIds').optional({ values: 'falsy' }).custom((value) => {
+    const values = Array.isArray(value) ? value : [value];
+    return values.every((item) => {
+      if (typeof item === 'string' && item.trim().startsWith('[')) {
+        const parsed = JSON.parse(item);
+        return Array.isArray(parsed) && parsed.every((id) => Number.isInteger(Number(id)) && Number(id) > 0);
+      }
+      return Number.isInteger(Number(item)) && Number(item) > 0;
+    });
+  }).withMessage('Additional branch IDs must be positive integers.'),
 ];
-
 
 // Generic handler for validation results
 const handleValidationErrors = (req, res, next) => {
@@ -83,10 +105,9 @@ module.exports = (prisma) => {
     createUser
   );
 
-  // Read All Users
+  // Read All Users - ALLOW all authenticated users
   router.get(
     '/',
-    checkPermission('users_read'),
     getAllUsers
   );
 
@@ -95,7 +116,7 @@ module.exports = (prisma) => {
     '/:id',
     param('id').isInt({ gt: 0 }).withMessage('User ID must be a positive integer.'),
     handleValidationErrors, // Apply validation handler for param
-    checkPermission('view_users'),
+    checkPermission('users_read'),
     getUserById
   );
 

@@ -23,7 +23,7 @@ module.exports = (prisma) => {
   // CRUD endpoints
   router.put('/:id',  checkPermission('membership_update'), updateMembership);
   router.post('/',  checkPermission('membership_create'),  createMembership);
-  router.get('/',     checkPermission('membership_read'), getAllMemberships);
+  router.get('/', getAllMemberships);
   router.get('/:id',  checkPermission('membership_read'), getMembershipById);
   router.delete('/:id',  checkPermission('membership_delete'), deleteMembership);
 

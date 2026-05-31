@@ -17,6 +17,8 @@ async function createLead(req, res, next) {
       notes,
       assignedUserId,
       interestedPackageId,
+      branchId,
+      subBranchId,
       address,
       street,
       district,
@@ -38,6 +40,8 @@ async function createLead(req, res, next) {
       source: source || 'other',
       status: status || 'new',
       ispId: req.ispId ? Number(req.ispId) : null,
+      branchId: branchId ? Number(branchId) : null,
+      subBranchId: subBranchId ? Number(subBranchId) : null,
       // Optional fields
       middleName: middleName || null,
       secondaryContactNumber: secondaryContactNumber || null,
@@ -327,6 +331,8 @@ async function updateLead(req, res, next) {
       notes,
       assignedUserId,
       interestedPackageId,
+      branchId,
+      subBranchId,
       address,
       street,
       district,
@@ -385,6 +391,8 @@ async function updateLead(req, res, next) {
     if (notes !== undefined) updateData.notes = notes;
     if (assignedUserId !== undefined) updateData.assignedUserId = assignedUserId ? Number(assignedUserId) : null;
     if (interestedPackageId !== undefined) updateData.interestedPackageId = interestedPackageId ? Number(interestedPackageId) : null;
+    if (branchId !== undefined) updateData.branchId = branchId ? Number(branchId) : null;
+    if (subBranchId !== undefined) updateData.subBranchId = subBranchId ? Number(subBranchId) : null;
     if (address !== undefined) updateData.address = address;
     if (street !== undefined) updateData.street = street;
     if (district !== undefined) updateData.district = district;
@@ -535,30 +543,17 @@ async function convertLeadToCustomer(req, res, next) {
 
     // Create customer from lead data
     const customerData = {
-      firstName: lead.firstName,
-      middleName: lead.middleName || null,
-      lastName: lead.lastName,
-      email: lead.email || `${lead.firstName.toLowerCase()}.${lead.lastName.toLowerCase()}@customer.com`,
-      phoneNumber: lead.phoneNumber || "",
-      idNumber: idNumber || null,
-      streetAddress: streetAddress || "",
-      city: city || "",
-      state: state || "",
-      zipCode: zipCode || "",
-      lat: lat ? parseFloat(lat) : 0.0,
-      lon: lon ? parseFloat(lon) : 0.0,
-      deviceName: deviceName || null,
-      deviceMac: deviceMac || null,
+      idNumber: idNumber || String(leadId),
       assignedPkg: packageId ? Number(packageId) : null,
-      rechargeable: rechargeable || false,
+      isRechargeable: rechargeable || false,
       ispId: req.ispId ? Number(req.ispId) : null,
       membershipId: membershipId ? Number(membershipId) : lead.memberShipId || null,
       installedById: lead.assignedUserId || null,
-      isReferenced: isReferenced || false,
-      referencedById: referencedById ? Number(referencedById) : null,
       existingISPId: existingISPId ? Number(existingISPId) : null,
       leadId: leadId,
-      subscribedPkgId: packageId ? Number(packageId) : null
+      subscribedPkgId: packageId ? Number(packageId) : null,
+      branchId: lead.branchId || null,
+      subBranchId: lead.subBranchId || null
     };
 
     // Start transaction
@@ -617,18 +612,18 @@ async function getConvertedLeads(req, res, next) {
 
     // Build where clause
     const where = {
-      ispId: req.ispId,
+      ispId: req.ispId || req.user.ispId,
       convertedToCustomer: true,
       isDeleted: false
     };
 
-    // Add search functionality
+    // Add search functionality (MySQL doesn't support mode: 'insensitive')
     if (search) {
       where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phoneNumber: { contains: search, mode: 'insensitive' } }
+        { firstName: { contains: search } },
+        { lastName: { contains: search } },
+        { email: { contains: search } },
+        { phoneNumber: { contains: search } }
       ];
     }
 
@@ -658,9 +653,9 @@ async function getConvertedLeads(req, res, next) {
         customers: {
           select: {
             id: true,
-            firstName: true,
-            lastName: true,
-            email: true
+            customerUniqueId: true,
+            idNumber: true,
+            status: true
           }
         }
       },
@@ -685,7 +680,8 @@ async function getConvertedLeads(req, res, next) {
   } catch (err) {
     console.error("Get Converted Leads Error:", err.message);
     return res.status(500).json({
-      error: "Failed to fetch converted leads"
+      error: "Failed to fetch converted leads",
+      details: err.message
     });
   }
 }

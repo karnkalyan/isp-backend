@@ -37,27 +37,27 @@ const DEFAULT_SERVICES = [
         category: "STREAMING",
         iconUrl: "/icons/nettv.svg"
     },
-    // {
-    //     name: "Vianet",
-    //     code: "VIANET",
-    //     description: "Network management",
-    //     category: "NETWORK",
-    //     iconUrl: "/icons/vianet.svg"
-    // },
-    // {
-    //     name: "Yeastar VoIP",
-    //     code: "YEASTAR",
-    //     description: "VoIP PBX system for telephony services",
-    //     category: "VOIP",
-    //     iconUrl: "/icons/yeastar.svg"
-    // },
-    // {
-    //     name: "MikroTik",
-    //     code: "MIKROTIK",
-    //     description: "Router management API",
-    //     category: "NETWORK",
-    //     iconUrl: "/icons/mikrotik.svg"
-    // },
+    {
+        name: "Yeastar VoIP",
+        code: "YEASTAR",
+        description: "VoIP PBX system for telephony services",
+        category: "VOIP",
+        iconUrl: "/icons/yeastar.svg"
+    },
+    {
+        name: "Asterisk VoIP",
+        code: "ASTERISK",
+        description: "Asterisk VoIP PBX system with AMI/ARI integration",
+        category: "VOIP",
+        iconUrl: "/icons/asterisk.svg"
+    },
+    {
+        name: "MikroTik",
+        code: "MIKROTIK",
+        description: "Router management API",
+        category: "NETWORK",
+        iconUrl: "/icons/mikrotik.svg"
+    },
     // {
     //     name: "Huawei OLT",
     //     code: "HUAWEI_OLT",
@@ -113,6 +113,20 @@ const DEFAULT_SERVICES = [
         description: "Auto Configuration Server for TR-069 devices",
         category: "ACS",
         iconUrl: "/icons/genieacs.svg"
+    },
+    {
+        name: "Aakash SMS",
+        code: "AAKASHSMS",
+        description: "Aakash SMS integration service",
+        category: "COMMUNICATION",
+        iconUrl: "/icons/sms.svg"
+    },
+    {
+        name: "Sparrow SMS",
+        code: "SPARROWSMS",
+        description: "Sparrow SMS integration service",
+        category: "COMMUNICATION",
+        iconUrl: "/icons/sms.svg"
     }
 ];
 

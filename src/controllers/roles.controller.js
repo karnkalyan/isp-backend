@@ -1,9 +1,12 @@
+const { logAudit } = require('../utils/auditLogger');
+
 async function getRoles(req, res, next) {
   try {
     const roles = await req.prisma.role.findMany({
       select: {
         id: true,
         name: true,
+        isActive: true,
         users: {
           where: {
             isDeleted: false,
@@ -23,6 +26,7 @@ async function getRoles(req, res, next) {
     const result = roles.map(role => ({
       id: role.id,
       name: role.name,
+      isActive: role.isActive,
       description: `${role.name} role with specific permissions`,
       totalUsers: role.users.length,
       isSystem: ['Administrator', 'Manager', 'Support Agent', 'Billing Clerk', 'Customer'].includes(role.name),
@@ -57,9 +61,12 @@ async function createRole(req, res, next) {
     // Create role
     const role = await req.prisma.role.create({
       data: {
-        name
+        name,
+        isActive: true
       }
     });
+
+    await logAudit(req.prisma, req.user.id, 'ROLE_CREATE', { id: role.id, name: role.name }, req);
 
     res.status(201).json({
       success: true,
@@ -67,6 +74,7 @@ async function createRole(req, res, next) {
       data: {
         id: role.id,
         name: role.name,
+        isActive: true,
         totalUsers: 0,
         isSystem: false
       }
@@ -79,7 +87,7 @@ async function createRole(req, res, next) {
 async function updateRole(req, res, next) {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, isActive } = req.body;
 
     // Check if role exists
     const existingRole = await req.prisma.role.findUnique({
@@ -106,7 +114,7 @@ async function updateRole(req, res, next) {
       where: { id: parseInt(id) },
       data: {
         name: name || existingRole.name,
-        description: description || existingRole.description
+        isActive: isActive !== undefined ? Boolean(isActive) : existingRole.isActive
       },
       include: {
         users: {
@@ -117,13 +125,16 @@ async function updateRole(req, res, next) {
       }
     });
 
+    await logAudit(req.prisma, req.user.id, 'ROLE_UPDATE', { id: updatedRole.id, name: updatedRole.name, isActive: updatedRole.isActive }, req);
+
     res.json({
       success: true,
       message: 'Role updated successfully',
       data: {
         id: updatedRole.id,
         name: updatedRole.name,
-        description: description || existingRole.description,
+        isActive: updatedRole.isActive,
+        description: `${updatedRole.name} role with specific permissions`,
         totalUsers: updatedRole.users.length
       }
     });
@@ -173,6 +184,8 @@ async function deleteRole(req, res, next) {
     await req.prisma.role.delete({
       where: { id: parseInt(id) }
     });
+
+    await logAudit(req.prisma, req.user.id, 'ROLE_DELETE', { id, name: role.name }, req);
 
     res.json({ 
       success: true,
@@ -327,6 +340,8 @@ async function updateRolePermissions(req, res, next) {
         }
       }
     });
+
+    await logAudit(req.prisma, req.user.id, 'ROLE_PERMISSIONS_UPDATE', { id, permissionIds }, req);
 
     const permissionIdsUpdated = updatedRole.permissions.map(p => p.id);
 

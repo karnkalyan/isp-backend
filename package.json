@@ -6,7 +6,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node prisma/seed.js",
-    "servicesSeed": "node prisma/servicesSeed.js"
+    "servicesSeed": "node prisma/servicesSeed.js",
+    "fullSeed": "node prisma/fullSeed.js"
   },
   "type": "commonjs",
   "dependencies": {
@@ -31,9 +32,12 @@
     "nanoid": "^5.1.5",
     "node-routeros": "^1.6.8",
     "node-ssh": "^13.2.1",
+    "nodemailer": "^8.0.9",
+    "pdfkit": "^0.18.0",
     "telnet-client": "^2.2.9",
     "uuid": "^11.1.0",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",

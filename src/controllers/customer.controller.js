@@ -1,4 +1,6 @@
 // src/controllers/customerController.js
+const { getBranchFilter } = require('../utils/branchHelper');
+const { logAudit } = require('../utils/auditLogger');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -315,6 +317,8 @@ async function createCustomer(req, res, next) {
       leadId,
       membershipId,
       branchId,
+      subBranchId,
+      customerTypeId,
       installedById,
       existingISPId,
       assignedPkg,
@@ -358,6 +362,38 @@ async function createCustomer(req, res, next) {
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (lead.convertedToCustomer) return res.status(409).json({ success: false, error: 'Lead already converted' });
 
+    // Validate duplicate Mobile and Email based on CustomerType rules
+    const targetTypeId = customerTypeId ? Number(customerTypeId) : null;
+    if (targetTypeId) {
+      const cType = await prisma.customerType.findUnique({
+        where: { id: targetTypeId }
+      });
+      if (cType) {
+        if (cType.allowDuplicateMobile === false && lead.phoneNumber) {
+          const dupMobile = await prisma.customer.findFirst({
+            where: {
+              isDeleted: false,
+              lead: { phoneNumber: lead.phoneNumber }
+            }
+          });
+          if (dupMobile) {
+            return res.status(400).json({ success: false, error: 'Mobile number already exists for another customer. Duplication is disabled for this customer type.' });
+          }
+        }
+        if (cType.allowDuplicateEmail === false && lead.email) {
+          const dupEmail = await prisma.customer.findFirst({
+            where: {
+              isDeleted: false,
+              lead: { email: lead.email }
+            }
+          });
+          if (dupEmail) {
+            return res.status(400).json({ success: false, error: 'Email already exists for another customer. Duplication is disabled for this customer type.' });
+          }
+        }
+      }
+    }
+
     // Validate trial package
     const trialPackage = await prisma.packagePrice.findFirst({
       where: { id: Number(assignedPkg), isActive: true, isDeleted: false, ispId: req.ispId },
@@ -389,6 +425,8 @@ async function createCustomer(req, res, next) {
           idNumber: idNumber.trim(),
           ...(membershipId && { membership: { connect: { id: Number(membershipId) } } }),
           ...(branchId && { branch: { connect: { id: Number(branchId) } } }),
+          ...(subBranchId && { subBranch: { connect: { id: Number(subBranchId) } } }),
+          ...(targetTypeId && { customerType: { connect: { id: targetTypeId } } }),
           ...(req.ispId && { isp: { connect: { id: Number(req.ispId) } } }),
           ...(installedById && { installedBy: { connect: { id: Number(installedById) } } }),
           ...(existingISPId && { existingISP: { connect: { id: Number(existingISPId) } } }),
@@ -528,6 +566,8 @@ async function createCustomer(req, res, next) {
         where: { id: lead.id },
         data: { status: 'converted', convertedToCustomer: true, convertedAt: new Date() },
       });
+
+      await logAudit(tx, req.user.id, 'CUSTOMER_CREATE', { id: createdCustomer.id, customerUniqueId: customerUniqueId, customerTypeId: targetTypeId }, req);
     });
 
     // ---------- Documents ----------
@@ -812,21 +852,53 @@ async function listCustomers(req, res, next) {
       page = 1,
       limit = 20,
       sortBy = 'createdAt',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
+      oltId,
+      splitterId,
+      subBranchId,
+      branchId: queryBranchId,
+      area
     } = req.query;
 
-    const where = { isDeleted: false, ispId: req.ispId };
+    const branchFilter = await getBranchFilter(req);
+    const where = { 
+      isDeleted: false, 
+      ispId: req.ispId,
+      ...(branchFilter || {})
+    };
     if (status) where.status = status;
     if (onboardStatus) where.onboardStatus = onboardStatus;
 
-    // Search in lead fields
+    // Extra filters for SMS campaign targeting
+    // Only apply query-provided branchId if branchFilter didn't already set one (i.e. admin/global users)
+    if (queryBranchId && queryBranchId !== 'all' && !branchFilter) {
+      where.branchId = parseInt(queryBranchId);
+    }
+    if (subBranchId && subBranchId !== 'all') where.subBranchId = parseInt(subBranchId);
+    if (oltId && oltId !== 'all') {
+      where.serviceDetails = { some: { oltId: parseInt(oltId) } };
+    }
+    if (splitterId && splitterId !== 'all') {
+      where.serviceDetails = { some: { splitterId: parseInt(splitterId) } };
+    }
+    if (area) {
+      // Filter by city or district in lead
+      where.lead = {
+        OR: [
+          { city: { contains: area } },
+          { district: { contains: area } },
+          { street: { contains: area } }
+        ]
+      };
+    }
+
     if (search) {
       where.OR = [
-        { lead: { firstName: { contains: search, mode: 'insensitive' } } },
-        { lead: { lastName: { contains: search, mode: 'insensitive' } } },
-        { lead: { email: { contains: search, mode: 'insensitive' } } },
-        { lead: { phoneNumber: { contains: search, mode: 'insensitive' } } },
-        { customerUniqueId: { contains: search, mode: 'insensitive' } }
+        { lead: { firstName: { contains: search } } },
+        { lead: { lastName: { contains: search } } },
+        { lead: { email: { contains: search } } },
+        { lead: { phoneNumber: { contains: search } } },
+        { customerUniqueId: { contains: search } }
       ];
     }
 
@@ -852,7 +924,9 @@ async function listCustomers(req, res, next) {
           // NEW: include subscribed services with full service details
           subscribedApps: {
             include: { service: true }
-          }
+          },
+          customerType: true,
+          subBranch: { select: { id: true, name: true } }
         },
         orderBy: { [sortBy]: sortOrder },
         skip,
@@ -925,6 +999,8 @@ async function getCustomerById(req, res, next) {
         subscribedApps: {
           include: { service: true }
         },
+        customerType: true,
+        subBranch: { select: { id: true, name: true } },
         orders: {
           where: { isActive: true, isDeleted: false },
           include: { items: true, packagePrice: { include: { packagePlanDetails: true } } },
@@ -1080,15 +1156,44 @@ async function updateCustomer(req, res, next) {
       status, onboardStatus,
       membershipId, existingISPId,
 
-      // Device fields
-      deviceName, deviceMac,
-
-      // Service connection fields
-      connectionType, vlanId, vlanPriority,
-      oltId, splitterId, oltPort, splitterPort,
-
       ...rest
     } = req.body;
+
+    const targetTypeId = customerTypeId !== undefined ? (customerTypeId ? Number(customerTypeId) : null) : existing.customerTypeId;
+    const checkPhone = phoneNumber !== undefined ? phoneNumber : existing.lead?.phoneNumber;
+    const checkEmail = email !== undefined ? email : existing.lead?.email;
+
+    if (targetTypeId) {
+      const cType = await req.prisma.customerType.findUnique({
+        where: { id: targetTypeId }
+      });
+      if (cType) {
+        if (cType.allowDuplicateMobile === false && checkPhone) {
+          const dupMobile = await req.prisma.customer.findFirst({
+            where: {
+              id: { not: id },
+              isDeleted: false,
+              lead: { phoneNumber: checkPhone }
+            }
+          });
+          if (dupMobile) {
+            return res.status(400).json({ error: 'Mobile number already exists for another customer. Duplication is disabled for this customer type.' });
+          }
+        }
+        if (cType.allowDuplicateEmail === false && checkEmail) {
+          const dupEmail = await req.prisma.customer.findFirst({
+            where: {
+              id: { not: id },
+              isDeleted: false,
+              lead: { email: checkEmail }
+            }
+          });
+          if (dupEmail) {
+            return res.status(400).json({ error: 'Email already exists for another customer. Duplication is disabled for this customer type.' });
+          }
+        }
+      }
+    }
 
     // Build Customer update
     const customerUpdate = {};
@@ -1098,6 +1203,8 @@ async function updateCustomer(req, res, next) {
     if (onboardStatus !== undefined) customerUpdate.onboardStatus = onboardStatus;
     if (membershipId !== undefined) customerUpdate.membershipId = membershipId ? Number(membershipId) : null;
     if (existingISPId !== undefined) customerUpdate.existingISPId = existingISPId ? Number(existingISPId) : null;
+    if (customerTypeId !== undefined) customerUpdate.customerTypeId = customerTypeId ? Number(customerTypeId) : null;
+    if (subBranchId !== undefined) customerUpdate.subBranchId = subBranchId ? Number(subBranchId) : null;
 
     // Build Lead update
     const leadUpdate = {};
@@ -1175,6 +1282,9 @@ async function updateCustomer(req, res, next) {
       if (Object.keys(leadUpdate).length > 0) {
         await tx.lead.update({ where: { id: existing.leadId }, data: leadUpdate });
       }
+      
+      await logAudit(tx, req.user.id, 'CUSTOMER_UPDATE', { id, customerTypeId: targetTypeId }, req);
+      
       return tx.customer.findUnique({
         where: { id },
         include: {
@@ -1183,7 +1293,9 @@ async function updateCustomer(req, res, next) {
           subscribedPkg: { include: { packagePlanDetails: true } },
           devices: true,
           serviceDetails: true,
-          documents: { where: { isDeleted: false }, take: 1 }
+          documents: { where: { isDeleted: false }, take: 1 },
+          customerType: true,
+          subBranch: { select: { id: true, name: true } }
         }
       });
     });

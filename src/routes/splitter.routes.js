@@ -30,13 +30,13 @@ module.exports = (prisma) => {
   router.use(isAuthenticated(prisma));
 
   // Splitter Management Routes
-  router.get('/', checkPermission('splitter_read'), listSplitters);
-  router.get('/stats', checkPermission('splitter_read'), getSplitterStats);
-  router.get('/masters', checkPermission('splitter_read'), getMasterSplitters);
-  router.get('/olt/:oltId/available-ports', checkPermission('splitter_read'), getAvailableServicePorts);
+  router.get('/', listSplitters);
+  router.get('/stats', getSplitterStats);
+  router.get('/masters', getMasterSplitters);
+  router.get('/olt/:oltId/available-ports', getAvailableServicePorts);
 
   router.post('/', checkPermission('splitter_update'), createSplitter);
-  router.get('/:id', checkPermission('splitter_read'), getSplitterById);
+  router.get('/:id', getSplitterById);
   router.put('/:id', checkPermission('splitter_update'), updateSplitter);
   router.delete('/:id', checkPermission('splitter_update'), deleteSplitter);
 

@@ -32,6 +32,7 @@ module.exports = (prisma) => {
   router.get('/', checkPermission('departments_read'), listDepartments);
   router.get('/search', checkPermission('departments_read'), searchDepartments);
   router.get('/deleted', checkPermission('departments_read'), getDeletedDepartments);
+  router.get('/:id/stats', checkPermission('departments_read'), getDepartmentStats);
   router.get('/:id', checkPermission('departments_read'), getDepartmentById);
   router.put('/:id', checkPermission('departments_update'), updateDepartment);
   router.patch('/:id/toggle-status', checkPermission('departments_update'), toggleDepartmentStatus);
@@ -39,7 +40,6 @@ module.exports = (prisma) => {
   router.post('/:id/restore', checkPermission('departments_update'), restoreDepartment);
 
   // Additional endpoints
-  router.get('/:id/stats', checkPermission('departments_read'), getDepartmentStats);
   router.post('/:id/users', checkPermission('departments_update'), addUserToDepartment);
   router.delete('/:id/users', checkPermission('departments_update'), removeUserFromDepartment);
 

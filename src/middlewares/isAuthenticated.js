@@ -38,11 +38,19 @@ module.exports = (prisma) => {
         id: true,
         email: true,
         ispId: true,
+        branchId: true,
         isDeleted: true,
-        yeasterExt: true,
+        yeastarExt: true,
+        branch: {
+          select: { id: true, parentId: true }
+        },
+        userBranches: {
+          select: { branchId: true }
+        },
         role: {
           select: {
-            name: true,                // ✅ role.name guaranteed
+            name: true,
+            isActive: true,
             permissions: {
               select: { name: true }
             }
@@ -55,20 +63,62 @@ module.exports = (prisma) => {
       return res.status(401).json({ error: 'Unauthorized: User not found or deleted' });
     }
 
-    // 4) Attach normalized auth context
+    if (user.role && user.role.isActive === false) {
+      return res.status(403).json({ error: 'Unauthorized: Your role is currently deactivated' });
+    }
+
+    // 4) Branch Validation & Isolation
+    const headerBranchId = req.headers['x-selected-branch-id'] || req.headers['x-branch-id'];
+    let selectedBranchId = headerBranchId ? parseInt(headerBranchId) : user.branchId;
+
+    // Admin bypasses branch checks; others must have explicit access
+    const roleName = user.role?.name?.toLowerCase() || '';
+    const isGlobal = roleName === 'administrator' || roleName === 'global manager' || roleName.startsWith('global ');
+    // HQ users (branch with no parent) also see all data
+    const isHQ = user.branch && user.branch.parentId === null;
+    const isAllAccess = isGlobal || isHQ;
+    let hasAccess = isAllAccess || 
+                     user.branchId === selectedBranchId || 
+                     user.userBranches.some(ub => ub.branchId === selectedBranchId);
+
+    // Fast bottom-up parent check for sub-branches
+    if (selectedBranchId && !hasAccess) {
+      const assignedIds = new Set();
+      if (user.branchId) assignedIds.add(user.branchId);
+      user.userBranches.forEach(ub => assignedIds.add(ub.branchId));
+
+      let currentBranchId = selectedBranchId;
+      while (currentBranchId && !hasAccess) {
+        if (assignedIds.has(currentBranchId)) {
+          hasAccess = true;
+          break;
+        }
+        const b = await prisma.branch.findUnique({ where: { id: currentBranchId }, select: { parentId: true } });
+        currentBranchId = b ? b.parentId : null;
+      }
+    }
+
+    if (selectedBranchId && !hasAccess) {
+      console.error(`[Auth] Access Denied: User ${user.email} (Role: ${user.role?.name}, Primary: ${user.branchId}) tried to access branch ${selectedBranchId}. userBranches:`, user.userBranches);
+      return res.status(403).json({ error: 'Access denied: You do not have permission for this branch' });
+    }
+
+    // 5) Attach normalized auth context
     req.user = {
       id: user.id,
       email: user.email,
-      role: user.role?.name ?? null, // ✅ SAFE, EXPLICIT
+      role: user.role?.name ?? null,
       permissions: user.role?.permissions.map(p => p.name) ?? [],
       ispId: user.ispId,
-      extId: user.yeasterExt
+      branchId: user.branchId, // User's primary branch
+      selectedBranchId: selectedBranchId, // Current context branch
+      extId: user.yeastarExt
     };
 
-    // console.log(req.user.role);
-    // Convenience shortcuts
     req.ispId = user.ispId;
-    req.extId = user.yeasterExt;
+    req.selectedBranchId = selectedBranchId;
+    req.branchId = isAllAccess ? null : selectedBranchId; // Global/HQ roles see all, others are restricted
+    req.extId = user.yeastarExt;
 
     next();
   };

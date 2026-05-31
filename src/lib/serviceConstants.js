@@ -7,6 +7,7 @@ module.exports = {
         NETTV: 'NETTV',
         VIANET: 'VIANET',
         YEASTAR: 'YEASTAR',
+        ASTERISK: 'ASTERISK',
         MIKROTIK: 'MIKROTIK',
         HUAWEI_OLT: 'HUAWEI_OLT',
         ZTE_OLT: 'ZTE_OLT',
@@ -15,7 +16,9 @@ module.exports = {
         TICKETING: 'TICKETING',
         SMS_GATEWAY: 'SMS_GATEWAY',
         EMAIL_SERVICE: 'EMAIL_SERVICE',
-        GENIEACS: 'GENIEACS'
+        GENIEACS: 'GENIEACS',
+        AAKASHSMS: 'AAKASHSMS',
+        SPARROWSMS: 'SPARROWSMS'
     },
 
     SERVICE_CATEGORIES: {
@@ -74,6 +77,17 @@ module.exports = {
             { credentialType: 'username_password', key: 'password', label: 'Password', isEncrypted: true, required: true },
             { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
         ],
+        ASTERISK: [
+            { credentialType: 'username_password', key: 'ami_host', label: 'AMI Host/IP', required: true },
+            { credentialType: 'username_password', key: 'ami_port', label: 'AMI Port', required: false, description: 'Default: 5038' },
+            { credentialType: 'username_password', key: 'ami_username', label: 'AMI Username', required: true },
+            { credentialType: 'username_password', key: 'ami_password', label: 'AMI Password', isEncrypted: true, required: true },
+            { credentialType: 'username_password', key: 'ari_host', label: 'ARI Host/IP', required: true },
+            { credentialType: 'username_password', key: 'ari_port', label: 'ARI Port', required: false, description: 'Default: 8088' },
+            { credentialType: 'username_password', key: 'ari_username', label: 'ARI Username', required: true },
+            { credentialType: 'username_password', key: 'ari_password', label: 'ARI Password', isEncrypted: true, required: true },
+            { credentialType: 'username_password', key: 'ari_app_name', label: 'ARI App Name', required: false, description: 'Default: kisan' }
+        ],
         MIKROTIK: [
             { credentialType: 'username_password', key: 'username', label: 'Username', required: true },
             { credentialType: 'username_password', key: 'password', label: 'Password', isEncrypted: true, required: true },
@@ -111,6 +125,14 @@ module.exports = {
             { credentialType: 'basic_auth', key: 'username', label: 'Username', required: true },
             { credentialType: 'basic_auth', key: 'password', label: 'Password', isEncrypted: true, required: true },
             { credentialType: 'api_key', key: 'base_url', label: 'ACS Server URL', required: true }
+        ],
+        AAKASHSMS: [
+            { credentialType: 'api_key', key: 'auth_token', label: 'Auth Token', isEncrypted: true, required: true },
+            { credentialType: 'api_key', key: 'sender_id', label: 'Sender ID (Optional)', required: false }
+        ],
+        SPARROWSMS: [
+            { credentialType: 'api_key', key: 'auth_token', label: 'Auth Token', isEncrypted: true, required: true },
+            { credentialType: 'api_key', key: 'sender_id', label: 'Sender ID / Identity', required: true }
         ]
     },
 
@@ -130,6 +152,11 @@ module.exports = {
             defaultApiVersion: 'v2.0.0',
             requiresBaseUrl: true,
             testEndpoint: '/api/v2.0.0/login'
+        },
+        ASTERISK: {
+            defaultApiVersion: 'v1',
+            requiresBaseUrl: false,
+            testEndpoint: '/asterisk/test'
         },
         NETTV: {
             defaultApiVersion: 'v1',
@@ -155,6 +182,16 @@ module.exports = {
             defaultApiVersion: 'v1',
             requiresBaseUrl: true,
             testEndpoint: '/devices?limit=1'
+        },
+        AAKASHSMS: {
+            defaultApiVersion: 'v4',
+            requiresBaseUrl: false,
+            testEndpoint: '/credit'
+        },
+        SPARROWSMS: {
+            defaultApiVersion: 'v2',
+            requiresBaseUrl: false,
+            testEndpoint: '/credit'
         }
     },
 
@@ -164,6 +201,7 @@ module.exports = {
         RADIUS: ['list_users', 'create_user', 'update_user', 'delete_user', 'check_authentication'],
         NETTV: ['list_subscribers', 'get_subscriber', 'create_subscriber', 'add_stb', 'assign_package'],
         YEASTAR: ['list_extensions', 'get_active_calls', 'make_call', 'hangup_call', 'get_call_logs'],
+        ASTERISK: ['list_extensions', 'get_active_calls', 'make_call', 'hangup_call', 'get_call_logs'],
         MIKROTIK: ['get_resources', 'get_interfaces', 'get_dhcp_leases', 'create_user', 'get_firewall_rules'],
         ESEWA: ['initiate_payment', 'verify_payment', 'get_transaction_status'],
         KHALTI: ['initiate_payment', 'verify_payment', 'lookup_transaction'],
@@ -182,6 +220,8 @@ module.exports = {
             'trigger_firmware_upgrade',
             'get_device_tasks',
             'provision_pppoe_wifi'
-        ]
+        ],
+        AAKASHSMS: ['send_sms', 'send_bulk_sms', 'check_credit', 'get_report'],
+        SPARROWSMS: ['send_sms', 'send_bulk_sms', 'check_credit']
     }
 };

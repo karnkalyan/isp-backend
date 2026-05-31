@@ -8,7 +8,8 @@ const {
   getPackagePriceById,
   updatePackagePrice,
   deletePackagePrice,
-  resyncPackagePrice
+  resyncPackagePrice,
+  createBulkPackagePrices
 } = require('../controllers/packagePrice.controller');
 
 module.exports = (prisma) => {
@@ -20,16 +21,20 @@ module.exports = (prisma) => {
   // Require authentication for all package-price endpoints
   router.use(isAuthenticated(prisma));
 
+  router.post(
+    '/bulk',
+    checkPermission('package_plans_create'),
+    createBulkPackagePrices
+  );
+
   // CRUD endpoints with permission checks
   router.post(
     '/',
-    checkPermission('package_price_create'),
+    checkPermission('package_plans_create'),
     createPackagePrice
   );
-
   router.get(
     '/',
-    checkPermission('package_price_read'),
     listPackagePrices
   );
 
@@ -37,7 +42,7 @@ module.exports = (prisma) => {
 
   router.get(
     '/:id',
-    checkPermission('package_price_read'),
+    checkPermission('package_plans_read'),
     getPackagePriceById
   );
 
@@ -45,19 +50,19 @@ module.exports = (prisma) => {
 
   router.put(
     '/:id',
-    checkPermission('package_price_update'),
+    checkPermission('package_plans_update'),
     updatePackagePrice
   );
 
   router.delete(
     '/:id',
-    checkPermission('package_price_delete'),
+    checkPermission('package_plans_delete'),
     deletePackagePrice
   );
 
   router.post(
     '/resync',
-    checkPermission('package_price_update'),
+    checkPermission('package_plans_update'),
     resyncPackagePrice
   );
 
