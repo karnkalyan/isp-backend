@@ -5,6 +5,7 @@ const fs = require('fs');
 const {
   createIsp,
   activeIsp,
+  updateActiveIspBranding,
   getAllIsps,
   getIspById,
   updateIsp,
@@ -37,8 +38,19 @@ const storage = multer.diskStorage({
   }
 });
 
+const imageFileFilter = (req, file, cb) => {
+  if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+    return cb(new Error('Only image files are allowed'));
+  }
+  cb(null, true);
+};
+
 // Create multer instance with storage config
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
+});
 
 
 module.exports = (prisma) => {
@@ -69,9 +81,21 @@ module.exports = (prisma) => {
   );
 
 
-    router.get(
+  router.get(
     '/active',
     activeIsp
+  );
+
+  router.put(
+    '/active/branding',
+    checkPermission('settings_update'),
+    upload.fields([
+      { name: 'expandedLightLogo', maxCount: 1 },
+      { name: 'expandedDarkLogo', maxCount: 1 },
+      { name: 'collapsedLightLogo', maxCount: 1 },
+      { name: 'collapsedDarkLogo', maxCount: 1 },
+    ]),
+    updateActiveIspBranding
   );
 
   router.get(

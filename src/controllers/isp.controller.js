@@ -1,6 +1,47 @@
 const fs = require('fs');
 const path = require('path');
 
+const SIDEBAR_BRANDING_KEYS = [
+  'sidebarLogoExpandedLightUrl',
+  'sidebarLogoExpandedDarkUrl',
+  'sidebarLogoCollapsedLightUrl',
+  'sidebarLogoCollapsedDarkUrl',
+];
+
+function getScopedBrandingKey(ispId, key) {
+  return `isp:${ispId}:${key}`;
+}
+
+function mapUploadedBrandingFiles(files = {}) {
+  const data = {};
+  const fileMap = {
+    expandedLightLogo: 'sidebarLogoExpandedLightUrl',
+    expandedDarkLogo: 'sidebarLogoExpandedDarkUrl',
+    collapsedLightLogo: 'sidebarLogoCollapsedLightUrl',
+    collapsedDarkLogo: 'sidebarLogoCollapsedDarkUrl',
+  };
+
+  Object.entries(fileMap).forEach(([fieldName, settingKey]) => {
+    const file = Array.isArray(files[fieldName]) ? files[fieldName][0] : null;
+    if (file) data[settingKey] = `/uploads/${file.filename}`;
+  });
+
+  return data;
+}
+
+async function getSidebarBranding(prisma, ispId) {
+  const scopedKeys = SIDEBAR_BRANDING_KEYS.map((key) => getScopedBrandingKey(ispId, key));
+  const settings = await prisma.iSPSettings.findMany({
+    where: { ispId, key: { in: scopedKeys } },
+  });
+
+  return settings.reduce((acc, setting) => {
+    const unscopedKey = SIDEBAR_BRANDING_KEYS.find((key) => setting.key === getScopedBrandingKey(ispId, key));
+    if (unscopedKey) acc[unscopedKey] = setting.value;
+    return acc;
+  }, {});
+}
+
 // --- Create ISP ---
 async function createIsp(req, res, next) {
   try {
@@ -176,10 +217,70 @@ async function activeIsp(req, res, next) {
       });
     }
 
-    res.json({ success: true, data: isp });
+    const sidebarBranding = await getSidebarBranding(req.prisma, activeIspId);
+
+    res.json({ success: true, data: { ...isp, sidebarBranding } });
   } catch (err) {
     console.error('Get active ISP error:', err);
     res.status(500).json({ success: false, error: 'Failed to fetch active ISP' });
+  }
+}
+
+async function updateActiveIspBranding(req, res, next) {
+  try {
+    const ispId = req.ispId;
+    if (!ispId) {
+      cleanUpFiles(req.files);
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication error: ISP ID not found.'
+      });
+    }
+
+    const uploadedBranding = mapUploadedBrandingFiles(req.files);
+    const existingSettings = await getSidebarBranding(req.prisma, ispId);
+    const now = new Date();
+
+    const operations = Object.entries(uploadedBranding).map(([key, value]) =>
+      req.prisma.iSPSettings.upsert({
+        where: { key: getScopedBrandingKey(ispId, key) },
+        update: {
+          value,
+          description: 'Sidebar branding logo',
+          updatedAt: now,
+        },
+        create: {
+          ispId,
+          key: getScopedBrandingKey(ispId, key),
+          value,
+          description: 'Sidebar branding logo',
+          updatedAt: now,
+        },
+      })
+    );
+
+    if (operations.length > 0) {
+      await req.prisma.$transaction(operations);
+      Object.entries(uploadedBranding).forEach(([key, value]) => {
+        if (existingSettings[key] && existingSettings[key] !== value) {
+          deleteOldFile(existingSettings[key]);
+        }
+      });
+    }
+
+    const sidebarBranding = await getSidebarBranding(req.prisma, ispId);
+    res.json({
+      success: true,
+      message: 'Sidebar branding updated successfully',
+      data: sidebarBranding,
+    });
+  } catch (err) {
+    cleanUpFiles(req.files);
+    console.error('Update ISP branding error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update ISP branding',
+    });
   }
 }
 
@@ -346,6 +447,11 @@ function cleanUpFile(file) {
   }
 }
 
+function cleanUpFiles(files) {
+  if (!files) return;
+  Object.values(files).flat().forEach(cleanUpFile);
+}
+
 function deleteOldFile(fileUrl) {
   if (fileUrl) {
     const filePath = path.join(__dirname, '../../', fileUrl);
@@ -360,6 +466,7 @@ function deleteOldFile(fileUrl) {
 module.exports = {
   createIsp,
   activeIsp,
+  updateActiveIspBranding,
   getAllIsps,
   getIspById,
   updateIsp,
