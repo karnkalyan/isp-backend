@@ -13,6 +13,7 @@ require('dotenv').config();
 
 
 const app = express();
+app.set('trust proxy', true);
 
 const usersRouter = require('./routes/users');
 const authRouter = require('./routes/auth.routes');
@@ -66,19 +67,38 @@ const allowedOrigins = [
     'http://localhost:4001',
 ];
 
-app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.kisan.net.np') || origin.endsWith('.namaste.net.np') || origin.endsWith('.arrownet.com.np')) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+const allowedOriginSuffixes = [
+    '.kisan.net.np',
+    '.kisannet.com',
+    '.namaste.net.np',
+    '.arrownet.com.np',
+];
+
+app.use(cors((req, callback) => {
+    const origin = req.get('origin');
+    const host = req.get('host')?.split(':')[0];
+
+    let isAllowed = !origin;
+    if (origin) {
+        try {
+            const originUrl = new URL(origin);
+            const originHost = originUrl.hostname;
+            isAllowed =
+                originHost === host ||
+                allowedOrigins.includes(origin) ||
+                allowedOriginSuffixes.some((suffix) => originHost === suffix.slice(1) || originHost.endsWith(suffix));
+        } catch (error) {
+            isAllowed = false;
         }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-selected-branch-id'],
-    exposedHeaders: ['Content-Range', 'Content-Length', 'Content-Disposition']
+    }
+
+    callback(null, {
+        origin: isAllowed,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        credentials: true,
+        allowedHeaders: ['Content-Type', 'Authorization', 'x-selected-branch-id'],
+        exposedHeaders: ['Content-Range', 'Content-Length', 'Content-Disposition'],
+    });
 }));
 
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
