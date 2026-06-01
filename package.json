@@ -31,6 +31,7 @@
     "http": "^0.0.1-security",
     "huggingface": "^1.4.0",
     "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.1",
     "multer": "^1.4.5-lts.2",
     "nanoid": "^5.1.5",
     "node-routeros": "^1.6.8",
@@ -39,8 +40,7 @@
     "pdfkit": "^0.18.0",
     "telnet-client": "^2.2.9",
     "uuid": "^11.1.0",
-    "ws": "^8.19.0",
-    "xlsx": "^0.18.5"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",

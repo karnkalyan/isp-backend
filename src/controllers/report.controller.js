@@ -1,4 +1,4 @@
-const XLSX = require('xlsx');
+const JSZip = require('jszip');
 const PDFDocument = require('pdfkit');
 
 // Helper to convert JSON data to CSV string
@@ -19,24 +19,74 @@ function convertToCSV(data, headers) {
     return [headerRow, ...rows].join('\r\n');
 }
 
-// Helper to send Excel response
-function sendExcelResponse(res, filename, data, headers) {
-    const headerKeys = Object.keys(headers);
-    
-    // Map data to use header labels as columns
-    const mappedData = data.map(item => {
-        const obj = {};
-        headerKeys.forEach(k => {
-            obj[headers[k]] = item[k];
-        });
-        return obj;
-    });
+function escapeXml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(mappedData);
-    XLSX.utils.book_append_sheet(wb, ws, 'Report');
-    
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+function getExcelColumnName(index) {
+    let name = '';
+    let current = index + 1;
+
+    while (current > 0) {
+        const remainder = (current - 1) % 26;
+        name = String.fromCharCode(65 + remainder) + name;
+        current = Math.floor((current - 1) / 26);
+    }
+
+    return name;
+}
+
+async function buildXlsxBuffer(rows) {
+    const zip = new JSZip();
+    const worksheetRows = rows.map((row, rowIndex) => {
+        const cells = row.map((value, colIndex) => {
+            const cellRef = `${getExcelColumnName(colIndex)}${rowIndex + 1}`;
+            return `<c r="${cellRef}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+        }).join('');
+
+        return `<row r="${rowIndex + 1}">${cells}</row>`;
+    }).join('');
+
+    zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`);
+    zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`);
+    zip.folder('xl').file('workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`);
+    zip.folder('xl').folder('_rels').file('workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`);
+    zip.folder('xl').folder('worksheets').file('sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>${worksheetRows}</sheetData>
+</worksheet>`);
+
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+// Helper to send Excel response
+async function sendExcelResponse(res, filename, data, headers) {
+    const headerKeys = Object.keys(headers);
+    const rows = [
+        headerKeys.map(key => headers[key]),
+        ...data.map(item => headerKeys.map(key => item[key]))
+    ];
+    const buffer = await buildXlsxBuffer(rows);
     
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
@@ -189,7 +239,7 @@ async function getTasksReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="tasks_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'tasks_report', reportData, headers);
+            return await sendExcelResponse(res, 'tasks_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'Tasks Enhancement Report', reportData, headers);
         }
@@ -265,7 +315,7 @@ async function getTicketsReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="tickets_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'tickets_report', reportData, headers);
+            return await sendExcelResponse(res, 'tickets_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'Tickets Report', reportData, headers);
         }
@@ -318,7 +368,7 @@ async function getInventoryReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="inventory_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'inventory_report', reportData, headers);
+            return await sendExcelResponse(res, 'inventory_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'Bulk Stock Inventory Report', reportData, headers);
         }
@@ -384,7 +434,7 @@ async function getDrumsReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="drums_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'drums_report', reportData, headers);
+            return await sendExcelResponse(res, 'drums_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'Fiber Cable Drums Report', reportData, headers);
         }
@@ -460,7 +510,7 @@ async function getUsersPerformanceReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="users_performance_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'users_performance_report', reportData, headers);
+            return await sendExcelResponse(res, 'users_performance_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'User Productivity Performance Report', reportData, headers);
         }
@@ -514,7 +564,7 @@ async function getBranchesReport(req, res, next) {
             res.setHeader('Content-Disposition', 'attachment; filename="branches_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return sendExcelResponse(res, 'branches_report', reportData, headers);
+            return await sendExcelResponse(res, 'branches_report', reportData, headers);
         } else if (format === 'pdf') {
             return sendPDFResponse(res, 'Branch Performance Statistics Report', reportData, headers);
         }
