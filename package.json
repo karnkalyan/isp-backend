@@ -9,7 +9,8 @@
     "servicesSeed": "node prisma/servicesSeed.js",
     "fullSeed": "node prisma/kisanNetFullSeed.js",
     "kisanNetFullSeed": "node prisma/kisanNetFullSeed.js",
-    "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js"
+    "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js",
+    "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js"
   },
   "type": "commonjs",
   "dependencies": {

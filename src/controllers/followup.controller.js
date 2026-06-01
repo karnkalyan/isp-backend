@@ -726,6 +726,13 @@ async function getFollowUpStats(req, res, next) {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    const myFollowUpsQuery = req.prisma.followUp.count({
+      where: {
+        ...whereBase,
+        assignedUserId: userId
+      }
+    });
+
     const [
       totalFollowUps,
       todaysFollowUps,
@@ -774,16 +781,11 @@ async function getFollowUpStats(req, res, next) {
         }
       }),
 
-      // My follow-ups (for admin users)
-      userRole === 'Administrator'
-        ? req.prisma.followUp.count({
-          where: {
-            ...whereBase,
-            assignedUserId: userId
-          }
-        })
-        : totalFollowUps // For non-admin, already counted in total
+      // My follow-ups
+      isAdmin ? myFollowUpsQuery : Promise.resolve(0)
     ]);
+
+    const visibleMyFollowUps = isAdmin ? myFollowUps : totalFollowUps;
 
     return res.status(200).json({
       success: true,
@@ -793,9 +795,9 @@ async function getFollowUpStats(req, res, next) {
         scheduled: scheduledFollowUps,
         completed: completedFollowUps,
         missed: missedFollowUps,
-        myFollowUps: userRole === 'Administrator' ? myFollowUps : totalFollowUps,
+        myFollowUps: visibleMyFollowUps,
         userRole,
-        canViewAll: userRole === 'Administrator'
+        canViewAll: isAdmin
       }
     });
   } catch (err) {

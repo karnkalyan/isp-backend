@@ -243,7 +243,7 @@ async function main() {
             name: 'Global Field Staff',
             permissions: {
                 connect: [
-                    'dashboard_view', 'customer_read', 'customer_create', 'lead_read', 'lead_create', 'tasks_read', 'tasks_update', 'tickets_read', 'billing_read_self'
+                    'dashboard_view', 'customer_read', 'customer_create', 'lead_read', 'lead_create', 'lead_update', 'tasks_read', 'tasks_update', 'tickets_read', 'billing_read_self'
                 ].map(name => ({ id: createdPermissions[name].id }))
             }
         }
@@ -273,7 +273,7 @@ async function main() {
             name: 'Branch Field Staff',
             permissions: {
                 connect: [
-                    'dashboard_view', 'customer_read', 'customer_create', 'lead_read', 'lead_create', 'tasks_read_self', 'tasks_update', 'tickets_read_self', 'billing_read_self'
+                    'dashboard_view', 'customer_read', 'customer_create', 'lead_read', 'lead_create', 'lead_update', 'tasks_read_self', 'tasks_update', 'tickets_read_self', 'billing_read_self'
                 ].map(name => ({ id: createdPermissions[name].id }))
             }
         }
