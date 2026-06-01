@@ -1,65 +1,98 @@
+version: "3.9"
+
 services:
   db:
     image: mysql:8.0
     container_name: kisan-mysql
     restart: unless-stopped
+
     command:
       - --default-authentication-plugin=mysql_native_password
+
     environment:
       MYSQL_ROOT_PASSWORD: "!sP!ssw0rd#!2323#$"
       MYSQL_DATABASE: "radius_manager"
+
     ports:
-      - "3307:3306"
+      - "3307:3306" # host access only, internal still 3306
+
     volumes:
       - mysql_data:/var/lib/mysql
+
     healthcheck:
-      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent" ]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD" ]
       interval: 10s
       timeout: 5s
       retries: 10
+
+    networks:
+      - app-network
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
+
     container_name: kisan-api
     restart: unless-stopped
+
     depends_on:
       db:
         condition: service_healthy
+
     ports:
       - "3200:3200"
+
     volumes:
       - ./uploads:/app/uploads
+
     environment:
       NODE_ENV: production
       PORT: 3200
-      DATABASE_URL: "mysql://root:ArrowNet%40DB123%21%40%23@db:3306/radius_manager"
+
+      # IMPORTANT: must match DB password exactly (URL encoded)
+      DATABASE_URL: "mysql://root:%21sP%21ssw0rd%23%212323%23%24@db:3306/radius_manager"
 
       ACCESS_SECRET: "IspMainAdminPanel123@!23"
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
+
       FREE_RADIUS_API_TOKEN: "Bearer YOUR_REAL_TOKEN_HERE"
       RADIUS_BASE_URL: "http://10.3.2.6:3005/api"
+
       CLIENT_ORIGIN: "https://cms.arrownet.com.np"
+
       TSHUL_BASE_URL: "https://kisan-net.tshul.app/api"
       TSHUL_DEMO_USERNAME: "demo@kisan.net.np"
       TSHUL_DEMO_PASSWORD: "demo@kisan.net.np@123"
+
       RADIUS_USERNAME: "radius"
       RADIUS_PASSWORD: "Kisan@radius"
+
       GOOGLE_CLIENT_ID: "497249566156-jed3q4fsm8ndrip7sdopqtk9gp5rh0eh.apps.googleusercontent.com"
+
       ESEWA_JWT_SECRET: "KisanNet@ESEWA2025AUTH"
       ESEWA_ACCESS_TOKEN_EXPIRY: 250
       ESEWA_REFRESH_TOKEN_EXPIRY: 550
+
       DEFAULT_ISP_ID: 1
+
       YEASTAR_PBX_IP: "10.3.2.50"
       YEASTAR_PBX_PORT: 8088
       YEASTAR_API_VERSION: "v1.1.0"
       YEASTAR_USERNAME: "kisan"
       YEASTAR_PASSWORD: "Kisan@123"
       YEASTAR_APP_PORT: 8260
+
       OLT_IP: "10.64.0.100"
       OLT_USER: "technicalhakim"
       OLT_PASS: "hakim@1135"
 
+    networks:
+      - app-network
+
 volumes:
   mysql_data:
+
+networks:
+  app-network:
+    driver: bridge
