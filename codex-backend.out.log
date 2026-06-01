@@ -1,0 +1,841 @@
+
+> node-prisma-api@1.0.0 dev
+> nodemon src/index.js
+
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: js,mjs,cjs,json[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+❌ [WS Auth] No access token for client ws_1779274779981_05qsupkdt
+❌ [WS Auth] No access token for client ws_1779274781478_bajollo4y
+❌ [WS Auth] No access token for client ws_1779274783478_edq10hi7v
+❌ [WS Auth] No access token for client ws_1779274785480_vy61ssnuh
+❌ [WS Auth] No access token for client ws_1779274787478_yb8u33dki
+❌ [WS Auth] No access token for client ws_1779274789480_awia7nrnc
+❌ [WS Auth] No access token for client ws_1779274791478_6ls02v1n3
+❌ [WS Auth] No access token for client ws_1779274793479_nav8r2yre
+❌ [WS Auth] No access token for client ws_1779274795478_iyjupra43
+❌ [WS Auth] No access token for client ws_1779274797479_mm92x2fin
+❌ [WS Auth] No access token for client ws_1779274799479_mgznvb6bl
+❌ [WS Auth] No access token for client ws_1779274801479_ha0j2k4f1
+❌ [WS Auth] No access token for client ws_1779274803478_6t4fo4qn9
+❌ [WS Auth] No access token for client ws_1779274805478_nkzjrvgq9
+❌ [WS Auth] No access token for client ws_1779274807479_fpqdjhvq0
+❌ [WS Auth] No access token for client ws_1779274809479_d6t2ctxne
+❌ [WS Auth] No access token for client ws_1779274811479_jywqspw46
+❌ [WS Auth] No access token for client ws_1779274813479_ivrcovko9
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+[32m[nodemon] restarting due to changes...[39m
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+[32m[nodemon] starting `node src/index.js`[39m
+[32m[nodemon] restarting due to changes...[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+❌ [WS Auth] No access token for client ws_1779274815251_2lu1p9pc7
+❌ [WS Auth] No access token for client ws_1779274816786_1a1f0d5o6
+❌ [WS Auth] No access token for client ws_1779274818273_1vsmps9t4
+❌ [WS Auth] No access token for client ws_1779274821590_j90fpe3yc
+❌ [WS Auth] No access token for client ws_1779274825478_raxuuizb7
+❌ [WS Auth] No access token for client ws_1779274829480_by0kznp1g
+❌ [WS Auth] No access token for client ws_1779274833478_ni45fh105
+❌ [WS Auth] No access token for client ws_1779274834265_1njgmjand
+❌ [WS Auth] No access token for client ws_1779274836881_wqlcu429k
+❌ [WS Auth] No access token for client ws_1779274837661_9yxil7p0a
+✅ [WS Auth] Client ws_1779274840199_91pk336wl authenticated as global.field@kisan.net.np (ISP: 107)
+👋 [WS Disconnect] Client ws_1779274840199_91pk336wl disconnected (User: Global Field HQ)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779274844686_7y4z3rzm7 authenticated as global.field@kisan.net.np (ISP: 107)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779274844686_7y4z3rzm7
+✅ [WS Subscribe] Client ws_1779274844686_7y4z3rzm7 subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779274844686_7y4z3rzm7
+ℹ️ [WS Subscribe] Client ws_1779274844686_7y4z3rzm7 already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+Permission check failed: User does not have 'services_read'. User permissions: [
+  'dashboard_view',
+  'customer_read',
+  'customer_create',
+  'tasks_read',
+  'tasks_update',
+  'tasks_read_self',
+  'tickets_read',
+  'tickets_create',
+  'lead_read',
+  'lead_create'
+]
+👋 [WS Disconnect] Client ws_1779274844686_7y4z3rzm7 disconnected (User: Global Field HQ)
+✅ [WS Auth] Client ws_1779274941231_n5bvo9s3t authenticated as global.field@kisan.net.np (ISP: 107)
+👋 [WS Disconnect] Client ws_1779274941231_n5bvo9s3t disconnected (User: Global Field HQ)
+✅ [WS Auth] Client ws_1779275009634_5zi8crgbh authenticated as global.field@kisan.net.np (ISP: 107)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779275009634_5zi8crgbh
+✅ [WS Subscribe] Client ws_1779275009634_5zi8crgbh subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779275009634_5zi8crgbh
+ℹ️ [WS Subscribe] Client ws_1779275009634_5zi8crgbh already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'lead_read' granted for user.
+Permission check failed: User does not have 'users_read'. User permissions: [
+  'dashboard_view',
+  'customer_read',
+  'customer_create',
+  'tasks_read',
+  'tasks_update',
+  'tasks_read_self',
+  'tickets_read',
+  'tickets_create',
+  'lead_read',
+  'lead_create'
+]
+Permission check failed: User does not have 'users_read'. User permissions: [
+  'dashboard_view',
+  'customer_read',
+  'customer_create',
+  'tasks_read',
+  'tasks_update',
+  'tasks_read_self',
+  'tickets_read',
+  'tickets_create',
+  'lead_read',
+  'lead_create'
+]
+👋 [WS Disconnect] Client ws_1779275009634_5zi8crgbh disconnected (User: Global Field HQ)
+✅ [WS Auth] Client ws_1779275078468_1r8ijbdeu authenticated as global.field@kisan.net.np (ISP: 107)
+👋 [WS Disconnect] Client ws_1779275078468_1r8ijbdeu disconnected (User: Global Field HQ)
+❌ [WS Auth] No access token for client ws_1779275133258_sp1h7isqx
+❌ [WS Auth] No access token for client ws_1779275136575_np9qbxlli
+❌ [WS Auth] No access token for client ws_1779275139890_7jwppxc6a
+✅ [WS Auth] Client ws_1779275143197_vst13fjki authenticated as admin@kisan.net.np (ISP: 103)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779275143197_vst13fjki
+✅ [WS Subscribe] Client ws_1779275143197_vst13fjki subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779275143197_vst13fjki
+ℹ️ [WS Subscribe] Client ws_1779275143197_vst13fjki already subscribed to: system.notification
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+👋 [WS Disconnect] Client ws_1779275143197_vst13fjki disconnected (User: Kisan Global Admin)
+Permission 'settings_read' granted for user.
+✅ [WS Auth] Client ws_1779275166209_95esmkk8t authenticated as admin@kisan.net.np (ISP: 103)
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'settings_read' granted for user.
+Permission 'settings_read' granted for user.
+Permission 'settings_read' granted for user.
+Permission 'settings_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+👋 [WS Disconnect] Client ws_1779275166209_95esmkk8t disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275519027_em2hbnh6m authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275519027_em2hbnh6m disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275528132_9ttgnwc40 authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275540799_frzloers7 authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275546310_unimfy7uz authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275546310_unimfy7uz disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275553421_ptj4mf5yi authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275562690_0j1bgr2ie authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275565239_w5fdhol70 authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275565239_w5fdhol70 disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275596993_k658j9ph4 authenticated as admin@kisan.net.np (ISP: 103)
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+👋 [WS Disconnect] Client ws_1779275596993_k658j9ph4 disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275602545_r3m0m2lq8 authenticated as admin@kisan.net.np (ISP: 103)
+Permission check failed: User does not have 'one_time_charges_read'. User permissions: [
+  'dashboard_view',       'users_read',           'users_create',
+  'users_update',         'users_delete',         'roles_read',
+  'roles_create',         'roles_update',         'roles_delete',
+  'departments_read',     'departments_create',   'departments_update',
+  'departments_delete',   'isp_read',             'isp_create',
+  'isp_update',           'isp_delete',           'branches_read',
+  'branches_create',      'branches_update',      'branches_delete',
+  'customer_read',        'customer_create',      'customer_update',
+  'customer_delete',      'billing_read',         'billing_create',
+  'billing_update',       'billing_delete',       'billing_read_self',
+  'tasks_read',           'tasks_create',         'tasks_update',
+  'tasks_delete',         'tasks_read_self',      'tickets_read',
+  'tickets_create',       'tickets_update',       'tickets_read_self',
+  'package_plans_read',   'package_plans_create', 'package_plans_update',
+  'package_plans_delete', 'inventory_read',       'inventory_manage',
+  'lead_read',            'lead_create',          'lead_update',
+  'lead_delete',          'existingisp_read',     'existingisp_create',
+  'existingisp_update',   'membership_read',      'membership_create',
+  'olt_read',             'olt_create',           'nas_read',
+  'nas_create',           'services_read',        'services_manage',
+  'settings_read',        'settings_update',      'reports_read',
+  'reports_generate',     'yeaster_read',         'yeaster_manage'
+]
+Permission check failed: User does not have 'one_time_charges_read'. User permissions: [
+  'dashboard_view',       'users_read',           'users_create',
+  'users_update',         'users_delete',         'roles_read',
+  'roles_create',         'roles_update',         'roles_delete',
+  'departments_read',     'departments_create',   'departments_update',
+  'departments_delete',   'isp_read',             'isp_create',
+  'isp_update',           'isp_delete',           'branches_read',
+  'branches_create',      'branches_update',      'branches_delete',
+  'customer_read',        'customer_create',      'customer_update',
+  'customer_delete',      'billing_read',         'billing_create',
+  'billing_update',       'billing_delete',       'billing_read_self',
+  'tasks_read',           'tasks_create',         'tasks_update',
+  'tasks_delete',         'tasks_read_self',      'tickets_read',
+  'tickets_create',       'tickets_update',       'tickets_read_self',
+  'package_plans_read',   'package_plans_create', 'package_plans_update',
+  'package_plans_delete', 'inventory_read',       'inventory_manage',
+  'lead_read',            'lead_create',          'lead_update',
+  'lead_delete',          'existingisp_read',     'existingisp_create',
+  'existingisp_update',   'membership_read',      'membership_create',
+  'olt_read',             'olt_create',           'nas_read',
+  'nas_create',           'services_read',        'services_manage',
+  'settings_read',        'settings_update',      'reports_read',
+  'reports_generate',     'yeaster_read',         'yeaster_manage'
+]
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275628481_3dy6592v0 authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275639482_p95532iji authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275648482_8hesuf2rd authenticated as admin@kisan.net.np (ISP: 103)
+Permission check failed: User does not have 'tickets_create'. User permissions: [
+  'dashboard_view',
+  'customer_read',
+  'customer_create',
+  'tasks_read',
+  'tasks_update',
+  'tasks_read_self',
+  'tickets_read',
+  'lead_read',
+  'lead_create'
+]
+Permission 'branches_read' granted for user.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275751481_l6p8ej6sy authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275795482_lpqsmonaa authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275799481_r0wythpgc authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275808481_ylyq3bzri authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275823485_0excst6s3 authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275845482_qwn9y8y1k authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275855482_60lgqawr9 authenticated as admin@kisan.net.np (ISP: 103)
+Permission check failed: User does not have 'tickets_create'. User permissions: [
+  'dashboard_view',
+  'customer_read',
+  'customer_create',
+  'billing_read_self',
+  'tasks_read',
+  'tasks_update',
+  'tasks_read_self',
+  'tickets_read',
+  'lead_read',
+  'lead_create'
+]
+Permission 'branches_read' granted for user.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275911482_ezytajtvu authenticated as admin@kisan.net.np (ISP: 103)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779275943437_9txav4b1g authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275943437_9txav4b1g disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275952433_dq7gr0ilk authenticated as admin@kisan.net.np (ISP: 103)
+Permission 'customer_read' granted for user.
+👋 [WS Disconnect] Client ws_1779275952433_dq7gr0ilk disconnected (User: Kisan Global Admin)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779275963023_fm5j6arqs authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275963023_fm5j6arqs disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779275974549_ox88us01l authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779275974549_ox88us01l disconnected (User: Kisan Global Admin)
+Permission 'settings_read' granted for user.
+✅ [WS Auth] Client ws_1779275996423_9zziisqk2 authenticated as admin@kisan.net.np (ISP: 103)
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+👋 [WS Disconnect] Client ws_1779275996423_9zziisqk2 disconnected (User: Kisan Global Admin)
+Permission 'settings_read' granted for user.
+✅ [WS Auth] Client ws_1779276013885_i7b26a12n authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779276013885_i7b26a12n disconnected (User: Kisan Global Admin)
+Permission 'settings_read' granted for user.
+✅ [WS Auth] Client ws_1779276017774_m5g04aevq authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779276017774_m5g04aevq disconnected (User: Kisan Global Admin)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779276022111_xxysyw1va authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779276022111_xxysyw1va disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779276028738_tqn14tyoc authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779276028738_tqn14tyoc disconnected (User: Kisan Global Admin)
+❌ [WS Auth] No access token for client ws_1779276043346_wf0qmcdb5
+❌ [WS Auth] No access token for client ws_1779276047479_3fh8j0fhh
+❌ [WS Auth] No access token for client ws_1779276051309_20ng6naql
+❌ [WS Auth] No access token for client ws_1779276054622_1h57pe6rh
+✅ [WS Auth] Client ws_1779276057930_s54yahl7n authenticated as pkr.support@kisan.net.np (ISP: 114)
+👋 [WS Disconnect] Client ws_1779276057930_s54yahl7n disconnected (User: Pokhara Support Agent)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779276060972_i7ycvomq4 authenticated as pkr.support@kisan.net.np (ISP: 114)
+👋 [WS Disconnect] Client ws_1779276060972_i7ycvomq4 disconnected (User: Pokhara Support Agent)
+✅ [WS Auth] Client ws_1779276069238_lwosta5h2 authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276111004_8olv4jbu6 authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276117302_5ywnnxx68 authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276124660_kpbubbzp9 authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276150254_bn26rf072 authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276155974_g2pd10v0w authenticated as pkr.support@kisan.net.np (ISP: 114)
+Permission 'package_plans_read' granted for user.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276217482_qgbzsktxr authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276227483_wwbf6vanc authenticated as pkr.support@kisan.net.np (ISP: 114)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276233481_81l60e1dl authenticated as pkr.support@kisan.net.np (ISP: 114)
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_create' granted for user.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node src/index.js`[39m
+[dotenv@17.0.1] injecting env (0) from .env – [tip] encrypt with dotenvx: https://dotenvx.com
+✅ YeastarController initialized with enhanced call APIs
+✅ [WS] Event listeners setup complete
+🌐 WebSocket Server running on path: /ws
+✅ WebSocket Server initialized (cookie-based auth)
+✅ Server listening on http://localhost:3200
+🌐 WebSocket available at ws://localhost:3200/ws
+CORS Client Origin: http://localhost:3000
+✅ [WS Auth] Client ws_1779276263485_aj523jrd1 authenticated as pkr.support@kisan.net.np (ISP: 114)
+Permission 'package_plans_create' granted for user.
+👋 [WS Disconnect] Client ws_1779276263485_aj523jrd1 disconnected (User: Pokhara Support Agent)
+❌ [WS Auth] No access token for client ws_1779276655627_f9ffryl49
+❌ [WS Auth] No access token for client ws_1779276656480_8cjy5g5ax
+❌ [WS Auth] No access token for client ws_1779276659480_mdlvjbg5q
+❌ [WS Auth] No access token for client ws_1779276660479_vl4omnfke
+❌ [WS Auth] No access token for client ws_1779276663480_ip0urvfll
+❌ [WS Auth] No access token for client ws_1779276664478_o5jesix40
+❌ [WS Auth] No access token for client ws_1779276667479_85881dgh9
+❌ [WS Auth] No access token for client ws_1779276668477_dqwot7y28
+❌ [WS Auth] No access token for client ws_1779276669392_dnm2uld72
+❌ [WS Auth] No access token for client ws_1779276670788_22nw5dhf7
+❌ [WS Auth] No access token for client ws_1779276671783_2j80fv7wo
+❌ [WS Auth] No access token for client ws_1779276672698_5erxjzqp3
+❌ [WS Auth] No access token for client ws_1779276674095_3s8fknpdn
+❌ [WS Auth] No access token for client ws_1779276675091_lkei0pbq6
+✅ [WS Auth] Client ws_1779276676003_qz6qgiqzi authenticated as admin@kisan.net.np (ISP: 103)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779276676003_qz6qgiqzi
+✅ [WS Subscribe] Client ws_1779276676003_qz6qgiqzi subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779276676003_qz6qgiqzi
+ℹ️ [WS Subscribe] Client ws_1779276676003_qz6qgiqzi already subscribed to: system.notification
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+👋 [WS Disconnect] Client ws_1779276676003_qz6qgiqzi disconnected (User: Kisan Global Admin)
+✅ [WS Auth] Client ws_1779276685063_pz1chsopl authenticated as admin@kisan.net.np (ISP: 103)
+👋 [WS Disconnect] Client ws_1779276685063_pz1chsopl disconnected (User: Kisan Global Admin)
+❌ [WS Auth] No access token for client ws_1779276706156_kb28xku5v
+❌ [WS Auth] No access token for client ws_1779276706479_lvgke5ceb
+❌ [WS Auth] No access token for client ws_1779276709305_hcc9wkveo
+❌ [WS Auth] No access token for client ws_1779276709784_603s8tpzl
+❌ [WS Auth] No access token for client ws_1779276712610_j3fm7iopv
+❌ [WS Auth] No access token for client ws_1779276713090_xyudxsb9c
+❌ [WS Auth] No access token for client ws_1779276715918_pfab1vcm5
+❌ [WS Auth] No access token for client ws_1779276716398_v14p9f95i
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+✅ [WS Auth] Client ws_1779276719224_tuqsqbwk7 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779276719224_tuqsqbwk7 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779276721216_h4zccjaa9 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+Permission 'package_plans_read' granted for user.
+👋 [WS Disconnect] Client ws_1779276721216_h4zccjaa9 disconnected (User: Pokhara Branch Admin)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779276872749_u479pe88r authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779276872749_u479pe88r disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+✅ [WS Auth] Client ws_1779276882795_ll6enyp6d authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779276882795_ll6enyp6d disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+✅ [WS Auth] Client ws_1779276913385_qw7zv6bj1 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779276913385_qw7zv6bj1 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779276950999_ki093x0mc authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'branches_read' granted for user.
+👋 [WS Disconnect] Client ws_1779276950999_ki093x0mc disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+✅ [WS Auth] Client ws_1779276992707_74r0bk7n8 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779276992707_74r0bk7n8 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277000285_kdgurry4z authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'customer_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+✅ [WS Subscribe] Client ws_1779277000285_kdgurry4z subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'users_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277000285_kdgurry4z
+ℹ️ [WS Subscribe] Client ws_1779277000285_kdgurry4z already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277000285_kdgurry4z disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277050015_ix0m39krj authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'users_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277050015_ix0m39krj disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277057301_94nz361js authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'branches_create' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277057301_94nz361js
+✅ [WS Subscribe] Client ws_1779277057301_94nz361js subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277057301_94nz361js
+ℹ️ [WS Subscribe] Client ws_1779277057301_94nz361js already subscribed to: system.notification
+Permission 'customer_read' granted for user.
+Permission 'customer_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277057301_94nz361js disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277247487_82wyu7itd authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277247487_82wyu7itd disconnected (User: Pokhara Branch Admin)
+Permission 'users_read' granted for user.
+✅ [WS Auth] Client ws_1779277260424_w2xvbznl1 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277260424_w2xvbznl1 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277279402_i2c9hsfwx authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277279402_i2c9hsfwx disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277300592_563626irf authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'inventory_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277300592_563626irf
+✅ [WS Subscribe] Client ws_1779277300592_563626irf subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277300592_563626irf
+ℹ️ [WS Subscribe] Client ws_1779277300592_563626irf already subscribed to: system.notification
+👋 [WS Disconnect] Client ws_1779277300592_563626irf disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277384239_4nxwe0qrc authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'inventory_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277384239_4nxwe0qrc disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277394854_gtcly3gts authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277394854_gtcly3gts disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277420576_e1ljw0zcx authenticated as pkr.admin@kisan.net.np (ISP: 113)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277420576_e1ljw0zcx
+✅ [WS Subscribe] Client ws_1779277420576_e1ljw0zcx subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277420576_e1ljw0zcx
+ℹ️ [WS Subscribe] Client ws_1779277420576_e1ljw0zcx already subscribed to: system.notification
+👋 [WS Disconnect] Client ws_1779277420576_e1ljw0zcx disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277448101_zmj5hu9ty authenticated as pkr.admin@kisan.net.np (ISP: 113)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277448101_zmj5hu9ty
+✅ [WS Subscribe] Client ws_1779277448101_zmj5hu9ty subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277448101_zmj5hu9ty
+ℹ️ [WS Subscribe] Client ws_1779277448101_zmj5hu9ty already subscribed to: system.notification
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277448101_zmj5hu9ty disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+✅ [WS Auth] Client ws_1779277518399_hqdrbel6g authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277518399_hqdrbel6g disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+✅ [WS Auth] Client ws_1779277531550_clebwytc2 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'branches_update' granted for user.
+👋 [WS Disconnect] Client ws_1779277531550_clebwytc2 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277552633_g7ixmf1hx authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277552633_g7ixmf1hx disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277567352_ojknujmj6 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277567352_ojknujmj6
+✅ [WS Subscribe] Client ws_1779277567352_ojknujmj6 subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277567352_ojknujmj6
+ℹ️ [WS Subscribe] Client ws_1779277567352_ojknujmj6 already subscribed to: system.notification
+Permission 'branches_read' granted for user.
+Permission 'branches_read' granted for user.
+Permission 'billing_read' granted for user.
+Permission 'billing_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277567352_ojknujmj6 disconnected (User: Pokhara Branch Admin)
+Permission 'branches_read' granted for user.
+✅ [WS Auth] Client ws_1779277585612_0wa6cyqhu authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277585612_0wa6cyqhu disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277608537_4mvimschx authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277608537_4mvimschx disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277668529_dlalo4yr0 authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277668529_dlalo4yr0 disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277675273_sevco13fy authenticated as pkr.admin@kisan.net.np (ISP: 113)
+👋 [WS Disconnect] Client ws_1779277675273_sevco13fy disconnected (User: Pokhara Branch Admin)
+Permission 'services_read' granted for user.
+✅ [WS Auth] Client ws_1779277698799_6dvzjgp1t authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'services_read' granted for user.
+Permission 'services_read' granted for user.
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277698799_6dvzjgp1t
+✅ [WS Subscribe] Client ws_1779277698799_6dvzjgp1t subscribed to: system.notification
+📨 [WS Subscribe] Raw message: { type: 'subscribe', data: { channels: [ 'system.notification' ] } }
+✅ [WS Subscribe] Processing 1 channels for client ws_1779277698799_6dvzjgp1t
+ℹ️ [WS Subscribe] Client ws_1779277698799_6dvzjgp1t already subscribed to: system.notification
+👋 [WS Disconnect] Client ws_1779277698799_6dvzjgp1t disconnected (User: Pokhara Branch Admin)
+✅ [WS Auth] Client ws_1779277763010_di57x1d6y authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'customer_read' granted for user.
+Permission 'lead_read' granted for user.
+Permission 'users_read' granted for user.
+👋 [WS Disconnect] Client ws_1779277763010_di57x1d6y disconnected (User: Pokhara Branch Admin)
+Permission 'users_read' granted for user.
+Permission 'users_read' granted for user.
+✅ [WS Auth] Client ws_1779277811973_7bywjocbx authenticated as pkr.admin@kisan.net.np (ISP: 113)
+Permission 'tasks_create' granted for user.
+👋 [WS Disconnect] Client ws_1779277811973_7bywjocbx disconnected (User: Pokhara Branch Admin)
+❌ [WS Auth] No access token for client ws_1779277896051_ww7v5jndr
+❌ [WS Auth] No access token for client ws_1779277899359_lwvbkgsdz
+❌ [WS Auth] No access token for client ws_1779277902664_3qfb6avvg
+❌ [WS Auth] No access token for client ws_1779277905970_6q9n9l3wp
+✅ [WS Auth] Client ws_1779277909275_ab0u15kip authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779277909275_ab0u15kip disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779277918856_7gfxut1sv authenticated as pkr.field@kisan.net.np (ISP: 115)
+Permission 'tasks_update' granted for user.
+👋 [WS Disconnect] Client ws_1779277918856_7gfxut1sv disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779277992382_cbgkupmld authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779277992382_cbgkupmld disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779278020537_56o0wtsr5 authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278020537_56o0wtsr5 disconnected (User: Pokhara Field Tech)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779278047948_h5vl6cgb4 authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278047948_h5vl6cgb4 disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779278065150_mviu3hp5f authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278065150_mviu3hp5f disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779278071163_eoe36vdrg authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278071163_eoe36vdrg disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779278085837_tgwuscnbr authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278085837_tgwuscnbr disconnected (User: Pokhara Field Tech)
+Permission 'customer_read' granted for user.
+✅ [WS Auth] Client ws_1779278089835_pdsc4a7pj authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278089835_pdsc4a7pj disconnected (User: Pokhara Field Tech)
+✅ [WS Auth] Client ws_1779278095049_q3iqw9sll authenticated as pkr.field@kisan.net.np (ISP: 115)
+👋 [WS Disconnect] Client ws_1779278095049_q3iqw9sll disconnected (User: Pokhara Field Tech)

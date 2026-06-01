@@ -1,0 +1,1518 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model packageonetimecharges {
+  A Int
+  B Int
+
+  @@unique([A, B], map: "_PackageOneTimeCharges_AB_unique")
+  @@index([B], map: "_PackageOneTimeCharges_B_index")
+  @@map("_packageonetimecharges")
+}
+
+model rolepermissions {
+  A Int
+  B Int
+
+  @@unique([A, B], map: "_rolepermissions_AB_unique")
+  @@index([B], map: "_rolepermissions_B_index")
+  @@map("_rolepermissions")
+}
+
+model branch_invoice_ranges {
+  id         Int      @id @default(autoincrement())
+  branchId   Int
+  rangeStart Int
+  rangeEnd   Int
+  current    Int
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+
+  @@index([branchId])
+}
+
+model branch_settings {
+  id          Int      @id @default(autoincrement())
+  branchId    Int
+  key         String
+  value       String   @db.Text
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+
+  @@unique([branchId, key])
+  @@index([branchId])
+}
+
+model branches {
+  id                       Int      @id @default(autoincrement())
+  name                     String
+  code                     String   @unique
+  email                    String?
+  phoneNumber              String?
+  address                  String?
+  city                     String?
+  state                    String?
+  zipCode                  String?
+  country                  String?
+  contactPerson            String?
+  logoUrl                  String?
+  isActive                 Boolean  @default(true)
+  isDeleted                Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime
+  ispId                    Int
+  invoiceEnd               Int?
+  invoiceStart             Int?
+  parentId                 Int?
+  commissionLimitEnabled   Boolean  @default(false)
+  commissionType           String?  @default("PERCENTAGE")
+  commissionValue          Float?   @default(0)
+  discountThresholdEnabled Boolean  @default(false)
+  discountThresholdValue   Float?   @default(0)
+  invoicePrefix            String?
+
+  @@index([code])
+  @@index([isActive])
+  @@index([ispId])
+  @@index([parentId], map: "branches_parentId_fkey")
+}
+
+model connectiontype {
+  id          Int      @id @default(autoincrement())
+  name        String?
+  iconUrl     String?
+  code        String?
+  isExtra     Boolean  @default(false)
+  description String?
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  ispId       Int?
+
+  @@index([ispId], map: "connection_type_isp_fkey")
+}
+
+model connectionuser {
+  id               Int                             @id @default(autoincrement())
+  customerId       Int
+  username         String                          @unique(map: "ConnectionUser_username_key")
+  password         String
+  branchId         Int?
+  ispId            Int?
+  isActive         Boolean                         @default(true)
+  isDeleted        Boolean                         @default(false)
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime
+  provisioningType connectionuser_provisioningType @default(PPP)
+  staticGateway    String?
+  staticIp         String?
+  staticNetmask    String?
+
+  @@index([branchId], map: "ConnectionUser_branchId_idx")
+  @@index([customerId], map: "connection_user_customer_fkey")
+  @@index([ispId], map: "connection_user_isp_fkey")
+}
+
+model customer {
+  id               Int      @id @default(autoincrement())
+  customerUniqueId String?  @unique(map: "Customer_customerUniqueId_key")
+  panNo            String?  @unique(map: "Customer_panNo_key")
+  idNumber         String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime
+  branchId         Int?
+  ispId            Int?
+  membershipId     Int?
+  installedById    Int?
+  existingISPId    Int?
+  leadId           Int      @unique(map: "Customer_leadId_key")
+  status           String?  @default("active")
+  onboardStatus    String?  @default("completed")
+  oltId            Int?
+  splitterId       Int?
+  isDeleted        Boolean? @default(false)
+  isRechargeable   Boolean? @default(false)
+  assignedPkg      Int?
+  subscribedPkgId  Int?
+
+  @@index([branchId], map: "Customer_branchId_idx")
+  @@index([customerUniqueId], map: "Customer_customerUniqueId_idx")
+  @@index([status], map: "Customer_status_idx")
+  @@index([assignedPkg], map: "customer_assignedpkg_fkey")
+  @@index([existingISPId], map: "customer_existingisp_fkey")
+  @@index([installedById], map: "customer_installedby_fkey")
+  @@index([ispId], map: "customer_isp_fkey")
+  @@index([membershipId], map: "customer_membership_fkey")
+  @@index([oltId], map: "customer_olt_fkey")
+  @@index([splitterId], map: "customer_splitter_fkey")
+  @@index([subscribedPkgId], map: "customer_subscribedpkg_fkey")
+}
+
+model customerdevice {
+  id                 Int      @id @default(autoincrement())
+  customerId         Int
+  deviceType         String
+  brand              String?
+  model              String?
+  serialNumber       String?  @unique(map: "CustomerDevice_serialNumber_key")
+  macAddress         String?  @unique(map: "CustomerDevice_macAddress_key")
+  provisioningStatus String   @default("pending")
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime
+  ponSerial          String?
+
+  @@index([customerId], map: "CustomerDevice_customerId_idx")
+  @@index([serialNumber], map: "CustomerDevice_serialNumber_idx")
+}
+
+model customerdocument {
+  id           Int      @id @default(autoincrement())
+  customerId   Int
+  documentType String
+  fileName     String
+  filePath     String
+  mimeType     String?
+  size         Int?
+  uploadedAt   DateTime @default(now())
+  isDeleted    Boolean  @default(false)
+  branchId     Int?
+  ispId        Int?
+
+  @@unique([customerId, documentType], map: "CustomerDocument_customerId_documentType_key")
+  @@index([branchId], map: "CustomerDocument_branchId_idx")
+  @@index([customerId], map: "CustomerDocument_customerId_idx")
+  @@index([documentType], map: "CustomerDocument_documentType_idx")
+  @@index([ispId], map: "customer_document_isp_fkey")
+}
+
+model customerordermanagement {
+  id             Int      @id @default(autoincrement())
+  customerId     Int
+  subscriptionId Int
+  package        Int?
+  orderDate      DateTime @default(now())
+  packageStart   DateTime
+  packageEnd     DateTime
+  totalAmount    Float
+  isPaid         Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime
+  invoiceId      String?
+  paymentId      String?
+
+  @@index([customerId], map: "customer_order_customer_fkey")
+  @@index([package], map: "customer_order_package_fkey")
+  @@index([subscriptionId], map: "customer_order_subscription_fkey")
+}
+
+model customerserviceconnection {
+  id                Int      @id @default(autoincrement())
+  customerId        Int
+  oltId             Int?
+  splitterId        Int?
+  oltPort           String?
+  splitterPort      String?
+  vlanId            String?
+  vlanPriority      String?  @default("0")
+  connectionType    String?  @default("fiber")
+  status            String   @default("active")
+  provisioningNotes String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+
+  @@index([customerId], map: "CustomerServiceConnection_customerId_idx")
+  @@index([oltId], map: "CustomerServiceConnection_oltId_idx")
+  @@index([splitterId], map: "CustomerServiceConnection_splitterId_idx")
+}
+
+model customersubscribedservice {
+  id          Int       @id @default(autoincrement())
+  customerId  Int
+  serviceId   Int
+  status      String    @default("active")
+  validUntil  DateTime?
+  serviceData Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+
+  @@unique([customerId, serviceId], map: "CustomerSubscribedService_customerId_serviceId_key")
+  @@index([serviceId], map: "customer_subscribed_service_service_fkey")
+}
+
+model customersubscription {
+  id               Int       @id @default(autoincrement())
+  customerId       Int
+  package          Int
+  isTrial          Boolean   @default(false)
+  planStart        DateTime
+  planEnd          DateTime
+  isActive         Boolean   @default(true)
+  isInvoicing      Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime
+  compensationDays Int       @default(0)
+  graceDaysBalance Int       @default(0)
+  isPaused         Boolean   @default(false)
+  pauseDate        DateTime?
+  extensionCount   Int       @default(0)
+
+  @@index([customerId], map: "customer_subscription_customer_fkey")
+  @@index([package], map: "customer_subscription_package_fkey")
+}
+
+model department {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique(map: "Department_name_key")
+  description String?
+  ispId       Int?
+  branchId    Int?
+  isDeleted   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+
+  @@index([branchId], map: "department_branch_fkey")
+  @@index([ispId], map: "department_isp_fkey")
+}
+
+model esewaaccesstoken {
+  id            String   @id
+  token         String   @db.Text
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([esewaConfigId], map: "ESewaAccessToken_esewaConfigId_idx")
+  @@index([expiresAt], map: "ESewaAccessToken_expiresAt_idx")
+  @@index([isRevoked], map: "ESewaAccessToken_isRevoked_idx")
+}
+
+model esewaconfiguration {
+  ispId        Int      @id @unique(map: "ESewaConfiguration_ispId_key")
+  username     String
+  passwordHash String
+  clientSecret String
+  authMethod   String   @default("BEARER") @db.VarChar(50)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+}
+
+model esewarefreshtoken {
+  id            String   @id
+  token         String   @db.Text
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([esewaConfigId], map: "ESewaRefreshToken_esewaConfigId_idx")
+  @@index([expiresAt], map: "ESewaRefreshToken_expiresAt_idx")
+  @@index([isRevoked], map: "ESewaRefreshToken_isRevoked_idx")
+}
+
+model esewatokenpayment {
+  id                   String    @id
+  ispId                Int
+  customerId           Int
+  customerUniqueId     String    @db.VarChar(100)
+  requestId            String    @unique(map: "ESewaTokenPayment_requestId_key")
+  amount               Float
+  status               String    @db.VarChar(50)
+  eSewaTransactionCode String?
+  packageDetails       Json
+  orderId              String?
+  referenceCode        String?
+  createdAt            DateTime  @default(now())
+  paidAt               DateTime?
+  branchId             Int?
+
+  @@index([branchId], map: "ESewaTokenPayment_branchId_idx")
+  @@index([customerId], map: "ESewaTokenPayment_customerId_idx")
+  @@index([customerUniqueId], map: "ESewaTokenPayment_customerUniqueId_idx")
+  @@index([eSewaTransactionCode], map: "ESewaTokenPayment_eSewaTransactionCode_idx")
+  @@index([ispId], map: "ESewaTokenPayment_ispId_idx")
+  @@index([requestId], map: "ESewaTokenPayment_requestId_idx")
+  @@index([status], map: "ESewaTokenPayment_status_idx")
+}
+
+model existing_isp {
+  id              Int      @id @default(autoincrement())
+  name            String
+  code            String?  @unique
+  type            String?
+  website         String?
+  email           String?
+  phone           String?
+  address         String?
+  city            String?
+  state           String?
+  coverage        String?
+  services        String?
+  rating          Float?   @default(0)
+  customerCount   Int?     @default(0)
+  establishedYear Int?
+  status          String?  @default("active")
+  notes           String?
+  branchId        Int?
+  ispId           Int?
+  isActive        Boolean  @default(true)
+  isDeleted       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime
+
+  @@index([branchId])
+  @@index([ispId])
+}
+
+model followup {
+  id             Int             @id @default(autoincrement())
+  leadId         Int
+  assignedUserId Int
+  type           followup_type   @default(CALL)
+  status         followup_status @default(SCHEDULED)
+  title          String
+  description    String?
+  scheduledAt    DateTime
+  completedAt    DateTime?
+  notes          String?
+  outcome        String?
+  isActive       Boolean         @default(true)
+  isDeleted      Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime
+
+  @@index([assignedUserId], map: "FollowUp_assignedUserId_idx")
+  @@index([leadId], map: "FollowUp_leadId_idx")
+  @@index([scheduledAt], map: "FollowUp_scheduledAt_idx")
+}
+
+model inventoryitem {
+  id              Int                  @id @default(autoincrement())
+  type            inventoryitem_type
+  name            String?
+  serialNumber    String?              @unique(map: "InventoryItem_serialNumber_key")
+  ponSerialNumber String?
+  macAddress      String?
+  status          inventoryitem_status @default(IN_STOCK)
+  condition       String?              @default("Good")
+  ispId           Int
+  branchId        Int?
+  userId          Int?
+  customerId      Int?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime
+  model           String?
+  assignedRoleId  Int?
+
+  @@index([branchId], map: "InventoryItem_branchId_idx")
+  @@index([customerId], map: "InventoryItem_customerId_idx")
+  @@index([ispId], map: "InventoryItem_ispId_idx")
+  @@index([status], map: "InventoryItem_status_idx")
+  @@index([userId], map: "InventoryItem_userId_idx")
+  @@index([assignedRoleId], map: "inventoryitem_assignedRoleId_fkey")
+}
+
+model inventorylog {
+  id              Int                      @id @default(autoincrement())
+  inventoryItemId Int
+  fromStatus      inventorylog_fromStatus?
+  toStatus        inventorylog_toStatus
+  fromEntityId    Int?
+  toEntityId      Int?
+  entityType      String?
+  actionByUserId  Int?
+  note            String?
+  createdAt       DateTime                 @default(now())
+
+  @@index([createdAt], map: "InventoryLog_createdAt_idx")
+  @@index([inventoryItemId], map: "InventoryLog_inventoryItemId_idx")
+}
+
+model isp {
+  id                Int      @id @default(autoincrement())
+  companyName       String
+  businessType      String?
+  website           String?
+  contactPerson     String?
+  phoneNumber       String?
+  masterEmail       String   @unique(map: "ISP_masterEmail_key")
+  passwordHash      String?
+  description       String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  country           String?
+  asnNumber         String?
+  ipv4Blocks        String?
+  ipv6Blocks        String?
+  upstreamProviders String?
+  logoUrl           String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+}
+
+model ispservice {
+  id         Int      @id @default(autoincrement())
+  ispId      Int
+  serviceId  Int
+  isActive   Boolean  @default(false)
+  isEnabled  Boolean  @default(true)
+  isDeleted  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+  baseUrl    String?
+  apiVersion String   @default("v1") @db.VarChar(10)
+  config     Json?
+
+  @@unique([ispId, serviceId], map: "ISPService_ispId_serviceId_key")
+  @@index([isActive], map: "ISPService_isActive_idx")
+  @@index([isEnabled], map: "ISPService_isEnabled_idx")
+  @@index([serviceId], map: "isp_service_service_fkey")
+}
+
+model ispsettings {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  key         String   @unique(map: "ISPSettings_key_key")
+  value       String   @db.Text
+  description String?
+  updatedAt   DateTime
+
+  @@index([ispId], map: "ISPSettings_ispId_idx")
+}
+
+model lead {
+  id                     Int         @id @default(autoincrement())
+  isActive               Boolean     @default(true)
+  isDeleted              Boolean     @default(false)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime
+  convertedToCustomer    Boolean     @default(false)
+  status                 lead_status @default(new)
+  firstName              String?
+  middleName             String?
+  lastName               String?
+  email                  String?     @unique
+  phoneNumber            String?
+  secondaryContactNumber String?
+  gender                 String?
+  address                String?
+  street                 String?
+  district               String?
+  province               String?
+  source                 String?
+  notes                  String?
+  convertedAt            DateTime?
+  nextFollowUp           DateTime?
+  branchId               Int?
+  ispId                  Int?
+  memberShipId           Int?
+  assignedUserId         Int?
+  interestedPackageId    Int?
+  convertedById          Int?
+  metadata               Json?
+
+  @@index([assignedUserId])
+  @@index([branchId])
+  @@index([convertedToCustomer])
+  @@index([convertedById], map: "lead_converted_by_fkey")
+  @@index([createdAt])
+  @@index([district])
+  @@index([email])
+  @@index([gender])
+  @@index([interestedPackageId], map: "lead_interested_package_fkey")
+  @@index([ispId])
+  @@index([memberShipId], map: "lead_membership_fkey")
+  @@index([phoneNumber])
+  @@index([province])
+  @@index([source])
+  @@index([status])
+}
+
+model mapfile {
+  id        Int      @id @default(autoincrement())
+  name      String
+  fileName  String
+  filePath  String
+  mimeType  String?
+  folderId  Int
+  data      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([folderId], map: "MapFile_folderId_idx")
+}
+
+model mapfolder {
+  id        Int      @id @default(autoincrement())
+  name      String
+  ispId     Int
+  branchId  Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([branchId], map: "MapFolder_branchId_idx")
+  @@index([ispId], map: "MapFolder_ispId_idx")
+}
+
+model memberships {
+  id                 Int      @id @default(autoincrement())
+  name               String
+  code               String   @unique
+  description        String?
+  address            String?
+  details            String?
+  newMemberEnabled   Boolean  @default(true)
+  newMemberIsPercent Boolean  @default(true)
+  newMemberValue     Float    @default(13)
+  renewalEnabled     Boolean  @default(true)
+  renewalIsPercent   Boolean  @default(true)
+  renewalValue       Float    @default(10.5)
+  branchId           Int?
+  ispId              Int?
+  isActive           Boolean  @default(true)
+  isDeleted          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime
+
+  @@unique([code, ispId])
+  @@index([ispId], map: "membership_isp_fkey")
+  @@index([branchId])
+}
+
+model messages {
+  id         Int      @id @default(autoincrement())
+  ispId      Int
+  branchId   Int?
+  senderId   Int
+  receiverId Int?
+  content    String   @db.Text
+  isRead     Boolean  @default(false)
+  isDeleted  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+
+  @@index([branchId])
+  @@index([ispId])
+  @@index([receiverId])
+  @@index([senderId])
+}
+
+model nas {
+  id          Int      @id @default(autoincrement())
+  nasname     String
+  shortname   String?
+  type        String?
+  ports       String?
+  secret      String?
+  server      String?
+  community   String?
+  description String?
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  ispId       Int?
+  branchId    Int?
+  isDefault   Boolean  @default(false)
+  radiusNasId Int?     @unique
+
+  @@index([branchId])
+  @@index([ispId])
+  @@index([nasname])
+}
+
+model notices {
+  id          Int       @id @default(autoincrement())
+  ispId       Int
+  branchId    Int?
+  title       String
+  content     String    @db.Text
+  priority    String    @default("normal")
+  isActive    Boolean   @default(true)
+  expiresAt   DateTime?
+  createdById Int?
+  isDeleted   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+
+  @@index([createdById], map: "notice_creator_fkey")
+  @@index([branchId])
+  @@index([createdAt])
+  @@index([isActive])
+  @@index([ispId])
+}
+
+model notifications {
+  id             Int      @id @default(autoincrement())
+  userId         Int?
+  ispId          Int
+  branchId       Int?
+  type           String   @default("info")
+  title          String
+  description    String?  @db.Text
+  link           String?
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  originBranchId Int?
+
+  @@index([branchId])
+  @@index([createdAt])
+  @@index([isRead])
+  @@index([ispId])
+  @@index([userId])
+}
+
+model olt {
+  id                Int       @id @default(autoincrement())
+  name              String
+  ipAddress         String
+  model             String
+  vendor            String
+  serialNumber      String?
+  firmwareVersion   String?
+  status            String    @default("online")
+  lastSeen          DateTime?
+  totalPorts        Int       @default(0)
+  usedPorts         Int       @default(0)
+  availablePorts    Int       @default(0)
+  totalSubscribers  Int       @default(0)
+  activeSubscribers Int       @default(0)
+  sshHost           String?
+  sshPort           Int?      @default(22)
+  sshUsername       String?
+  sshPassword       String?
+  sshEnablePassword String?
+  sshKey            String?
+  sshTimeout        Int?      @default(30000)
+  sshKeepalive      Int?      @default(5000)
+  maxReconnect      Int?      @default(3)
+  commandDelay      Int?      @default(1200)
+  enableConfig      Boolean   @default(true)
+  shellRows         Int?      @default(40)
+  shellCols         Int?      @default(120)
+  telnetEnabled     Boolean   @default(false)
+  telnetPort        Int?      @default(23)
+  snmpEnabled       Boolean   @default(true)
+  snmpCommunity     String?   @default("public")
+  snmpVersion       String?   @default("v2c")
+  webInterface      Boolean   @default(true)
+  webPort           Int?      @default(80)
+  webSSL            Boolean   @default(false)
+  apiEnabled        Boolean   @default(false)
+  apiPort           Int?      @default(8080)
+  region            String?
+  site              String?
+  rack              Int?      @default(1)
+  position          Int?      @default(1)
+  latitude          Float?
+  longitude         Float?
+  locationNotes     String?
+  capabilities      String?
+  autoProvisioning  Boolean   @default(false)
+  redundancy        Boolean   @default(false)
+  powerSupply       Int?      @default(1)
+  cooling           String?   @default("active")
+  backupSchedule    String?   @default("none")
+  lastBackup        DateTime?
+  notes             String?
+  lastConnected     DateTime?
+  connectionCount   Int       @default(0)
+  avgConnectTime    Float?
+  successRate       Float?
+  isDeleted         Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime
+  branchId          Int?
+  ispId             Int
+  defaultTransport  String?   @default("ssh")
+
+  @@unique([ispId, ipAddress], map: "OLT_ispId_ipAddress_key")
+  @@index([branchId], map: "OLT_branchId_idx")
+  @@index([lastConnected], map: "OLT_lastConnected_idx")
+  @@index([sshHost], map: "OLT_sshHost_idx")
+  @@index([status], map: "OLT_status_idx")
+}
+
+model oltprofile {
+  id                  Int      @id @default(autoincrement())
+  oltId               Int
+  name                String   @db.VarChar(100)
+  type                String   @db.VarChar(20)
+  description         String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime
+  downstreamBandwidth String?  @db.VarChar(50)
+  qosProfile          String?  @db.VarChar(50)
+  services            String?  @db.Text
+  tcontType           String?  @db.VarChar(50)
+  upstreamBandwidth   String?  @db.VarChar(50)
+  vlans               String?  @db.Text
+  profileId           String   @db.VarChar(50)
+
+  @@unique([oltId, type, name], map: "OLTProfile_oltId_type_name_key")
+  @@unique([oltId, type, profileId], map: "OLTProfile_oltId_type_profileId_key")
+  @@index([type], map: "OLTProfile_type_idx")
+}
+
+model oltvlan {
+  id          Int      @id @default(autoincrement())
+  oltId       Int
+  vlanId      Int
+  name        String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  gemIndex    Int?
+  priority    Int?     @default(0)
+  status      String?  @default("active")
+  vlanType    String?
+
+  @@unique([oltId, vlanId], map: "OLTVLAN_oltId_vlanId_key")
+}
+
+model onetimecharge {
+  id          Int      @id @default(autoincrement())
+  name        String?
+  code        String?
+  referenceId String?
+  isTaxable   Boolean  @default(true)
+  iconUrl     String?
+  description String?
+  amount      Float
+  ispId       Int?
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+
+  @@index([ispId], map: "one_time_charge_isp_fkey")
+}
+
+model ont {
+  id           Int       @id @default(autoincrement())
+  ontId        String    @db.VarChar(50)
+  serialNumber String    @db.VarChar(100)
+  vendor       String?   @db.VarChar(50)
+  model        String?   @db.VarChar(50)
+  status       String    @db.VarChar(20)
+  distance     Int?
+  rxPower      Float?
+  txPower      Float?
+  temperature  Float?
+  uptime       String?
+  lastOnline   DateTime?
+  serviceState String?   @db.VarChar(50)
+  servicePort  String    @db.VarChar(50)
+  vlan         Int?
+  macAddress   String?   @db.VarChar(50)
+  ipAddress    String?   @db.VarChar(50)
+  description  String?   @db.VarChar(255)
+  capabilities String?   @db.Text
+  rawData      Json?
+  lastSync     DateTime?
+  isDeleted    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime
+  oltId        Int
+  ispId        Int
+  branchId     Int?
+
+  @@unique([oltId, ontId, servicePort], map: "ONT_oltId_ontId_servicePort_key")
+  @@index([branchId], map: "ONT_branchId_idx")
+  @@index([ispId], map: "ONT_ispId_idx")
+  @@index([oltId], map: "ONT_oltId_idx")
+  @@index([servicePort], map: "ONT_servicePort_idx")
+  @@index([status], map: "ONT_status_idx")
+}
+
+model ontdetails {
+  id                 Int       @id @default(autoincrement())
+  ontId              String    @db.VarChar(50)
+  fsp                String    @db.VarChar(20)
+  serialNumber       String    @unique(map: "ONTDetails_serialNumber_key") @db.VarChar(100)
+  description        String?   @db.VarChar(255)
+  controlFlag        String    @db.VarChar(20)
+  runState           String    @db.VarChar(20)
+  configState        String    @db.VarChar(20)
+  matchState         String    @db.VarChar(20)
+  isolationState     String?   @db.VarChar(20)
+  distance           Int?
+  batteryState       String?   @db.VarChar(30)
+  lastUpTime         String?
+  lastDownTime       String?
+  lastDownCause      String?   @db.VarChar(50)
+  lastDyingGaspTime  String?
+  onlineDuration     String?   @db.VarChar(100)
+  systemUptime       String?   @db.VarChar(100)
+  lineProfileId      String?   @db.VarChar(20)
+  lineProfileName    String?   @db.VarChar(100)
+  serviceProfileId   String?   @db.VarChar(20)
+  serviceProfileName String?   @db.VarChar(100)
+  mappingMode        String?   @db.VarChar(20)
+  qosMode            String?   @db.VarChar(20)
+  tr069              String?   @db.VarChar(20)
+  protectSide        String?   @db.VarChar(10)
+  ontIdRef           Int       @unique(map: "ONTDetails_ontIdRef_key")
+  tconts             Json?
+  gems               Json?
+  vlanTranslations   Json?
+  servicePorts       Json?
+  opticalDiagnostics Json?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  lastSync           DateTime?
+
+  @@index([configState], map: "ONTDetails_configState_idx")
+  @@index([fsp, ontId], map: "ONTDetails_fsp_ontid")
+  @@index([matchState], map: "ONTDetails_matchState_idx")
+  @@index([ontIdRef], map: "ONTDetails_ontIdRef_idx")
+  @@index([runState], map: "ONTDetails_runState_idx")
+  @@index([serialNumber], map: "ONTDetails_serialNumber_idx")
+}
+
+model orderdetail {
+  id          Int      @id @default(autoincrement())
+  orderId     Int
+  itemName    String
+  referenceId String?
+  itemPrice   Float
+  createdAt   DateTime @default(now())
+
+  @@index([orderId], map: "order_detail_order_fkey")
+}
+
+model package_plan_branches {
+  id            Int      @id @default(autoincrement())
+  packagePlanId Int
+  branchId      Int
+  createdAt     DateTime @default(now())
+
+  @@unique([packagePlanId, branchId])
+  @@index([branchId])
+  @@index([packagePlanId])
+}
+
+model packageplan {
+  id                     Int      @id @default(autoincrement())
+  planName               String?
+  planCode               String?  @unique(map: "PackagePlan_planCode_key")
+  connectionType         Int
+  dataLimit              Int?
+  downSpeed              Int?
+  upSpeed                Int?
+  ispId                  Int?
+  deviceLimit            Int?
+  isPopular              Boolean  @default(false)
+  description            String?  @db.Text
+  isActive               Boolean  @default(true)
+  isDeleted              Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime
+  radgroupreplyId        Int?     @unique(map: "PackagePlan_radgroupreplyId_key")
+  allowRename            Boolean  @default(false)
+  applyFramedPool        Boolean  @default(false)
+  customRadiusAttributes Json?
+  firDownload            Int?
+  framedPoolValue        String?
+  fupApply               Boolean  @default(true)
+  highPriority           Boolean  @default(false)
+  intUpload              Int?
+  isFupPackage           Boolean  @default(false)
+  localDownload          Int?
+  localUpload            Int?
+  maxDiscountCount       Int?     @default(0)
+  maxDiscountPercentage  Float?   @default(100)
+  nasType                String?
+  onlyRenewal            Boolean  @default(false)
+  packageType            String?
+  priority               String?
+  service                String?
+  vendorProfiles         Json?
+
+  @@index([connectionType], map: "PackagePlan_connectionType_fkey")
+  @@index([ispId], map: "PackagePlan_ispId_fkey")
+}
+
+model packageprice {
+  id              Int      @id @default(autoincrement())
+  planId          Int
+  price           Float
+  packageDuration String?
+  referenceId     String?  @unique(map: "PackagePrice_referenceId_key")
+  isTrial         Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  isDeleted       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime
+  ispId           Int?
+
+  @@index([ispId], map: "package_price_isp_fkey")
+  @@index([planId], map: "package_price_plan_fkey")
+}
+
+model permission {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique(map: "Permission_name_key")
+  menuName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+}
+
+model refreshtoken {
+  id        String   @id
+  userId    Int
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([userId], map: "RefreshToken_userId_idx")
+}
+
+model role {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique(map: "Role_name_key")
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+}
+
+model service {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique(map: "Service_name_key") @db.VarChar(100)
+  code        String           @unique(map: "Service_code_key") @db.VarChar(50)
+  description String?
+  iconUrl     String?
+  category    service_category
+  isActive    Boolean          @default(true)
+  isDeleted   Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime
+
+  @@index([category], map: "Service_category_idx")
+  @@index([isActive], map: "Service_isActive_idx")
+}
+
+model serviceboard {
+  id               Int      @id @default(autoincrement())
+  slot             Int
+  type             String   @default("GPON")
+  portCount        Int
+  usedPorts        Int      @default(0)
+  availablePorts   Int      @default(0)
+  status           String   @default("active")
+  temperature      Float?
+  powerConsumption Float?
+  firmwareVersion  String?
+  serialNumber     String?
+  oltId            Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime
+
+  @@unique([oltId, slot], map: "ServiceBoard_oltId_slot_key")
+  @@index([oltId, status], map: "ServiceBoard_oltId_status_idx")
+  @@index([oltId, type], map: "ServiceBoard_oltId_type_idx")
+}
+
+model serviceboardport {
+  id         Int      @id @default(autoincrement())
+  boardId    Int
+  portNumber Int
+  status     String   @default("available")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+
+  @@unique([boardId, portNumber], map: "ServiceBoardPort_boardId_portNumber_key")
+}
+
+model servicecredential {
+  id             Int      @id @default(autoincrement())
+  credentialType String   @db.VarChar(30)
+  key            String   @db.VarChar(50)
+  value          String   @db.VarChar(255)
+  label          String?  @db.VarChar(100)
+  isEncrypted    Boolean  @default(true)
+  description    String?
+  isActive       Boolean  @default(true)
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime
+  ispServiceId   Int
+
+  @@unique([ispServiceId, key], map: "ServiceCredential_ispServiceId_key_key")
+  @@index([credentialType], map: "ServiceCredential_credentialType_idx")
+}
+
+model servicelog {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  serviceCode String
+  operation   String
+  status      String
+  message     String?
+  data        Json?
+  duration    Int?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt], map: "ServiceLog_createdAt_idx")
+  @@index([ispId], map: "ServiceLog_ispId_idx")
+  @@index([serviceCode], map: "ServiceLog_serviceCode_idx")
+  @@index([status], map: "ServiceLog_status_idx")
+}
+
+model splitters {
+  id                    Int      @id @default(autoincrement())
+  name                  String
+  splitterId            String   @unique
+  splitRatio            String
+  splitterType          String   @default("PLC")
+  portCount             Int      @default(8)
+  usedPorts             Int      @default(0)
+  availablePorts        Int      @default(8)
+  isMaster              Boolean  @default(false)
+  masterSplitterId      String?
+  location              Json?
+  upstreamFiber         Json?
+  connectedServiceBoard Json?
+  status                String   @default("active")
+  notes                 String?
+  isActive              Boolean  @default(true)
+  isDeleted             Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime
+  oltId                 Int?
+  ispId                 Int
+  branchId              Int?
+  serviceBoardPortId    Int?
+
+  @@index([serviceBoardPortId], map: "splitter_service_board_port_fkey")
+  @@index([branchId])
+  @@index([createdAt])
+  @@index([isMaster])
+  @@index([ispId])
+  @@index([masterSplitterId])
+  @@index([oltId])
+  @@index([splitterId])
+  @@index([status])
+}
+
+model task {
+  id           Int           @id @default(autoincrement())
+  title        String
+  description  String?       @db.Text
+  startTime    DateTime?
+  endTime      DateTime?
+  duration     Int?
+  status       task_status   @default(PENDING)
+  priority     task_priority @default(MEDIUM)
+  assignedToId Int?
+  createdById  Int?
+  customerId   Int?
+  ticketId     Int?
+  ispId        Int
+  branchId     Int?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime
+
+  @@index([assignedToId], map: "Task_assignedToId_idx")
+  @@index([branchId], map: "Task_branchId_idx")
+  @@index([createdById], map: "Task_createdById_idx")
+  @@index([customerId], map: "Task_customerId_fkey")
+  @@index([ispId], map: "Task_ispId_idx")
+  @@index([status], map: "Task_status_idx")
+  @@index([ticketId], map: "Task_ticketId_fkey")
+}
+
+model terminalcommand {
+  id         Int      @id @default(autoincrement())
+  sessionId  String
+  oltId      Int
+  command    String
+  output     String?
+  executedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  branchId   Int?
+  ispId      Int
+
+  @@index([branchId], map: "TerminalCommand_branchId_idx")
+  @@index([ispId], map: "terminal_command_isp_fkey")
+  @@index([oltId], map: "terminal_command_olt_fkey")
+  @@index([sessionId], map: "terminal_command_session_fkey")
+}
+
+model terminalsession {
+  id        Int       @id @default(autoincrement())
+  sessionId String    @unique(map: "TerminalSession_sessionId_key")
+  oltId     Int
+  protocol  String    @default("ssh")
+  startTime DateTime  @default(now())
+  endTime   DateTime?
+  status    String    @default("connected")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime
+  branchId  Int?
+  ispId     Int
+
+  @@index([branchId], map: "TerminalSession_branchId_idx")
+  @@index([ispId], map: "terminal_session_isp_fkey")
+  @@index([oltId], map: "terminal_session_olt_fkey")
+}
+
+model ticket_comments {
+  id         Int      @id @default(autoincrement())
+  ticketId   Int
+  userId     Int
+  content    String   @db.Text
+  isInternal Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+model tickets {
+  id           Int              @id @default(autoincrement())
+  ticketNumber String           @unique
+  title        String
+  description  String?          @db.Text
+  status       tickets_status   @default(OPEN)
+  priority     tickets_priority @default(MEDIUM)
+  category     String?
+  customerId   Int?
+  assignedToId Int?
+  createdById  Int?
+  ispId        Int
+  branchId     Int?
+  resolution   String?          @db.Text
+  resolvedAt   DateTime?
+  isDeleted    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime
+  leadId       Int?
+
+  @@index([createdById], map: "ticket_creator_fkey")
+  @@index([leadId], map: "ticket_lead_fkey")
+  @@index([assignedToId])
+  @@index([branchId])
+  @@index([createdAt])
+  @@index([customerId])
+  @@index([ispId])
+  @@index([priority])
+  @@index([status])
+}
+
+model tr069_devices {
+  id              Int       @id @default(autoincrement())
+  serialNumber    String    @unique
+  oui             String?
+  productClass    String?
+  manufacturer    String?
+  modelName       String?
+  ipAddress       String?
+  status          String?   @default("offline")
+  lastContact     DateTime?
+  firmwareVersion String?
+  macAddress      String?
+  notes           String?
+  ispId           Int
+  isActive        Boolean   @default(true)
+  isDeleted       Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime
+  leadId          Int?
+
+  @@index([ispId])
+  @@index([leadId])
+  @@index([serialNumber])
+  @@index([status])
+}
+
+model user {
+  id             Int         @id @default(autoincrement())
+  email          String      @unique(map: "User_email_key")
+  passwordHash   String
+  name           String?
+  roleId         Int?
+  status         user_status @default(pending)
+  lastLogin      DateTime?
+  profilePicture String?
+  departmentId   Int?
+  ispId          Int?
+  branchId       Int?
+  isDeleted      Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime
+  yeastarExt     String?
+
+  @@index([branchId], map: "User_branchId_idx")
+  @@index([ispId], map: "User_ispId_idx")
+  @@index([roleId], map: "User_roleId_idx")
+  @@index([status], map: "User_status_idx")
+  @@index([departmentId], map: "user_department_fkey")
+}
+
+model userbranch {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  branchId  Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, branchId], map: "UserBranch_userId_branchId_key")
+  @@index([branchId], map: "UserBranch_branchId_idx")
+  @@index([userId], map: "UserBranch_userId_idx")
+}
+
+model yeastar_active_calls {
+  id        Int      @id @default(autoincrement())
+  ispId     Int
+  callid    String   @unique
+  channelid String
+  extension String?
+  caller    String?
+  called    String?
+  direction String?  @db.VarChar(20)
+  trunkname String?
+  status    String   @db.VarChar(50)
+  startTime DateTime @default(now())
+  duration  Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([channelid])
+  @@index([extension])
+  @@index([isActive])
+  @@index([ispId])
+}
+
+model yeastar_call_logs {
+  id           Int       @id @default(autoincrement())
+  ispId        Int
+  extensionId  Int?
+  callid       String?
+  channelid    String?
+  direction    String?   @db.VarChar(20)
+  caller       String?   @db.VarChar(50)
+  called       String?   @db.VarChar(50)
+  trunkname    String?
+  memberstatus String?
+  callpath     String?
+  duration     Int?
+  startTime    DateTime?
+  endTime      DateTime?
+  status       String?   @db.VarChar(50)
+  eventType    String?   @db.VarChar(100)
+  eventData    Json?
+  rawData      Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime
+
+  @@index([callid])
+  @@index([channelid])
+  @@index([direction])
+  @@index([extensionId])
+  @@index([ispId])
+  @@index([startTime])
+  @@index([status])
+}
+
+model yeastar_extensions {
+  id              Int       @id @default(autoincrement())
+  ispId           Int
+  extensionNumber String
+  extensionName   String?
+  extensionType   String    @default("SIP")
+  status          String    @default("Idle")
+  agentid         String?
+  isActive        Boolean   @default(true)
+  isDeleted       Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime
+  lastSync        DateTime?
+  pbxExtensionId  String
+
+  @@unique([ispId, extensionNumber])
+  @@unique([ispId, pbxExtensionId])
+}
+
+model yeastar_system_status {
+  id               Int      @id @default(autoincrement())
+  ispId            Int      @unique
+  pbxIp            String
+  apiPort          Int      @default(80)
+  tcpPort          Int      @default(8333)
+  version          String?
+  totalExtensions  Int      @default(0)
+  activeExtensions Int      @default(0)
+  totalTrunks      Int      @default(0)
+  activeTrunks     Int      @default(0)
+  activeCalls      Int      @default(0)
+  systemUptime     String?
+  lastSync         DateTime @default(now())
+  status           String   @default("offline") @db.VarChar(20)
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime
+
+  @@index([status])
+}
+
+model yeastar_trunks {
+  id                 Int       @id @default(autoincrement())
+  ispId              Int
+  trunkId            String    @unique
+  trunkname          String
+  trunktype          String    @default("register")
+  host               String?
+  port               String    @default("5060")
+  domain             String?
+  username           String?
+  authname           String?
+  fromuser           String?
+  password           String?
+  extensionsdod      String?
+  extensionsgroupdod String?
+  status             String    @default("Unknown")
+  registerStatus     String?
+  isActive           Boolean   @default(true)
+  isDeleted          Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  lastSync           DateTime?
+  pbxTrunkId         String
+
+  @@unique([ispId, trunkname])
+  @@index([isActive])
+  @@index([ispId])
+  @@index([status])
+  @@index([trunktype])
+}
+
+enum inventoryitem_type {
+  ONT
+  OLT
+  DROPWIRE
+  ROUTE
+  SWITCH
+  OTHER
+}
+
+enum inventorylog_fromStatus {
+  IN_STOCK
+  ASSIGNED_TO_BRANCH
+  ASSIGNED_TO_USER
+  ASSIGNED_TO_CUSTOMER
+  ASSIGNED_TO_ROLE
+  RETURNED
+  FAULTY
+  SCRAPPED
+}
+
+enum followup_type {
+  CALL
+  EMAIL
+  MEETING
+  VISIT
+  OTHER
+}
+
+enum inventorylog_toStatus {
+  IN_STOCK
+  ASSIGNED_TO_BRANCH
+  ASSIGNED_TO_USER
+  ASSIGNED_TO_CUSTOMER
+  ASSIGNED_TO_ROLE
+  RETURNED
+  FAULTY
+  SCRAPPED
+}
+
+enum followup_status {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+enum tickets_status {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum service_category {
+  BILLING
+  AUTHENTICATION
+  PAYMENT
+  STREAMING
+  NETWORK
+  VOIP
+  SECURITY
+  COMMUNICATION
+  OTHER
+  ACS
+}
+
+enum tickets_priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum user_status {
+  active
+  inactive
+  pending
+  disabled
+}
+
+enum inventoryitem_status {
+  IN_STOCK
+  ASSIGNED_TO_BRANCH
+  ASSIGNED_TO_USER
+  ASSIGNED_TO_CUSTOMER
+  ASSIGNED_TO_ROLE
+  RETURNED
+  FAULTY
+  SCRAPPED
+}
+
+enum lead_status {
+  new
+  contacted
+  qualified
+  unqualified
+  converted
+}
+
+enum task_status {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum task_priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum connectionuser_provisioningType {
+  PPP
+  STATIC
+}

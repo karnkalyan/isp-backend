@@ -1,0 +1,653 @@
+[ServiceFactory] Error creating client for TSHUL: Tshul service is not configured or enabled for ISP ID: 16
+Error getting Tshul customers: Error: Failed to create service client: Tshul service is not configured or enabled for ISP ID: 16
+    at ServiceFactory.getClient (C:\kisan-isp\backend\src\lib\clients\ServiceFactory.js:62:19)
+    at async ServiceController.getTshulCustomersbyId (C:\kisan-isp\backend\src\controllers\services.controller.js:622:22)
+PrismaClientValidationError: 
+Invalid `req.prisma.ticketComment.create()` invocation in
+C:\kisan-isp\backend\src\controllers\ticket.controller.js:367:56
+
+  364 const { content, isInternal } = req.body;
+  365 const userId = req.user?.id;
+  366 
+→ 367 const comment = await req.prisma.ticketComment.create({
+        data: {
+          ticketId: 11,
+          userId: 107,
+          content: "You connection is broken near router we new ticket is assinged to fiber team",
+          isInternal: false
+        },
+        include: {
+          user: {
+          ~~~~
+            select: {
+              id: true,
+              name: true,
+              email: true
+            }
+          },
+      ?   ticket?: true
+        }
+      })
+
+Unknown field `user` for include statement on model `TicketComment`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async addComment (C:\kisan-isp\backend\src\controllers\ticket.controller.js:367:25)
+PrismaClientValidationError: 
+Invalid `req.prisma.ticketComment.create()` invocation in
+C:\kisan-isp\backend\src\controllers\ticket.controller.js:367:56
+
+  364 const { content, isInternal } = req.body;
+  365 const userId = req.user?.id;
+  366 
+→ 367 const comment = await req.prisma.ticketComment.create({
+        data: {
+          ticketId: 11,
+          userId: 107,
+          content: "You connection is broken near router we new ticket is assinged to fiber team",
+          isInternal: false
+        },
+        include: {
+          user: {
+          ~~~~
+            select: {
+              id: true,
+              name: true,
+              email: true
+            }
+          },
+      ?   ticket?: true
+        }
+      })
+
+Unknown field `user` for include statement on model `TicketComment`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async addComment (C:\kisan-isp\backend\src\controllers\ticket.controller.js:367:25)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+[ServiceFactory] Error creating client for NETTV: NetTV service is not configured or enabled for ISP ID: 16
+Error getting NetTV subscriber: Error: Failed to create service client: NetTV service is not configured or enabled for ISP ID: 16
+    at ServiceFactory.getClient (C:\kisan-isp\backend\src\lib\clients\ServiceFactory.js:62:19)
+    at async ServiceController.getNetTVSubscriber (C:\kisan-isp\backend\src\controllers\services.controller.js:473:22)
+SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    at JSON.parse (<anonymous>)
+    at parse (C:\kisan-isp\backend\node_modules\body-parser\lib\types\json.js:92:19)
+    at C:\kisan-isp\backend\node_modules\body-parser\lib\read.js:128:18
+    at AsyncResource.runInAsyncScope (node:async_hooks:214:14)
+    at invokeCallback (C:\kisan-isp\backend\node_modules\raw-body\index.js:238:16)
+    at done (C:\kisan-isp\backend\node_modules\raw-body\index.js:227:7)
+    at IncomingMessage.onEnd (C:\kisan-isp\backend\node_modules\raw-body\index.js:287:7)
+    at IncomingMessage.emit (node:events:518:28)
+    at endReadableNT (node:internal/streams/readable:1698:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+PrismaClientValidationError: 
+Invalid `req.prisma.ticketComment.create()` invocation in
+C:\kisan-isp\backend\src\controllers\ticket.controller.js:383:56
+
+  380     }
+  381 }
+  382 
+→ 383 const comment = await req.prisma.ticketComment.create({
+        data: {
+          ticketId: 11,
+          userId: 107,
+          isInternal: false,
+      +   content: String
+        }
+      })
+
+Argument `content` is missing.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async addComment (C:\kisan-isp\backend\src\controllers\ticket.controller.js:383:25)
+[ServiceFactory] Error creating client for NETTV: NetTV service is not configured or enabled for ISP ID: 16
+Error getting NetTV subscriber: Error: Failed to create service client: NetTV service is not configured or enabled for ISP ID: 16
+    at ServiceFactory.getClient (C:\kisan-isp\backend\src\lib\clients\ServiceFactory.js:62:19)
+    at async ServiceController.getNetTVSubscriber (C:\kisan-isp\backend\src\controllers\services.controller.js:473:22)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findMany()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:47
+
+  186 
+  187 async function listPackagePlans(req, res, next) {
+  188   try {
+→ 189     const list = await req.prisma.PackagePlan.findMany({
+            where: {
+              isDeleted: false,
+              ispId: 16
+            },
+            include: {
+              connectionTypeDetails: {
+              ~~~~~~~~~~~~~~~~~~~~~
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              },
+              branches: {
+                include: {
+                  branch: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true
+                    }
+                  }
+                }
+              },
+          ?   packagePrices?: true
+            },
+            orderBy: {
+              createdAt: "desc"
+            }
+          })
+
+Unknown field `connectionTypeDetails` for include statement on model `packageplan`. Available options are marked with ?.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async listPackagePlans (C:\kisan-isp\backend\src\controllers\packagePlan.controller.js:189:18)
+[ERROR] Failed to create item in DB: 
+Invalid `req.prisma.PackagePlan.findUnique()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePrice.controller.js:10:47
+
+   7 const ispId = Number(req.ispId);
+   8 
+   9 // Fetch plan details
+→ 10 const plan = await req.prisma.PackagePlan.findUnique({
+       where: {
+     +   id: Int
+       },
+       select: {
+         planName: true,
+         downSpeed: true,
+         upSpeed: true,
+         planCode: true
+       }
+     })
+
+Argument `id` is missing.
+PrismaClientValidationError: 
+Invalid `req.prisma.PackagePlan.findUnique()` invocation in
+C:\kisan-isp\backend\src\controllers\packagePrice.controller.js:10:47
+
+   7 const ispId = Number(req.ispId);
+   8 
+   9 // Fetch plan details
+→ 10 const plan = await req.prisma.PackagePlan.findUnique({
+       where: {
+     +   id: Int
+       },
+       select: {
+         planName: true,
+         downSpeed: true,
+         upSpeed: true,
+         planCode: true
+       }
+     })
+
+Argument `id` is missing.
+    at _n (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at ei.handleRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6926)
+    at ei.handleAndLogRequestError (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6608)
+    at ei.request (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:121:6315)
+    at async a (C:\kisan-isp\backend\node_modules\@prisma\client\runtime\library.js:130:9551)
+    at async createPackagePrice (C:\kisan-isp\backend\src\controllers\packagePrice.controller.js:10:18)
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]
+[Auth] Access Denied: User pkr.admin@kisan.net.np (Role: Branch Admin, Primary: 46) tried to access branch 54. userBranches: [ { branchId: 46 } ]

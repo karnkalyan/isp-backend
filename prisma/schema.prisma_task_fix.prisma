@@ -1,0 +1,32 @@
+model task {
+  id           Int           @id @default(autoincrement())
+  title        String
+  description  String?       @db.Text
+  startTime    DateTime?
+  endTime      DateTime?
+  duration     Int?
+  status       task_status   @default(PENDING)
+  priority     task_priority @default(MEDIUM)
+  assignedToId Int?
+  createdById  Int?
+  customerId   Int?
+  ticketId     Int?
+  ispId        Int
+  branchId     Int?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime
+  assignedTo   user?         @relation("assignedTasks", fields: [assignedToId], references: [id])
+  customer     customer?     @relation(fields: [customerId], references: [id])
+  ticket       Ticket?       @relation(fields: [ticketId], references: [id])
+  isp          isp           @relation(fields: [ispId], references: [id])
+  branch       Branch?       @relation(fields: [branchId], references: [id])
+
+  @@index([assignedToId], map: "Task_assignedToId_idx")
+  @@index([branchId], map: "Task_branchId_idx")
+  @@index([createdById], map: "Task_createdById_idx")
+  @@index([customerId], map: "Task_customerId_idx")
+  @@index([ispId], map: "Task_ispId_idx")
+  @@index([status], map: "Task_status_idx")
+  @@index([ticketId], map: "Task_ticketId_idx")
+  @@index([priority], map: "Task_priority_idx")
+}
