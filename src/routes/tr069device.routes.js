@@ -7,7 +7,8 @@ const {
   listDevices,
   getDeviceBySerial,
   linkLead,
-  unlinkLead
+  unlinkLead,
+  deleteDevice
 } = require('../controllers/tr069device.controller');
 
 module.exports = (prisma) => {
@@ -52,6 +53,13 @@ module.exports = (prisma) => {
     '/:serialNumber/unlink-lead',
     checkPermission('services_manage'),
     unlinkLead
+  );
+
+  // Delete device from local TR069 list
+  router.delete(
+    '/:serialNumber',
+    checkPermission('services_manage'),
+    deleteDevice
   );
 
   return router;

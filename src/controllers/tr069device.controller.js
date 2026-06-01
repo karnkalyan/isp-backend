@@ -333,6 +333,38 @@ async function unlinkLead(req, res, next) {
   }
 }
 
+// Soft delete a TR069 device from the local list
+async function deleteDevice(req, res, next) {
+  try {
+    const { serialNumber } = req.params;
+
+    const device = await req.prisma.tr069Device.findFirst({
+      where: { serialNumber, ispId: req.ispId, isDeleted: false }
+    });
+
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+
+    await req.prisma.tr069Device.update({
+      where: { serialNumber },
+      data: {
+        leadId: null,
+        isActive: false,
+        isDeleted: true,
+        updatedAt: new Date()
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Device deleted from local TR069 list'
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 // Helper: check if device is online (informed in last 5 minutes)
 function isOnline(lastInform) {
   if (!lastInform) return false;
@@ -404,5 +436,6 @@ module.exports = {
   listDevices,
   getDeviceBySerial,
   linkLead,
-  unlinkLead
+  unlinkLead,
+  deleteDevice
 };

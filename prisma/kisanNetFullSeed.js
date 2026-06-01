@@ -695,23 +695,6 @@ async function main() {
         }
     });
 
-    await prisma.tr069Device.create({
-        data: {
-            serialNumber: '45434F4D3ABDCF9B',
-            oui: '485754',
-            productClass: 'EG8141A5',
-            manufacturer: 'Huawei',
-            modelName: 'EG8141A5',
-            ipAddress: '10.64.0.11',
-            status: 'online',
-            lastContact: new Date(),
-            firmwareVersion: 'V5R019C10S110',
-            ispId: isp.id,
-            leadId: lead.id,
-            updatedAt: new Date(),
-        }
-    });
-
     console.log('📦 Packages and Pricing seeded.');
 
     console.log('✅ Full seed completed successfully!');
