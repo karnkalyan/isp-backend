@@ -73,9 +73,11 @@ module.exports = {
             { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
         ],
         YEASTAR: [
-            { credentialType: 'username_password', key: 'username', label: 'Username', required: true },
+            { credentialType: 'api_key', key: 'pbx_ip', label: 'PBX IP', required: true, isEncrypted: false },
+            { credentialType: 'api_key', key: 'api_port', label: 'API Port', required: false, description: 'Default: 80', isEncrypted: false },
+            { credentialType: 'api_key', key: 'tcp_port', label: 'TCP Port', required: false, description: 'Default: 8333', isEncrypted: false },
+            { credentialType: 'username_password', key: 'username', label: 'Username', required: true, isEncrypted: false },
             { credentialType: 'username_password', key: 'password', label: 'Password', isEncrypted: true, required: true },
-            { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
         ],
         ASTERISK: [
             { credentialType: 'username_password', key: 'ami_host', label: 'AMI Host/IP', required: true },

@@ -125,7 +125,7 @@ class ServiceController {
           },
           credentials: {
             where: { isActive: true, isDeleted: false },
-            select: { id: true, credentialType: true, key: true, label: true, isEncrypted: true, description: true, createdAt: true }
+            select: { id: true, credentialType: true, key: true, value: true, label: true, isEncrypted: true, description: true, createdAt: true }
           }
         }
       });
@@ -373,7 +373,9 @@ class ServiceController {
       await this.prisma.$transaction(async (tx) => {
         // UPSERT each credential
         for (const cred of credentials) {
-          const hasValue = cred.value !== undefined && cred.value !== null && String(cred.value) !== '';
+          const rawValue = cred.value !== undefined && cred.value !== null ? String(cred.value) : '';
+          const isMaskedValue = /^\*+encrypted\*+$/i.test(rawValue.trim());
+          const hasValue = rawValue !== '' && !isMaskedValue;
           const existingCredential = await tx.serviceCredential.findUnique({
             where: {
               ispServiceId_key: {
@@ -395,7 +397,7 @@ class ServiceController {
               }
             },
             update: {
-              ...(hasValue && { value: String(cred.value) }),
+              ...(hasValue && { value: rawValue }),
               credentialType: cred.credentialType || 'api_key',
               label: cred.label || cred.key,
               isEncrypted: cred.isEncrypted !== undefined ? cred.isEncrypted : true,
@@ -407,7 +409,7 @@ class ServiceController {
             create: {
               credentialType: cred.credentialType || 'api_key',
               key: cred.key,
-              value: String(cred.value),
+              value: rawValue,
               label: cred.label || cred.key,
               isEncrypted: cred.isEncrypted !== undefined ? cred.isEncrypted : true,
               description: cred.description,
