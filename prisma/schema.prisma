@@ -1499,6 +1499,34 @@ model ISPSettings {
   @@map("ispsettings")
 }
 
+model GeneratedLicense {
+  id              Int       @id @default(autoincrement())
+  licenseId       String    @unique
+  tokenHash       String    @unique
+  tokenEncrypted  String?   @db.Text
+  company         String
+  contact         String?
+  hwid            String
+  status          String    @default("ACTIVE")
+  expiresAt       DateTime
+  issuedAt        DateTime  @default(now())
+  installedAt     DateTime?
+  installedIspId  Int?
+  createdByUserId Int?
+  createdByEmail  String?
+  revokedAt       DateTime?
+  revokedByUserId Int?
+  revokedByEmail  String?
+  revokeReason    String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([hwid])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("generated_licenses")
+}
+
 model MapFile {
   id        Int       @id @default(autoincrement())
   name      String
