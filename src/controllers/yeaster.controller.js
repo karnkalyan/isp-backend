@@ -764,7 +764,26 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { channelid, channelId, channelids } = req.body;
+      const {
+        channelid,
+        channelId,
+        channelids,
+        extnumber,
+        extension,
+        cstacallid,
+        cstaCallId,
+        ipaddress,
+        ipAddress
+      } = req.body;
+      const targetExtension = String(extnumber || extension || req.user.extId || req.user.yeastarExt || '').trim();
+      const explicitUacstaCall = targetExtension && (cstacallid || cstaCallId) && (ipaddress || ipAddress)
+        ? {
+            extnumber: targetExtension,
+            cstacallid: cstacallid || cstaCallId,
+            ipaddress: ipaddress || ipAddress
+          }
+        : null;
+      const cachedUacstaCall = explicitUacstaCall || YeastarService.getLatestUacstaCall(ispId, targetExtension);
       const channelCandidates = [
         ...(Array.isArray(channelids) ? channelids : []),
         channelid,
@@ -774,15 +793,42 @@ class YeastarController {
         .filter(Boolean);
       const uniqueChannelIds = [...new Set(channelCandidates)];
 
-      if (!uniqueChannelIds.length) {
+      if (!cachedUacstaCall && !uniqueChannelIds.length) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID is required',
-          message: 'Missing channel ID'
+          message: 'Missing channel ID or uaCSTA call information'
         });
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
+      let uacstaResult = null;
+      if (cachedUacstaCall) {
+        uacstaResult = await service.acceptUacstaInboundCall(cachedUacstaCall);
+
+        if (uacstaResult.success) {
+          this.#logAudit(userId, ispId, 'call_accept_uacsta_inbound', {
+            extnumber: cachedUacstaCall.extnumber,
+            cstacallid: cachedUacstaCall.cstacallid,
+            ipaddress: cachedUacstaCall.ipaddress,
+            result: uacstaResult.data,
+            timestamp: new Date().toISOString()
+          });
+
+          return res.json({
+            ...uacstaResult,
+            remoteAnswered: true,
+            acceptedBy: 'uacsta',
+            uacsta: {
+              extnumber: cachedUacstaCall.extnumber,
+              cstacallid: cachedUacstaCall.cstacallid,
+              ipaddress: cachedUacstaCall.ipaddress
+            },
+            attemptedChannelIds: uniqueChannelIds
+          });
+        }
+      }
+
       let result = null;
       let acceptedChannelId = null;
 
@@ -814,7 +860,15 @@ class YeastarController {
       res.status(result.success ? 200 : 400).json({
         ...result,
         acceptedChannelId,
-        attemptedChannelIds: uniqueChannelIds
+        attemptedChannelIds: uniqueChannelIds,
+        remoteAnswered: false,
+        acceptedBy: result.success ? 'inbound_control' : null,
+        requiresUaCsta: result.success,
+        uacstaAvailable: Boolean(cachedUacstaCall),
+        uacstaError: uacstaResult && !uacstaResult.success ? uacstaResult.error : null,
+        message: result.success
+          ? 'Inbound route accepted by PBX, but the ringing extension was not remotely answered. Enable uaCSTA on PBX and phone to answer from the inquiry dashboard.'
+          : result.message
       });
     } catch (error) {
       res.status(500).json(this.#handleServiceError(error, 'accept_inbound_call'));

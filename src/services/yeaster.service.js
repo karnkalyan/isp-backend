@@ -9,6 +9,7 @@ const prisma = require('../../prisma/client.js'); // Adjust the path as necessar
 class YeastarService {
   static #tokenCache = new Map();
   static #loginLocks = new Map();
+  static #uacstaCallCache = new Map();
 
   #config = null;
   #api = null;
@@ -1473,6 +1474,45 @@ class YeastarService {
     }
   }
 
+  async acceptUacstaInboundCall({ extnumber, cstacallid, ipaddress }) {
+    try {
+      if (!extnumber) throw new Error('Extension number is required');
+      if (!cstacallid) throw new Error('uaCSTA call ID is required');
+      if (!ipaddress) throw new Error('Phone IP address is required');
+
+      const payload = {
+        extnumber: String(extnumber),
+        cstacallid: String(cstacallid),
+        ipaddress: String(ipaddress)
+      };
+      const result = await this.#apiRequest('uacstacall.accept_inbound', payload);
+
+      if (result.success) {
+        this.#emitWebSocket('call.uacsta_accepted', payload);
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to accept uaCSTA inbound call: ${error.message}`
+      };
+    }
+  }
+
+  static getLatestUacstaCall(ispId, extension) {
+    if (!extension) return null;
+    const key = `${ispId}:${String(extension)}`;
+    const cached = YeastarService.#uacstaCallCache.get(key);
+    if (!cached) return null;
+    if (Date.now() - cached.receivedAt > 2 * 60 * 1000) {
+      YeastarService.#uacstaCallCache.delete(key);
+      return null;
+    }
+    return cached;
+  }
+
   async refuseInboundCall(channelid) {
     try {
       if (!channelid) {
@@ -2691,6 +2731,31 @@ class YeastarService {
         data.caller = event.from || event.caller || event.extension || null;
         data.called = event.to || event.callee || event.number || null;
         data.channelid = event.channelid || null;
+
+        if (eventType === 'uacstacall' && event.extnumber && event.cstacallid && event.ipaddress) {
+          const extensionNumber = String(event.extnumber);
+          const operation = String(event.operation || '').toLowerCase();
+          const cacheKey = `${ispId}:${extensionNumber}`;
+
+          if (operation === 'callstart') {
+            YeastarService.#uacstaCallCache.set(cacheKey, {
+              ispId,
+              extnumber: extensionNumber,
+              cstacallid: String(event.cstacallid),
+              ipaddress: String(event.ipaddress),
+              operation,
+              receivedAt: Date.now(),
+              raw: event
+            });
+          } else if (operation === 'callanswer' || operation === 'callanwer' || operation === 'callover') {
+            YeastarService.#uacstaCallCache.delete(cacheKey);
+          }
+
+          data.caller = extensionNumber;
+          data.called = event.cstacallid;
+          data.channelid = event.ipaddress;
+          data.status = operation || 'uacstacall';
+        }
       }
 
       // Store in database - use only valid fields
