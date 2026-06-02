@@ -287,6 +287,10 @@ async function deleteUser(req, res, next) {
     const id = Number(req.params.id);
     // Removed: const authenticatedIspId = req.ispId;
 
+    if (req.user?.id === id) {
+      return res.status(403).json({ error: 'You cannot delete your own account.' });
+    }
+
     await req.prisma.user.update({
       where: { id }, // No ispId filter here
       data: { isDeleted: true }
