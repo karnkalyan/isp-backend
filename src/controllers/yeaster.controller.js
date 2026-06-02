@@ -27,20 +27,20 @@ class YeastarController {
   }
 
   #logAudit(userId, ispId, action, details) {
-    try {
-      this.prisma.serviceAuditLog.create({
+    this.prisma.serviceLog.create({
+      data: {
+        ispId,
+        serviceCode: 'YEASTAR',
+        operation: action,
+        status: 'success',
         data: {
-          ispId,
           userId,
-          service: 'yeastar',
-          action,
-          details: JSON.stringify(details),
-          createdAt: new Date()
+          ...details
         }
-      });
-    } catch (error) {
+      }
+    }).catch((error) => {
       console.error('[YeastarController] Audit log error:', error);
-    }
+    });
   }
 
 
@@ -229,20 +229,10 @@ class YeastarController {
       const result = await service.addExtension(extensionData);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'extension_add',
-            details: {
-              extension: extensionData.number,
-              username: extensionData.username,
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'extension_add', {
+          extension: extensionData.number,
+          username: extensionData.username || extensionData.extensionName,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -272,20 +262,10 @@ class YeastarController {
       const result = await service.updateExtension(extensionData);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'extension_update',
-            details: {
-              extension: extensionData.number,
-              updatedFields: Object.keys(extensionData).filter(k => k !== 'number'),
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'extension_update', {
+          extension: extensionData.number,
+          updatedFields: Object.keys(extensionData).filter(k => k !== 'number'),
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -315,19 +295,9 @@ class YeastarController {
       const result = await service.deleteExtension(number);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'extension_delete',
-            details: {
-              extension: number,
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'extension_delete', {
+          extension: number,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -421,21 +391,11 @@ class YeastarController {
       const result = await service.addTrunk(trunkData);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'trunk_add',
-            details: {
-              trunkname: trunkData.trunkname,
-              trunktype: trunkData.trunktype,
-              trunkId: result.data?.id,
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'trunk_add', {
+          trunkname: trunkData.trunkname,
+          trunktype: trunkData.trunktype,
+          trunkId: result.data?.id,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -465,20 +425,10 @@ class YeastarController {
       const result = await service.updateTrunk(trunkData);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'trunk_update',
-            details: {
-              trunkId: trunkData.id,
-              updatedFields: Object.keys(trunkData).filter(k => !['id', 'trunktype'].includes(k)),
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'trunk_update', {
+          trunkId: trunkData.id,
+          updatedFields: Object.keys(trunkData).filter(k => !['id', 'trunktype'].includes(k)),
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -508,19 +458,9 @@ class YeastarController {
       const result = await service.deleteTrunk(id);
 
       if (result.success) {
-        // Log audit
-        await this.prisma.serviceAuditLog.create({
-          data: {
-            ispId,
-            userId,
-            service: 'yeastar',
-            action: 'trunk_delete',
-            details: {
-              trunkId: id,
-              timestamp: new Date().toISOString()
-            },
-            createdAt: new Date()
-          }
+        this.#logAudit(userId, ispId, 'trunk_delete', {
+          trunkId: id,
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -1354,20 +1294,10 @@ class YeastarController {
         service.syncSystemStatus()
       ]);
 
-      // Log audit
-      await this.prisma.serviceAuditLog.create({
-        data: {
-          ispId,
-          userId,
-          service: 'yeastar',
-          action: 'sync_all',
-          details: {
-            extensions: extensions.total,
-            trunks: trunks.total,
-            timestamp: new Date().toISOString()
-          },
-          createdAt: new Date()
-        }
+      this.#logAudit(userId, ispId, 'sync_all', {
+        extensions: extensions.total,
+        trunks: trunks.total,
+        timestamp: new Date().toISOString()
       });
 
       res.json({
