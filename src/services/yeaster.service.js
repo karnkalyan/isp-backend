@@ -1506,11 +1506,16 @@ class YeastarService {
     const key = `${ispId}:${String(extension)}`;
     const cached = YeastarService.#uacstaCallCache.get(key);
     if (!cached) return null;
-    if (Date.now() - cached.receivedAt > 2 * 60 * 1000) {
+    if (Date.now() - cached.receivedAt > 30000) {
       YeastarService.#uacstaCallCache.delete(key);
       return null;
     }
     return cached;
+  }
+
+  static clearLatestUacstaCall(ispId, extension) {
+    if (!extension) return;
+    YeastarService.#uacstaCallCache.delete(`${ispId}:${String(extension)}`);
   }
 
   async refuseInboundCall(channelid) {
@@ -2747,6 +2752,7 @@ class YeastarService {
               receivedAt: Date.now(),
               raw: event
             });
+            console.log(`[YEASTAR ${ispId}] Cached uaCSTA ringing call for extension ${extensionNumber}: ${event.cstacallid} @ ${event.ipaddress}`);
           } else if (operation === 'callanswer' || operation === 'callanwer' || operation === 'callover') {
             YeastarService.#uacstaCallCache.delete(cacheKey);
           }

@@ -805,6 +805,9 @@ class YeastarController {
       let uacstaResult = null;
       if (cachedUacstaCall) {
         uacstaResult = await service.acceptUacstaInboundCall(cachedUacstaCall);
+        if (!uacstaResult.success && /10103|channelid does not exist/i.test(String(uacstaResult.error || uacstaResult.message || ''))) {
+          YeastarService.clearLatestUacstaCall(ispId, targetExtension);
+        }
 
         if (uacstaResult.success) {
           this.#logAudit(userId, ispId, 'call_accept_uacsta_inbound', {
@@ -866,8 +869,18 @@ class YeastarController {
         requiresUaCsta: result.success,
         uacstaAvailable: Boolean(cachedUacstaCall),
         uacstaError: uacstaResult && !uacstaResult.success ? uacstaResult.error : null,
+        uacstaAttempt: cachedUacstaCall
+          ? {
+              extnumber: cachedUacstaCall.extnumber,
+              cstacallid: cachedUacstaCall.cstacallid,
+              ipaddress: cachedUacstaCall.ipaddress,
+              ageMs: Date.now() - cachedUacstaCall.receivedAt
+            }
+          : null,
         message: result.success
-          ? 'Inbound route accepted by PBX, but the ringing extension was not remotely answered. Enable uaCSTA on PBX and phone to answer from the inquiry dashboard.'
+          ? (uacstaResult && !uacstaResult.success
+              ? 'Inbound route accepted by PBX, but uaCSTA remote answer failed. Make sure PBX and phone uaCSTA are enabled and click Receive while the extension is still ringing.'
+              : 'Inbound route accepted by PBX, but no uaCSTA ringing event was available to remotely answer the extension. Enable uaCSTA on PBX and phone to answer from the inquiry dashboard.')
           : result.message
       });
     } catch (error) {
