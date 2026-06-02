@@ -1642,9 +1642,9 @@ class YeastarService {
     for (const call of calls) {
       try {
         await this.#prisma.yeastarActiveCall.upsert({
-          where: { callId: call.callid },
+          where: { callid: call.callid },
           update: {
-            channelId: call.channelid,
+            channelid: call.channelid || '',
             extension: call.extension,
             caller: call.caller,
             called: call.called,
@@ -1657,8 +1657,8 @@ class YeastarService {
           },
           create: {
             ispId: this.#config.ispId,
-            callId: call.callid,
-            channelId: call.channelid || '',
+            callid: call.callid,
+            channelid: call.channelid || '',
             extension: call.extension,
             caller: call.caller,
             called: call.called,
@@ -1676,12 +1676,16 @@ class YeastarService {
     }
 
     // Mark ended calls as inactive
-    const activeCallIds = calls.map(c => c.callid);
+    const activeCallIds = calls.map(c => c.callid).filter(Boolean);
+    const staleWhere = activeCallIds.length > 0
+      ? { NOT: { callid: { in: activeCallIds } } }
+      : {};
+
     await this.#prisma.yeastarActiveCall.updateMany({
       where: {
         ispId: this.#config.ispId,
         isActive: true,
-        NOT: { callId: { in: activeCallIds } }
+        ...staleWhere
       },
       data: {
         isActive: false,
