@@ -82,13 +82,13 @@ module.exports = (prisma) => {
 
   router.get('/', checkPermission('customer_read'), listCustomers);
   router.get('/summary', checkPermission('customer_read'), getCustomerStatusSummary); // New endpoint
-  router.get('/:id', checkPermission('customer_read'), getCustomerById);
-  router.put('/:id', checkPermission('customer_update'), updateCustomer);
-  router.delete('/:id', checkPermission('customer_delete'), deleteCustomer);
   router.post('/by-phone',
     checkPermission('customer_read'),
     getCustomerByPhoneNumber
   );
+  router.get('/:id', checkPermission('customer_read'), getCustomerById);
+  router.put('/:id', checkPermission('customer_update'), updateCustomer);
+  router.delete('/:id', checkPermission('customer_delete'), deleteCustomer);
   // Action endpoints
   router.put('/:id/username', checkPermission('customer_update'), changeUsername);
   router.put('/:id/package', checkPermission('customer_update'), changePackage);
