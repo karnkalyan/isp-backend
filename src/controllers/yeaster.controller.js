@@ -102,6 +102,7 @@ class YeastarController {
   // ==================== EXTENSION MANAGEMENT ====================
   async listExtensions(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
       const service = await YeastarService.create(ispId, this.prisma);
       const result = await service.listExtensions();
@@ -116,7 +117,12 @@ class YeastarController {
 
   async getExtensionsFromDB(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const syncResult = await service.listExtensions();
+
       let extensions = await this.prisma.yeastarExtension.findMany({
         where: {
           ispId,
@@ -126,27 +132,22 @@ class YeastarController {
         orderBy: { extensionNumber: 'asc' }
       });
 
-      if (extensions.length === 0) {
-        const service = await YeastarService.create(ispId, this.prisma);
-        const syncResult = await service.listExtensions();
-
-        if (syncResult.success) {
-          extensions = await this.prisma.yeastarExtension.findMany({
-            where: {
-              ispId,
-              isActive: true,
-              isDeleted: false
-            },
-            orderBy: { extensionNumber: 'asc' }
-          });
-        }
-      }
+      const formattedExtensions = extensions.map((extension) => ({
+        ...extension,
+        number: extension.extensionNumber,
+        username: extension.extensionName || extension.extensionNumber,
+        type: extension.extensionType || 'SIP',
+        status: extension.status || 'unknown',
+        registered: String(extension.status || '').toLowerCase() === 'registered'
+      }));
 
       res.json({
         success: true,
-        data: extensions,
-        total: extensions.length,
-        message: `${extensions.length} extensions found in database`
+        data: formattedExtensions,
+        total: formattedExtensions.length,
+        message: syncResult.success
+          ? `${formattedExtensions.length} extensions synced from PBX`
+          : `${formattedExtensions.length} extensions found in database; live sync failed: ${syncResult.error || 'unknown error'}`
       });
     } catch (error) {
       res.status(500).json({
@@ -181,6 +182,7 @@ class YeastarController {
 
   async getExtensionStatus(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
       const { number } = req.params;
       const service = await YeastarService.create(ispId, this.prisma);

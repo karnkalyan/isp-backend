@@ -662,6 +662,7 @@ class ServiceController {
   // Yeastar Operations
   async getYeastarExtensions(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
       const client = await ServiceFactory.getClient(SERVICE_CODES.YEASTAR, ispId);
       const extensions = await client.listExtensions();
