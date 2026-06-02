@@ -764,10 +764,17 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { channelid, channelId } = req.body;
-      const targetChannelId = channelid || channelId;
+      const { channelid, channelId, channelids } = req.body;
+      const channelCandidates = [
+        ...(Array.isArray(channelids) ? channelids : []),
+        channelid,
+        channelId
+      ]
+        .map(id => (id == null ? '' : String(id).trim()))
+        .filter(Boolean);
+      const uniqueChannelIds = [...new Set(channelCandidates)];
 
-      if (!targetChannelId) {
+      if (!uniqueChannelIds.length) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID is required',
@@ -776,17 +783,39 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.acceptInboundCall(targetChannelId);
+      let result = null;
+      let acceptedChannelId = null;
+
+      for (const candidate of uniqueChannelIds) {
+        result = await service.acceptInboundCall(candidate);
+        if (result.success) {
+          acceptedChannelId = candidate;
+          break;
+        }
+      }
+
+      if (!result) {
+        result = {
+          success: false,
+          error: 'Failed to accept inbound call',
+          message: 'No channel IDs were available to try'
+        };
+      }
 
       if (result.success) {
         this.#logAudit(userId, ispId, 'call_accept_inbound', {
-          channelid: targetChannelId,
+          channelid: acceptedChannelId,
+          attemptedChannelIds: uniqueChannelIds,
           result: result.data,
           timestamp: new Date().toISOString()
         });
       }
 
-      res.json(result);
+      res.status(result.success ? 200 : 400).json({
+        ...result,
+        acceptedChannelId,
+        attemptedChannelIds: uniqueChannelIds
+      });
     } catch (error) {
       res.status(500).json(this.#handleServiceError(error, 'accept_inbound_call'));
     }

@@ -326,12 +326,13 @@ class YeastarService {
         response = await this.#api.post(url, params);
       }
 
-      // Check if the response indicates failure via status field[citation:7]
-      if (response.data?.status === 'Failed' && response.data?.errno) {
-        // Extract the error code and get its human-readable message
-        const errorCode = response.data.errno.toString();
-        const errorMessage = this.#getErrorMessage(errorCode);
-        throw new Error(`Yeastar API Error [${errorCode}]: ${errorMessage}`);
+      // Check if the response indicates failure via status field.
+      if (response.data?.status === 'Failed') {
+        const errorCode = response.data.errno ? response.data.errno.toString() : null;
+        const errorMessage = errorCode
+          ? this.#getErrorMessage(errorCode)
+          : response.data?.message || response.data?.error || 'Yeastar API request failed';
+        throw new Error(errorCode ? `Yeastar API Error [${errorCode}]: ${errorMessage}` : errorMessage);
       }
 
       // Handle "Success" status[citation:7]
@@ -1909,35 +1910,37 @@ class YeastarService {
   async #updateActiveCalls(calls) {
     for (const call of calls) {
       try {
-        await this.#prisma.yeastarActiveCall.upsert({
-          where: { callid: call.callid },
-          update: {
-            channelid: call.channelid || '',
-            extension: call.extension,
-            caller: call.caller,
-            called: call.called,
-            direction: call.direction,
-            trunkname: call.trunkname,
-            status: call.status,
-            duration: call.duration,
-            isActive: call.status !== 'ended' && call.status !== 'bye',
-            updatedAt: new Date()
-          },
-          create: {
-            ispId: this.#config.ispId,
-            callid: call.callid,
-            channelid: call.channelid || '',
-            extension: call.extension,
-            caller: call.caller,
-            called: call.called,
-            direction: call.direction,
-            trunkname: call.trunkname,
-            status: call.status,
-            duration: call.duration,
-            isActive: call.status !== 'ended' && call.status !== 'bye',
-            startTime: new Date()
-          }
-        });
+        const activeCallData = {
+          ispId: this.#config.ispId,
+          channelid: call.channelid || '',
+          extension: call.extension,
+          caller: call.caller,
+          called: call.called,
+          direction: call.direction,
+          trunkname: call.trunkname,
+          status: call.status,
+          duration: call.duration,
+          isActive: call.status !== 'ended' && call.status !== 'bye',
+          updatedAt: new Date()
+        };
+
+        try {
+          await this.#prisma.yeastarActiveCall.upsert({
+            where: { callid: call.callid },
+            update: activeCallData,
+            create: {
+              ...activeCallData,
+              callid: call.callid,
+              startTime: new Date()
+            }
+          });
+        } catch (error) {
+          if (error.code !== 'P2002') throw error;
+          await this.#prisma.yeastarActiveCall.updateMany({
+            where: { callid: call.callid },
+            data: activeCallData
+          });
+        }
       } catch (error) {
         console.error(`[YEASTAR] Update active call error:`, error.message);
       }
@@ -2764,16 +2767,26 @@ class YeastarService {
             }
           });
 
-          await prisma.yeastarActiveCall.upsert({
-            where: {
-              callid: data.callid
-            },
-            update: activeCallData,
-            create: {
-              ...activeCallData,
-              startTime: new Date()
-            }
-          });
+          try {
+            await prisma.yeastarActiveCall.upsert({
+              where: {
+                callid: data.callid
+              },
+              update: activeCallData,
+              create: {
+                ...activeCallData,
+                startTime: new Date()
+              }
+            });
+          } catch (error) {
+            if (error.code !== 'P2002') throw error;
+            await prisma.yeastarActiveCall.updateMany({
+              where: {
+                callid: data.callid
+              },
+              data: activeCallData
+            });
+          }
         }
       }
 
