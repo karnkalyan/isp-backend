@@ -1992,7 +1992,7 @@ class YeastarService {
         listener.status = 'connecting';
         listener.connected = false;
 
-        client.setTimeout(15000);
+        client.setKeepAlive(true, 30000);
 
         client.connect(config.tcpPort, config.pbxIp, () => {
           listener.status = 'connected';
@@ -2062,16 +2062,6 @@ class YeastarService {
               await YeastarService.processEvent(ispId, event, prisma);
             }
           }
-        });
-
-        client.on('timeout', () => {
-          const message = `TCP connection timeout to ${config.pbxIp}:${config.tcpPort}`;
-          listener.status = 'error';
-          listener.connected = false;
-          listener.lastError = message;
-          console.error(`[YEASTAR ${ispId}] ${message}`);
-          resolveInitialOnce({ success: false, error: message });
-          client.destroy();
         });
 
         client.on('close', () => {
@@ -2273,6 +2263,7 @@ class YeastarService {
               data.channelid = member.inbound.channelid;
               data.direction = 'inbound';
               data.callpath = member.inbound.callpath;
+              data.extensionNumber = member.inbound.to;
 
               // For inbound calls to IVR/extension, look up extension
               if (member.inbound.to && !isNaN(member.inbound.to)) {
@@ -2298,6 +2289,7 @@ class YeastarService {
             } else if (member.ext) {
               data.memberstatus = member.ext.memberstatus;
               data.channelid = member.ext.channelid;
+              data.extensionNumber = member.ext.number;
 
               // Look up extension ID
               if (member.ext.number) {
@@ -2467,7 +2459,7 @@ class YeastarService {
             ispId,
             callid: data.callid,
             channelid: data.channelid,
-            extension: data.extensionId ? String(data.extensionId) : null,
+            extension: data.extensionNumber || data.called || data.caller || null,
             caller: data.caller,
             called: data.called,
             direction: data.direction,
