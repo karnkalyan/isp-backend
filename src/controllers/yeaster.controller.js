@@ -217,11 +217,11 @@ class YeastarController {
       const userId = req.user.id;  // FIXED: Use req.user.id instead of req.userId
       const extensionData = req.body;
 
-      if (!extensionData.number || !extensionData.username ||
-        !extensionData.registername || !extensionData.registerpassword) {
+      if (!extensionData.number || !(extensionData.username || extensionData.extensionName) ||
+        !extensionData.registerpassword) {
         return res.status(400).json({
           success: false,
-          error: 'Missing required fields: number, username, registername, registerpassword'
+          error: 'Missing required fields: number, username or extensionName, registerpassword'
         });
       }
 

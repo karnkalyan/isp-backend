@@ -621,53 +621,118 @@ class YeastarService {
     };
   }
 
+  #isValidExtensionNumber(number) {
+    return /^\d{1,7}$/.test(String(number || ''));
+  }
+
+  #isValidExtensionUsername(value) {
+    return value !== undefined && value !== null && !/[!%.@:;&"'\\<>`$]/.test(String(value));
+  }
+
+  #isValidRegisterName(value) {
+    return /^[A-Za-z0-9]{1,31}$/.test(String(value || ''));
+  }
+
+  #isValidExtensionPassword(value) {
+    return /^[A-Za-z0-9~^*\-_?]{16,}$/.test(String(value || ''));
+  }
+
+  #buildExtensionPayload(extensionData, { requireAuthFields = false } = {}) {
+    const number = String(extensionData.number || '').trim();
+
+    if (!this.#isValidExtensionNumber(number)) {
+      throw new Error('Extension number must be 1-7 digits');
+    }
+
+    const payload = { number };
+    const displayName = extensionData.extensionName ?? extensionData.username;
+
+    if (displayName !== undefined && displayName !== '') {
+      if (!this.#isValidExtensionUsername(displayName)) {
+        throw new Error('Caller ID name contains invalid characters');
+      }
+      payload.username = String(displayName);
+    } else if (requireAuthFields) {
+      throw new Error('Missing required field: username');
+    }
+
+    if (extensionData.registername !== undefined && extensionData.registername !== '') {
+      if (this.#isValidRegisterName(extensionData.registername)) {
+        payload.registername = String(extensionData.registername);
+      } else if (requireAuthFields) {
+        payload.registername = number;
+      }
+    } else if (requireAuthFields) {
+      payload.registername = number;
+    }
+
+    if (extensionData.registerpassword !== undefined && extensionData.registerpassword !== '') {
+      if (this.#isValidExtensionPassword(extensionData.registerpassword)) {
+        payload.registerpassword = String(extensionData.registerpassword);
+      } else if (requireAuthFields) {
+        throw new Error('Registration password must be at least 16 characters and can only contain letters, numbers, and ~ ^ * - _ ?');
+      }
+    } else if (requireAuthFields) {
+      throw new Error('Missing required field: registerpassword');
+    }
+
+    const optionalFields = [
+      'maxregistrations', 'email', 'mobile', 'hasvoicemail', 'vmsecret',
+      'enablevmtoemail', 'alwaysforward', 'atransferto', 'atransferext',
+      'atransferprefix', 'atransfernum', 'noanswerforward', 'ntransferto',
+      'ntransferext', 'ntransferprefix', 'ntransfernum', 'busyforward',
+      'btransferto', 'btransferext', 'btransferprefix', 'btransfernum',
+      'allowbeingmonitored', 'monitormode', 'ringtimeout', 'maxduration',
+      'dnd', 'callrestriction', 'agentid', 'selectoutroute'
+    ];
+
+    for (const field of optionalFields) {
+      if (extensionData[field] !== undefined && extensionData[field] !== '') {
+        payload[field] = extensionData[field];
+      }
+    }
+
+    if (extensionData.callerid !== undefined && extensionData.callerid !== '') {
+      if (!/^[A-Za-z0-9]{1,31}$/.test(String(extensionData.callerid))) {
+        throw new Error('Caller ID must be alphanumeric and up to 31 characters');
+      }
+      payload.callerid = String(extensionData.callerid);
+    }
+
+    return payload;
+  }
+
   async addExtension(extensionData) {
     try {
-      const required = ['number', 'username', 'registername', 'registerpassword'];
-      for (const field of required) {
-        if (!extensionData[field]) {
-          throw new Error(`Missing required field: ${field}`);
-        }
-      }
+      const payload = this.#buildExtensionPayload(extensionData, { requireAuthFields: true });
 
-      // Validate extension number
-      if (!/^\d{1,7}$/.test(extensionData.number)) {
-        throw new Error('Extension number must be 1-7 digits');
-      }
-
-      const result = await this.#apiRequest('extension.add', extensionData);
+      const result = await this.#apiRequest('extension.add', payload);
 
       if (result.success) {
         // Save to database
-        await this.#prisma.yeastarExtension.create({
-          data: {
+        await this.#prisma.yeastarExtension.upsert({
+          where: {
+            ispId_extensionNumber: {
+              ispId: this.#config.ispId,
+              extensionNumber: payload.number
+            }
+          },
+          update: {
+            pbxExtensionId: `${this.#config.ispId}_${payload.number}`,
+            extensionName: payload.username,
+            extensionType: 'SIP',
+            agentid: payload.agentid || null,
+            isActive: true,
+            isDeleted: false,
+            lastSync: new Date()
+          },
+          create: {
             ispId: this.#config.ispId,
-            extensionId: `${this.#config.ispId}_${extensionData.number}`,
-            extensionNumber: extensionData.number,
-            extensionName: extensionData.username,
-            registername: extensionData.registername,
-            registerpassword: extensionData.registerpassword,
-            callerid: extensionData.callerid || extensionData.number,
-            username: extensionData.username,
-            maxregistrations: extensionData.maxregistrations || 1,
-            email: extensionData.email,
-            mobile: extensionData.mobile,
-            hasvoicemail: extensionData.hasvoicemail || 'off',
-            enablevmtoemail: extensionData.enablevmtoemail || 'off',
-            vmsecret: extensionData.vmsecret || extensionData.number,
-            alwaysforward: extensionData.alwaysforward || 'off',
-            noanswerforward: extensionData.noanswerforward || 'on',
-            ntransferto: extensionData.ntransferto || 'Voicemail',
-            busyforward: extensionData.busyforward || 'on',
-            btransferto: extensionData.btransferto || 'Voicemail',
-            allowbeingmonitored: extensionData.allowbeingmonitored || 'off',
-            monitormode: extensionData.monitormode || 'Disabled',
-            ringtimeout: extensionData.ringtimeout || '30',
-            maxduration: extensionData.maxduration || 'Follow System',
-            dnd: extensionData.dnd || 'off',
-            callrestriction: extensionData.callrestriction || 'off',
-            agentid: extensionData.agentid,
-            selectoutroute: extensionData.selectoutroute,
+            pbxExtensionId: `${this.#config.ispId}_${payload.number}`,
+            extensionNumber: payload.number,
+            extensionName: payload.username,
+            extensionType: 'SIP',
+            agentid: payload.agentid || null,
             isActive: true,
             status: 'Idle',
             lastSync: new Date()
@@ -676,8 +741,8 @@ class YeastarService {
 
         // Emit WebSocket event
         this.#emitWebSocket('extension.added', {
-          number: extensionData.number,
-          username: extensionData.username
+          number: payload.number,
+          username: payload.username
         });
 
         // Refresh extensions list
@@ -700,23 +765,19 @@ class YeastarService {
         throw new Error('Extension number required');
       }
 
-      const result = await this.#apiRequest('extension.update', extensionData);
+      const payload = this.#buildExtensionPayload(extensionData);
+
+      if (Object.keys(payload).length === 1) {
+        throw new Error('No valid extension fields to update');
+      }
+
+      const result = await this.#apiRequest('extension.update', payload);
 
       if (result.success) {
         // Update database
         const updateData = {};
-        const fields = ['username', 'registername', 'registerpassword', 'callerid',
-          'maxregistrations', 'email', 'mobile', 'hasvoicemail', 'vmsecret',
-          'enablevmtoemail', 'alwaysforward', 'atransferto', 'noanswerforward',
-          'ntransferto', 'busyforward', 'btransferto', 'allowbeingmonitored',
-          'monitormode', 'ringtimeout', 'maxduration', 'dnd', 'callrestriction',
-          'agentid', 'selectoutroute'];
-
-        fields.forEach(field => {
-          if (extensionData[field] !== undefined) {
-            updateData[field] = extensionData[field];
-          }
-        });
+        if (payload.username !== undefined) updateData.extensionName = payload.username;
+        if (payload.agentid !== undefined) updateData.agentid = payload.agentid || null;
 
         if (Object.keys(updateData).length > 0) {
           await this.#prisma.yeastarExtension.updateMany({
@@ -726,6 +787,9 @@ class YeastarService {
             },
             data: {
               ...updateData,
+              isActive: true,
+              isDeleted: false,
+              lastSync: new Date(),
               updatedAt: new Date()
             }
           });
