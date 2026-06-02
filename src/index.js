@@ -222,6 +222,10 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Server listening on http://localhost:${PORT}`);
     console.log(`🌐 WebSocket available at ws://localhost:${PORT}/ws`);
     console.log(`CORS Client Origin: ${process.env.CLIENT_ORIGIN}`);
+
+    YeastarService.initializeAllListeners(prisma).catch((error) => {
+        console.error('[YEASTAR] Failed to auto-start listeners:', error.message);
+    });
 });
 
 // Graceful shutdown

@@ -2157,9 +2157,25 @@ class YeastarService {
         global.activeYeastarListeners = new Map();
       }
 
-      // Stop existing listener
-      if (global.activeYeastarListeners.has(ispId)) {
-        YeastarService.stopListener(ispId);
+      const existingListener = global.activeYeastarListeners.get(ispId);
+      if (existingListener && !existingListener.stopped) {
+        if (existingListener.connected || ['connecting', 'reconnecting'].includes(existingListener.status)) {
+          return {
+            success: true,
+            message: 'TCP listener already running',
+            ispId,
+            pbxIp: existingListener.config?.pbxIp || config.pbxIp,
+            tcpPort: existingListener.config?.tcpPort || config.tcpPort,
+            status: existingListener.status,
+            alreadyRunning: true,
+            startedAt: existingListener.startedAt
+          };
+        }
+
+        existingListener.stopped = true;
+        if (existingListener.reconnectTimer) clearTimeout(existingListener.reconnectTimer);
+        existingListener.client?.destroy();
+        global.activeYeastarListeners.delete(ispId);
       }
 
       const listener = {
