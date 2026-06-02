@@ -708,6 +708,259 @@ class YeastarController {
     }
   }
 
+  async getCallParkStatus(req, res) {
+    try {
+      const ispId = req.ispId;
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.getCallParkStatus();
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'callpark_status'));
+    }
+  }
+
+  async acceptInboundCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID is required',
+          message: 'Missing channel ID'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.acceptInboundCall(targetChannelId);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_accept_inbound', {
+          channelid: targetChannelId,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'accept_inbound_call'));
+    }
+  }
+
+  async refuseInboundCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID is required',
+          message: 'Missing channel ID'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.refuseInboundCall(targetChannelId);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_refuse_inbound', {
+          channelid: targetChannelId,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'refuse_inbound_call'));
+    }
+  }
+
+  async muteCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID is required',
+          message: 'Missing channel ID'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.muteCall(targetChannelId);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_mute', {
+          channelid: targetChannelId,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'mute_call'));
+    }
+  }
+
+  async unmuteCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID is required',
+          message: 'Missing channel ID'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.unmuteCall(targetChannelId);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_unmute', {
+          channelid: targetChannelId,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'unmute_call'));
+    }
+  }
+
+  async addCallMember(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId, number, dialpermission } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId || !number) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID and number are required',
+          message: 'Missing required parameters'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.addCallMember(targetChannelId, number, dialpermission);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_add_member', {
+          channelid: targetChannelId,
+          number,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'add_call_member'));
+    }
+  }
+
+  async playPrompt(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { channelid, channelId, prompt, interrupt } = req.body;
+      const targetChannelId = channelid || channelId;
+
+      if (!targetChannelId || !prompt) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID and prompt are required',
+          message: 'Missing required parameters'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.playPrompt(targetChannelId, prompt, interrupt);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_play_prompt', {
+          channelid: targetChannelId,
+          prompt,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'play_prompt'));
+    }
+  }
+
+  async proxyApiRequest(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { action, endpoint, params = {}, method = 'POST' } = req.body;
+      const requestedAction = String(action || endpoint || '').trim();
+      const normalizedMethod = String(method || 'POST').toUpperCase();
+
+      if (!requestedAction) {
+        return res.status(400).json({
+          success: false,
+          error: 'Yeastar API action is required',
+          message: 'Provide action like queue/query, companycontacts/add, voicemail/query'
+        });
+      }
+
+      if (!['GET', 'POST'].includes(normalizedMethod)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Only GET and POST methods are supported for Yeastar API requests'
+        });
+      }
+
+      const normalizedAction = requestedAction.replace(/^\/+|\/+$/g, '').toLowerCase();
+      if (normalizedAction === 'login') {
+        return res.status(400).json({
+          success: false,
+          error: 'Login is handled internally by the Yeastar service'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.apiRequest(requestedAction, params, normalizedMethod);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'yeastar_api_request', {
+          action: requestedAction,
+          method: normalizedMethod,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'yeastar_api_request'));
+    }
+  }
+
   /**
    * Monitor an extension call (listen, whisper, or barge)
    * POST /yeaster/calls/listen

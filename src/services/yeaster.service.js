@@ -538,6 +538,19 @@ class YeastarService {
     }
   }
 
+  async apiRequest(action, params = {}, method = 'POST') {
+    const normalizedAction = String(action || '').trim().replace(/^\/+|\/+$/g, '').replace(/\//g, '.');
+    if (!normalizedAction) {
+      throw new Error('Yeastar API action is required');
+    }
+
+    if (normalizedAction === 'login') {
+      throw new Error('Login is handled by the Yeastar service');
+    }
+
+    return this.#apiRequest(normalizedAction, params, method);
+  }
+
   async getExtension(number) {
     try {
       if (!number) throw new Error('Extension number required');
@@ -1240,7 +1253,7 @@ class YeastarService {
       const params = { channelid };
       if (slot) params.slot = slot;
 
-      const result = await this.#apiRequest('call.park', params);
+      const result = await this.#apiRequest('call.callpark', params);
 
       if (result.success) {
         const parkData = {
@@ -1390,6 +1403,176 @@ class YeastarService {
         success: false,
         error: error.message,
         message: `Failed to whisper into call: ${error.message}`
+      };
+    }
+  }
+
+  async getCallParkStatus() {
+    try {
+      return await this.#apiRequest('call.callpark_status', {});
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to query call park status: ${error.message}`
+      };
+    }
+  }
+
+  async acceptInboundCall(channelid) {
+    try {
+      if (!channelid) {
+        throw new Error('Channel ID is required');
+      }
+
+      const result = await this.#apiRequest('call.accept_inbound', { channelid });
+
+      if (result.success) {
+        this.#emitWebSocket('call.accepted', {
+          channelid,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to accept inbound call: ${error.message}`
+      };
+    }
+  }
+
+  async refuseInboundCall(channelid) {
+    try {
+      if (!channelid) {
+        throw new Error('Channel ID is required');
+      }
+
+      const result = await this.#apiRequest('call.refuse_inbound', { channelid });
+
+      if (result.success) {
+        this.#emitWebSocket('call.refused', {
+          channelid,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to refuse inbound call: ${error.message}`
+      };
+    }
+  }
+
+  async muteCall(channelid) {
+    try {
+      if (!channelid) {
+        throw new Error('Channel ID is required');
+      }
+
+      const result = await this.#apiRequest('call.mute', { channelid });
+
+      if (result.success) {
+        this.#emitWebSocket('call.muted', {
+          channelid,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to mute call: ${error.message}`
+      };
+    }
+  }
+
+  async unmuteCall(channelid) {
+    try {
+      if (!channelid) {
+        throw new Error('Channel ID is required');
+      }
+
+      const result = await this.#apiRequest('call.unmute', { channelid });
+
+      if (result.success) {
+        this.#emitWebSocket('call.unmuted', {
+          channelid,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to unmute call: ${error.message}`
+      };
+    }
+  }
+
+  async addCallMember(channelid, number, dialpermission = '') {
+    try {
+      if (!channelid || !number) {
+        throw new Error('Channel ID and number are required');
+      }
+
+      const params = { channelid, number };
+      if (dialpermission) params.dialpermission = dialpermission;
+
+      const result = await this.#apiRequest('call.add_member', params);
+
+      if (result.success) {
+        this.#emitWebSocket('call.member_added', {
+          channelid,
+          number,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to add call member: ${error.message}`
+      };
+    }
+  }
+
+  async playPrompt(channelid, prompt, interrupt = '') {
+    try {
+      if (!channelid || !prompt) {
+        throw new Error('Channel ID and prompt are required');
+      }
+
+      const params = { channelid, prompt };
+      if (interrupt) params.interrupt = interrupt;
+
+      const result = await this.#apiRequest('call.playprompt', params);
+
+      if (result.success) {
+        this.#emitWebSocket('call.prompt_playing', {
+          channelid,
+          prompt,
+          callid: result.data?.callid
+        });
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to play prompt: ${error.message}`
       };
     }
   }
@@ -2001,12 +2184,14 @@ class YeastarService {
           console.log(`[YEASTAR ${ispId}] TCP Connected to ${config.pbxIp}:${config.tcpPort}`);
           resolveInitialOnce({ success: true });
 
-          const loginPacket = JSON.stringify({
-            action: 'login',
-            username: config.username,
-            secret: config.password,
-            version: '2.0.0'
-          }) + '\r\n\r\n';
+          const loginPacket = [
+            'Action: login',
+            `Username: ${config.username}`,
+            `Secret: ${config.password}`,
+            'Version: 2.0.0',
+            '',
+            ''
+          ].join('\r\n');
 
           client.write(loginPacket);
         });
@@ -2059,6 +2244,13 @@ class YeastarService {
 
           for (const event of completeEvents) {
             if (event.trim()) {
+              listener.events.push({
+                raw: event,
+                receivedAt: new Date().toISOString()
+              });
+              if (listener.events.length > 200) {
+                listener.events = listener.events.slice(-200);
+              }
               await YeastarService.processEvent(ispId, event, prisma);
             }
           }
@@ -2400,6 +2592,39 @@ class YeastarService {
         data.status = event.status;
         data.direction = event.type?.toLowerCase() || 'unknown';
         data.endTime = new Date();
+      } else if (eventType === 'BootUp') {
+        data.status = 'bootup';
+      } else if (eventType === 'ConfigChange') {
+        data.status = event.operation || 'config_change';
+        data.direction = event.type || null;
+        data.called = event.extid || event.trunkname || null;
+      } else if (['Invite', 'Incoming', 'Forward', 'CallForward', 'Tranfer', 'Transfer', 'CallTransfer', 'CallFailed'].includes(eventType)) {
+        data.callid = event.callid;
+        data.status = eventType === 'CallFailed' ? 'failed' : eventType.toLowerCase();
+
+        if (event.members && Array.isArray(event.members)) {
+          for (const member of event.members) {
+            const callMember = member.inbound || member.outbound || member.ext;
+            if (!callMember) continue;
+
+            data.caller = data.caller || callMember.from || callMember.number;
+            data.called = data.called || callMember.to || callMember.number;
+            data.trunkname = data.trunkname || callMember.trunkname;
+            data.channelid = data.channelid || callMember.channelid;
+            data.memberstatus = data.memberstatus || callMember.memberstatus;
+            data.callpath = data.callpath || callMember.callpath;
+
+            if (member.inbound) data.direction = data.direction || 'inbound';
+            if (member.outbound) data.direction = data.direction || 'outbound';
+            if (member.ext) data.extensionNumber = data.extensionNumber || member.ext.number;
+          }
+        }
+      } else if (['PlayPromptEnd', 'satisfaction', 'Satisfaction', 'ConferenceStatus', 'uacstacall'].includes(eventType)) {
+        data.callid = event.callid || event.conferenceid || event.id;
+        data.status = event.status || eventType.toLowerCase();
+        data.caller = event.from || event.caller || event.extension || null;
+        data.called = event.to || event.callee || event.number || null;
+        data.channelid = event.channelid || null;
       }
 
       // Store in database - use only valid fields

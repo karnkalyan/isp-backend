@@ -49,6 +49,27 @@ module.exports = (prisma) => {
   router.post('/calls/unpark', checkPermission('yeaster_manage'), (req, res) =>
     controller.unparkCall(req, res));
 
+  router.get('/calls/park-status', checkPermission('yeaster_read'), (req, res) =>
+    controller.getCallParkStatus(req, res));
+
+  router.post('/calls/accept-inbound', checkPermission('yeaster_manage'), (req, res) =>
+    controller.acceptInboundCall(req, res));
+
+  router.post('/calls/refuse-inbound', checkPermission('yeaster_manage'), (req, res) =>
+    controller.refuseInboundCall(req, res));
+
+  router.post('/calls/mute', checkPermission('yeaster_manage'), (req, res) =>
+    controller.muteCall(req, res));
+
+  router.post('/calls/unmute', checkPermission('yeaster_manage'), (req, res) =>
+    controller.unmuteCall(req, res));
+
+  router.post('/calls/add-member', checkPermission('yeaster_manage'), (req, res) =>
+    controller.addCallMember(req, res));
+
+  router.post('/calls/play-prompt', checkPermission('yeaster_manage'), (req, res) =>
+    controller.playPrompt(req, res));
+
   router.post('/calls/barge', checkPermission('yeaster_manage'), (req, res) =>
     controller.bargeCall(req, res));
 
@@ -156,6 +177,9 @@ module.exports = (prisma) => {
 
   router.get('/listener/events', checkPermission('yeaster_read'), (req, res) =>
     controller.getListenerEvents(req, res));
+
+  router.post('/api/request', checkPermission('yeaster_manage'), (req, res) =>
+    controller.proxyApiRequest(req, res));
 
   /* ========== BULK OPERATIONS ========== */
   router.post('/sync/all', checkPermission('yeaster_manage'), (req, res) =>
