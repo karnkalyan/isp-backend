@@ -21,6 +21,45 @@ function normalizeBranchIds(value, primaryBranchId) {
   return [...new Set(ids)];
 }
 
+function normalizeYeastarExt(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  const trimmed = String(value).trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+async function ensureYeastarExtIsUnique(prisma, ispId, yeastarExt, currentUserId = null) {
+  if (!yeastarExt) return null;
+
+  const existing = await prisma.user.findFirst({
+    where: {
+      yeastarExt,
+      ispId,
+      isDeleted: false,
+      ...(currentUserId ? { id: { not: currentUserId } } : {})
+    },
+    select: { id: true, name: true, email: true }
+  });
+
+  return existing;
+}
+
+function sendDuplicateYeastarExt(res, existing) {
+  return res.status(409).json({
+    error: 'VoIP extension number already exists.',
+    message: `VoIP extension is already assigned to ${existing.name || existing.email}.`
+  });
+}
+
+function isYeastarExtUniqueError(err) {
+  const target = err?.meta?.target;
+  return err?.code === 'P2002' && (
+    target === 'User_ispId_yeastarExt_key' ||
+    (Array.isArray(target) && target.includes('yeastarExt'))
+  );
+}
+
 // Create User
 async function createUser(req, res, next) {
   try {
@@ -33,8 +72,10 @@ async function createUser(req, res, next) {
       branchId, // Primary branch
       branchIds = [], // Additional branches
       password,
+      yeastarExt,
     } = req.body;
     const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
+    const normalizedYeastarExt = normalizeYeastarExt(yeastarExt);
 
     // Removed: const authenticatedIspId = req.ispId;
     // Directly using req.ispId where needed
@@ -46,6 +87,10 @@ async function createUser(req, res, next) {
 
     const hashed = await bcrypt.hash(password, 10);
     const profilePicture = req.file ? `/uploads/${req.file.filename}` : null;
+    const duplicateExtUser = await ensureYeastarExtIsUnique(req.prisma, req.ispId, normalizedYeastarExt);
+    if (duplicateExtUser) {
+      return sendDuplicateYeastarExt(res, duplicateExtUser);
+    }
 
     const user = await req.prisma.user.create({
       data: {
@@ -56,6 +101,7 @@ async function createUser(req, res, next) {
         departmentId: departmentId ? Number(departmentId) : null,
         branchId: branchId ? Number(branchId) : null,
         ispId: req.ispId,
+        yeastarExt: normalizedYeastarExt,
         profilePicture,
         passwordHash: hashed,
         userBranches: {
@@ -71,6 +117,7 @@ async function createUser(req, res, next) {
         departmentId: true,
         branchId: true,
         ispId: true,
+        yeastarExt: true,
         profilePicture: true,
         userBranches: {
           select: { branchId: true }
@@ -81,6 +128,12 @@ async function createUser(req, res, next) {
 
     res.status(201).json(user);
   } catch (err) {
+    if (isYeastarExtUniqueError(err)) {
+      return res.status(409).json({
+        error: 'VoIP extension number already exists.',
+        message: 'VoIP extension is already assigned to another user.'
+      });
+    }
     next(err);
   }
 }
@@ -116,6 +169,7 @@ async function getAllUsers(req, res, next) {
         profilePicture: true,
         createdAt: true,
         ispId: true,
+        yeastarExt: true,
         departmentId: true,
         branchId: true,
         department: {
@@ -199,6 +253,7 @@ async function getUserById(req, res, next) {
         departmentId: true,
         branchId: true,
         ispId: true,
+        yeastarExt: true,
         profilePicture: true,
         userBranches: {
           select: { branchId: true }
@@ -228,9 +283,12 @@ async function updateUser(req, res, next) {
       branchId,
       branchIds, // Array of branch IDs
       password,
-      ispId
+      ispId,
+      yeastarExt
     } = req.body;
     const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
+    const normalizedYeastarExt = normalizeYeastarExt(yeastarExt);
+    const nextIspId = ispId !== undefined ? Number(ispId) : req.ispId;
 
     // Removed: const authenticatedIspId = req.ispId;
 
@@ -241,6 +299,7 @@ async function updateUser(req, res, next) {
       ...(departmentId !== undefined && { departmentId: departmentId ? Number(departmentId) : null }),
       ...(branchId !== undefined && { branchId: branchId ? Number(branchId) : null }),
       ...(ispId !== undefined && { ispId: Number(ispId) }),
+      ...(yeastarExt !== undefined && { yeastarExt: normalizedYeastarExt }),
       ...(password !== undefined && { passwordHash: await bcrypt.hash(password, 10) }),
       ...(req.file && { profilePicture: `/uploads/${req.file.filename}` }),
       ...(branchIds !== undefined && {
@@ -255,6 +314,13 @@ async function updateUser(req, res, next) {
       data.roleId = Number(roleId);
     }
 
+    if (yeastarExt !== undefined) {
+      const duplicateExtUser = await ensureYeastarExtIsUnique(req.prisma, nextIspId, normalizedYeastarExt, id);
+      if (duplicateExtUser) {
+        return sendDuplicateYeastarExt(res, duplicateExtUser);
+      }
+    }
+
     const updated = await req.prisma.user.update({
       where: { id }, // No ispId filter here
       data,
@@ -267,6 +333,7 @@ async function updateUser(req, res, next) {
         departmentId: true,
         branchId: true,
         ispId: true,
+        yeastarExt: true,
         profilePicture: true,
         userBranches: {
           select: { branchId: true }
@@ -277,6 +344,12 @@ async function updateUser(req, res, next) {
 
     res.json({ message: 'User updated successfully', user: updated });
   } catch (err) {
+    if (isYeastarExtUniqueError(err)) {
+      return res.status(409).json({
+        error: 'VoIP extension number already exists.',
+        message: 'VoIP extension is already assigned to another user.'
+      });
+    }
     next(err);
   }
 }

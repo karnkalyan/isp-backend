@@ -41,6 +41,7 @@ const createUserValidation = [
   body('roleId').isInt({ gt: 0 }).withMessage('Role ID must be a positive integer.'), // Assuming roleId is sent as an integer string
   body('ispId').optional().isInt({ gt: 0 }).withMessage('ISP ID must be a positive integer if provided.'),
   body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
+  body('yeastarExt').optional({ values: 'falsy' }).trim().matches(/^\d{1,7}$/).withMessage('VoIP extension must be 1 to 7 digits.'),
   body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
   body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
   body('branchIds').optional({ values: 'falsy' }).custom((value) => {
@@ -64,6 +65,7 @@ const updateUserValidation = [
   body('roleId').optional().isInt({ gt: 0 }).withMessage('Role ID must be a positive integer if provided.'),
   body('ispId').optional().isInt({ gt: 0 }).withMessage('ISP ID must be a positive integer if provided.'),
   body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
+  body('yeastarExt').optional({ values: 'falsy' }).trim().matches(/^\d{1,7}$/).withMessage('VoIP extension must be 1 to 7 digits.'),
   body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
   body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
   body('branchIds').optional({ values: 'falsy' }).custom((value) => {
