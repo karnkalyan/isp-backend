@@ -1,9 +1,16 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
+const { execSync } = require('child_process');
 
 const prisma = new PrismaClient();
 
+function syncDatabaseSchema() {
+    console.log('Syncing Prisma schema...');
+    execSync('npx prisma db push --accept-data-loss --skip-generate', { stdio: 'inherit' });
+}
+
 async function main() {
+    syncDatabaseSchema();
     console.log('🚀 Starting full database reset and seed...');
 
     // --- 1. Cleanup all tables (order is important for FKs) ---
