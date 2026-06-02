@@ -161,7 +161,7 @@ class WebSocketManager {
             // 10. Send initial data
             await this.sendInitialData(clientId, user.id, user.ispId);
 
-            console.log(`✅ [WS Auth] Client ${clientId} authenticated as ${user.email} (ISP: ${user.id})`);
+            console.log(`✅ [WS Auth] Client ${clientId} authenticated as ${user.email} (ISP: ${user.ispId})`);
             // console.log('users', authUser)
         } catch (error) {
             console.error(`❌ [WS Auth Error] ${clientId}:`, error.message);
@@ -278,12 +278,17 @@ class WebSocketManager {
 
         const subscribed = [];
 
-        for (const channel of channels) {
+        for (let channel of channels) {
             try {
                 // Double-check that channel is defined and is a string
                 if (!channel || typeof channel !== 'string') {
                     console.warn(`⚠️ [WS Subscribe] Invalid channel for client ${clientId}:`, channel);
                     continue;
+                }
+
+                if (channel.startsWith('isp_') && channel !== `isp_${client.ispId}`) {
+                    console.warn(`[WS Subscribe] Rewriting ${channel} to authenticated room isp_${client.ispId} for client ${clientId}`);
+                    channel = `isp_${client.ispId}`;
                 }
 
                 // Check permissions for restricted channels
@@ -882,3 +887,4 @@ class WebSocketManager {
 }
 
 module.exports = WebSocketManager;
+

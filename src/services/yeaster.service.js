@@ -7,6 +7,9 @@ const prisma = require('../../prisma/client.js'); // Adjust the path as necessar
 
 
 class YeastarService {
+  static #tokenCache = new Map();
+  static #loginLocks = new Map();
+
   #config = null;
   #api = null;
   #token = null;
@@ -29,8 +32,11 @@ class YeastarService {
       }
     });
 
-    // Setup heartbeat to keep token alive (every 15 minutes)
-    this.#setupHeartbeat();
+    const cachedToken = YeastarService.#tokenCache.get(config.ispId);
+    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
+      this.#token = cachedToken.token;
+      this.#tokenExpiry = cachedToken.expiresAt;
+    }
   }
 
   /* ========== FACTORY & CONFIGURATION ========== */
@@ -182,6 +188,10 @@ class YeastarService {
       if (response.data?.status === 'Success' && response.data?.token) {
         this.#token = response.data.token;
         this.#tokenExpiry = Date.now() + (30 * 60 * 1000); // 30 minutes
+        YeastarService.#tokenCache.set(this.#config.ispId, {
+          token: this.#token,
+          expiresAt: this.#tokenExpiry
+        });
 
         console.log(`[YEASTAR ${this.#config.ispId}] Login successful`);
 
@@ -257,8 +267,25 @@ class YeastarService {
 
 
   async #ensureToken() {
+    const cachedToken = YeastarService.#tokenCache.get(this.#config.ispId);
+    if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
+      this.#token = cachedToken.token;
+      this.#tokenExpiry = cachedToken.expiresAt;
+      return this.#token;
+    }
+
     if (!this.#token || Date.now() > this.#tokenExpiry - 60000) {
-      await this.#login();
+      if (!YeastarService.#loginLocks.has(this.#config.ispId)) {
+        YeastarService.#loginLocks.set(this.#config.ispId, this.#login().finally(() => {
+          YeastarService.#loginLocks.delete(this.#config.ispId);
+        }));
+      }
+      await YeastarService.#loginLocks.get(this.#config.ispId);
+      const freshToken = YeastarService.#tokenCache.get(this.#config.ispId);
+      if (freshToken) {
+        this.#token = freshToken.token;
+        this.#tokenExpiry = freshToken.expiresAt;
+      }
     }
     return this.#token;
   }
@@ -332,6 +359,7 @@ class YeastarService {
         console.warn(`[YEASTAR ${this.#config.ispId}] Token issue detected, re-authenticating`);
         this.#token = null;
         this.#tokenExpiry = null;
+        YeastarService.#tokenCache.delete(this.#config.ispId);
         return this.#apiRequest(action, params, method); // Single retry
       }
 
@@ -2199,7 +2227,8 @@ class YeastarService {
         client.on('data', async (data) => {
           buffer += data.toString();
 
-          let start = 0;
+          let start = -1;
+          let consumed = 0;
           let depth = 0;
           let inString = false;
           let escapeNext = false;
@@ -2225,12 +2254,16 @@ class YeastarService {
             }
 
             if (!inString) {
-              if (char === '{') depth++;
+              if (char === '{') {
+                if (depth === 0) start = i;
+                depth++;
+              }
               if (char === '}') {
                 depth--;
-                if (depth === 0) {
+                if (depth === 0 && start >= 0) {
                   const jsonStr = buffer.substring(start, i + 1);
-                  start = i + 1;
+                  consumed = i + 1;
+                  start = -1;
 
                   if (jsonStr.trim()) {
                     completeEvents.push(jsonStr);
@@ -2240,7 +2273,7 @@ class YeastarService {
             }
           }
 
-          buffer = buffer.substring(start);
+          buffer = buffer.substring(consumed);
 
           for (const event of completeEvents) {
             if (event.trim()) {
