@@ -1395,6 +1395,59 @@ class YeastarService {
   }
 
   /**
+   * Monitor an extension call using Yeastar listen/whisper/barge modes.
+   * @param {string} monitor - Extension number that will monitor the call
+   * @param {string} extension - Extension number being monitored
+   * @param {string} type - listen, whisper, or barge
+   * @returns {Promise<Object>} Monitor result
+   */
+  async monitorCall(monitor, extension, type = 'listen') {
+    try {
+      if (!monitor || !extension) {
+        throw new Error('Monitor and extension are required');
+      }
+
+      const monitorType = String(type || 'listen').toLowerCase();
+      if (!['listen', 'whisper', 'barge'].includes(monitorType)) {
+        throw new Error('Monitor type must be listen, whisper, or barge');
+      }
+
+      const result = await this.#apiRequest('call.listen', {
+        monitor,
+        extension,
+        type: monitorType
+      });
+
+      if (result.success) {
+        const monitorData = {
+          monitor,
+          extension,
+          type: monitorType,
+          monitoredTime: new Date().toISOString(),
+          callid: result.data?.callid
+        };
+
+        this.#emitWebSocket('call.monitored', monitorData);
+
+        return {
+          success: true,
+          data: monitorData,
+          message: 'Call monitor started successfully'
+        };
+      }
+
+      throw new Error('Failed to monitor call');
+    } catch (error) {
+      console.error(`[YEASTAR ${this.#config.ispId}] monitorCall error:`, error.message);
+      return {
+        success: false,
+        error: error.message,
+        message: `Failed to monitor call: ${error.message}`
+      };
+    }
+  }
+
+  /**
    * Start a conference call
    * @param {string} extension - The extension starting the conference
    * @param {Array} participants - Array of extension numbers to include
@@ -2111,11 +2164,26 @@ class YeastarService {
 
       // Emit WebSocket event
       if (global.wsManager) {
-        global.wsManager.emitEvent(`yeastar.${eventType.toLowerCase()}`, {
+        const normalizedType = String(eventType).toLowerCase();
+        const eventPayload = {
           ispId,
           eventType,
           data: event,
           timestamp: new Date().toISOString()
+        };
+        const roomName = `isp_${ispId}`;
+        const eventNames = [
+          `yeastar.${normalizedType}`,
+          `yeastar.${normalizedType.replace(/status$/, '.status')}`,
+          'yeastar.event'
+        ];
+
+        eventNames.forEach((name) => {
+          if (typeof global.wsManager.broadcastToRoom === 'function') {
+            global.wsManager.broadcastToRoom(roomName, name, eventPayload);
+          } else {
+            global.wsManager.emitEvent(name, eventPayload);
+          }
         });
       }
 

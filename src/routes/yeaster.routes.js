@@ -55,6 +55,9 @@ module.exports = (prisma) => {
   router.post('/calls/whisper', checkPermission('yeaster_manage'), (req, res) =>
     controller.whisperCall(req, res));
 
+  router.post('/calls/listen', checkPermission('yeaster_manage'), (req, res) =>
+    controller.monitorCall(req, res));
+
   router.post('/calls/conference', checkPermission('yeaster_manage'), (req, res) =>
     controller.startConference(req, res));
 

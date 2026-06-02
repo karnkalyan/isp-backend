@@ -709,6 +709,43 @@ class YeastarController {
   }
 
   /**
+   * Monitor an extension call (listen, whisper, or barge)
+   * POST /yeaster/calls/listen
+   */
+  async monitorCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user.id;
+      const { monitor, extension, type = 'listen' } = req.body;
+
+      if (!monitor || !extension) {
+        return res.status(400).json({
+          success: false,
+          error: 'Monitor and extension are required',
+          message: 'Missing monitor or extension'
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.monitorCall(monitor, extension, type);
+
+      if (result.success) {
+        this.#logAudit(userId, ispId, 'call_monitor', {
+          monitor,
+          extension,
+          type,
+          result: result.data,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'monitor_call'));
+    }
+  }
+
+  /**
    * Start a conference call
    * POST /yeaster/calls/conference
    */
@@ -1081,9 +1118,10 @@ class YeastarController {
   async transferCall(req, res) {
     try {
       const ispId = req.ispId;
-      const { channelId, number, dialpermission } = req.body;
+      const { channelId, channelid, number, dialpermission } = req.body;
+      const targetChannelId = channelid || channelId;
 
-      if (!channelId || !number) {
+      if (!targetChannelId || !number) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID and target number are required'
@@ -1091,7 +1129,7 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.transferCall(channelId, number, dialpermission);
+      const result = await service.transferCall(targetChannelId, number, dialpermission);
       res.json(result);
     } catch (error) {
       res.status(500).json({
@@ -1104,9 +1142,10 @@ class YeastarController {
   async attendedTransfer(req, res) {
     try {
       const ispId = req.ispId;
-      const { channelId, tonumber, dialpermission } = req.body;
+      const { channelId, channelid, tonumber, dialpermission } = req.body;
+      const targetChannelId = channelid || channelId;
 
-      if (!channelId || !tonumber) {
+      if (!targetChannelId || !tonumber) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID and target number are required'
@@ -1114,7 +1153,7 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.attendedTransfer(channelId, tonumber, dialpermission);
+      const result = await service.attendedTransfer(targetChannelId, tonumber, dialpermission);
       res.json(result);
     } catch (error) {
       res.status(500).json({

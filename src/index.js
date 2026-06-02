@@ -212,6 +212,7 @@ const server = http.createServer(app);
 
 // Create WebSocket server
 const webSocketManager = new WebSocketManager(server);
+global.wsManager = webSocketManager;
 
 // Store WebSocket manager in app for route access if needed
 app.set('webSocketManager', webSocketManager);

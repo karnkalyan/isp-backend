@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const EventEmitter = require('events');
 const prisma = require('../../prisma/client');
+const YeastarService = require('../services/yeaster.service');
 
 const ACCESS_SECRET = process.env.ACCESS_SECRET;
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
@@ -92,7 +93,7 @@ class WebSocketManager {
                 role: user.role?.name ?? null, // ✅ SAFE, EXPLICIT
                 permissions: user.role?.permissions.map(p => p.name) ?? [],
                 ispId: user.ispId,
-                extId: user.yeasterExt
+                extId: user.yeastarExt
             };
 
 
@@ -117,6 +118,8 @@ class WebSocketManager {
                 userId: user.id,
                 userName: user.name,
                 userEmail: user.email,
+                ispId: user.ispId,
+                extId: user.yeastarExt,
                 permissions: new Set(permissions),
                 subscriptions: new Set(),
                 lastHeartbeat: Date.now(),
@@ -395,8 +398,9 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.listener.start.request', {
-                    ispId: data.ispId || client.ispId,
-                    userId: client.userId
+                    ispId: client.ispId,
+                    userId: client.userId,
+                    clientId
                 });
                 break;
 
@@ -406,8 +410,9 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.listener.stop.request', {
-                    ispId: data.ispId || client.ispId,
-                    userId: client.userId
+                    ispId: client.ispId,
+                    userId: client.userId,
+                    clientId
                 });
                 break;
 
@@ -423,7 +428,7 @@ class WebSocketManager {
                 }
                 this.eventEmitter.emit('yeastar.call.hangup.request', {
                     ...data,
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -439,7 +444,7 @@ class WebSocketManager {
                 }
                 this.eventEmitter.emit('yeastar.call.transfer.request', {
                     ...data,
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -451,7 +456,7 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.extension.refresh.request', {
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -463,7 +468,7 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.extensions.delete.all.request', {
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -475,7 +480,7 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.trunks.delete.all.request', {
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -487,7 +492,7 @@ class WebSocketManager {
                     return;
                 }
                 this.eventEmitter.emit('yeastar.data.refresh.request', {
-                    ispId: data.ispId || client.ispId,
+                    ispId: client.ispId,
                     userId: client.userId
                 });
                 break;
@@ -530,6 +535,34 @@ class WebSocketManager {
 
     // ===================== EVENT BROADCASTING =====================
     setupEventListeners() {
+        this.eventEmitter.on('yeastar.listener.start.request', async (data) => {
+            const result = await YeastarService.startListener(data.ispId, prisma);
+            this.sendToClient(data.clientId, 'command.response', {
+                command: 'yeastar.listener.start',
+                success: result.success,
+                message: result.message || result.error,
+                data: result
+            });
+            this.broadcastToRoom(`isp_${data.ispId}`, result.success ? 'yeastar.listener.started' : 'yeastar.listener.failed', {
+                ...result,
+                ispId: data.ispId
+            });
+        });
+
+        this.eventEmitter.on('yeastar.listener.stop.request', (data) => {
+            const result = YeastarService.stopListener(data.ispId);
+            this.sendToClient(data.clientId, 'command.response', {
+                command: 'yeastar.listener.stop',
+                success: result.success,
+                message: result.message || result.error,
+                data: result
+            });
+            this.broadcastToRoom(`isp_${data.ispId}`, 'yeastar.listener.stopped', {
+                ...result,
+                ispId: data.ispId
+            });
+        });
+
         // Yeastar Events
         this.eventEmitter.on('yeastar.call.start', (data) => {
             this.broadcastToRoom(`isp_${data.ispId}`, 'yeastar.call.start', data);
