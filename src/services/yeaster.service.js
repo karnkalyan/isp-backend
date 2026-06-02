@@ -497,20 +497,31 @@ class YeastarService {
   async #syncExtensionsToDB(extensions) {
     for (const ext of extensions) {
       try {
+        const extensionNumber = String(ext.number || '').trim();
+        if (!extensionNumber) continue;
+
         await this.#prisma.yeastarExtension.upsert({
-          where: { extensionId: `${this.#config.ispId}_${ext.number}` },
+          where: {
+            ispId_extensionNumber: {
+              ispId: this.#config.ispId,
+              extensionNumber
+            }
+          },
           update: {
-            extensionName: ext.username || ext.number,
+            pbxExtensionId: `${this.#config.ispId}_${extensionNumber}`,
+            extensionName: ext.username || extensionNumber,
             extensionType: ext.type || 'SIP',
             status: ext.status || 'Idle',
             agentid: ext.agentid || null,
+            isActive: true,
+            isDeleted: false,
             lastSync: new Date()
           },
           create: {
             ispId: this.#config.ispId,
-            extensionId: `${this.#config.ispId}_${ext.number}`,
-            extensionNumber: ext.number,
-            extensionName: ext.username || ext.number,
+            pbxExtensionId: `${this.#config.ispId}_${extensionNumber}`,
+            extensionNumber,
+            extensionName: ext.username || extensionNumber,
             extensionType: ext.type || 'SIP',
             status: ext.status || 'Idle',
             agentid: ext.agentid || null,

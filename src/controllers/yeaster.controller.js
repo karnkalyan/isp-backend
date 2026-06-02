@@ -117,7 +117,7 @@ class YeastarController {
   async getExtensionsFromDB(req, res) {
     try {
       const ispId = req.ispId;
-      const extensions = await this.prisma.yeastarExtension.findMany({
+      let extensions = await this.prisma.yeastarExtension.findMany({
         where: {
           ispId,
           isActive: true,
@@ -125,6 +125,22 @@ class YeastarController {
         },
         orderBy: { extensionNumber: 'asc' }
       });
+
+      if (extensions.length === 0) {
+        const service = await YeastarService.create(ispId, this.prisma);
+        const syncResult = await service.listExtensions();
+
+        if (syncResult.success) {
+          extensions = await this.prisma.yeastarExtension.findMany({
+            where: {
+              ispId,
+              isActive: true,
+              isDeleted: false
+            },
+            orderBy: { extensionNumber: 'asc' }
+          });
+        }
+      }
 
       res.json({
         success: true,
