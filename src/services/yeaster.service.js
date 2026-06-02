@@ -100,7 +100,8 @@ class YeastarService {
   static async getServiceStatus(ispId, prisma) {
     try {
       const config = await this.getConfig(ispId, prisma);
-      const isListenerActive = global.activeYeastarListeners?.has(ispId);
+      const listener = global.activeYeastarListeners?.get(ispId);
+      const isListenerActive = !!listener?.connected;
 
       let apiConnected = false;
       let apiError = null;
@@ -128,10 +129,12 @@ class YeastarService {
         apiPort: config.apiPort,
         tcpPort: config.tcpPort,
         listenerActive: isListenerActive,
+        listenerStatus: listener?.status || 'inactive',
+        listenerError: listener?.lastError || null,
         apiConnected,
         apiError,
         systemStatus,
-        uptime: isListenerActive ? Date.now() - (global.activeYeastarListeners?.get(ispId)?.startedAt || Date.now()) : null,
+        uptime: listener ? Date.now() - (listener.startedAt || Date.now()) : null,
         lastUpdated: new Date().toISOString()
       };
     } catch (error) {
@@ -1779,109 +1782,173 @@ class YeastarService {
         YeastarService.stopListener(ispId);
       }
 
-      const client = new net.Socket();
-      let buffer = '';
+      const listener = {
+        client: null,
+        config,
+        startedAt: Date.now(),
+        events: [],
+        status: 'connecting',
+        connected: false,
+        stopped: false,
+        lastError: null,
+        reconnectTimer: null
+      };
+
+      global.activeYeastarListeners.set(ispId, listener);
+
+      let initialResolved = false;
+      let resolveInitialConnection;
+      const initialConnection = new Promise((resolve) => {
+        resolveInitialConnection = resolve;
+        setTimeout(() => {
+          if (!initialResolved) {
+            initialResolved = true;
+            resolve({
+              success: false,
+              error: `TCP connection timeout to ${config.pbxIp}:${config.tcpPort}`
+            });
+          }
+        }, 15000);
+      });
+
+      const resolveInitialOnce = (result) => {
+        if (!initialResolved) {
+          initialResolved = true;
+          resolveInitialConnection(result);
+        }
+      };
 
       const connectToPBX = () => {
-        client.connect(config.tcpPort, config.pbxIp, () => {
-          console.log(`[YEASTAR ${ispId}] TCP Connected to ${config.pbxIp}:${config.tcpPort}`);
+        if (listener.stopped) return;
 
-          // Send TCP login with CLEARTEXT password (per official docs)
+        let buffer = '';
+        const client = new net.Socket();
+        listener.client = client;
+        listener.status = 'connecting';
+        listener.connected = false;
+
+        client.setTimeout(15000);
+
+        client.connect(config.tcpPort, config.pbxIp, () => {
+          listener.status = 'connected';
+          listener.connected = true;
+          listener.lastError = null;
+          console.log(`[YEASTAR ${ispId}] TCP Connected to ${config.pbxIp}:${config.tcpPort}`);
+          resolveInitialOnce({ success: true });
+
           const loginPacket = JSON.stringify({
             action: 'login',
             username: config.username,
-            secret: config.password,  // Use CLEAR-TEXT password
+            secret: config.password,
             version: '2.0.0'
-          }) + '\r\n\r\n';  // Try with JSON + delimiter
+          }) + '\r\n\r\n';
 
           client.write(loginPacket);
         });
-      };
-      client.on('data', async (data) => {
-        buffer += data.toString();
 
-        // Check for complete JSON objects
-        let start = 0;
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-        const completeEvents = [];
+        client.on('data', async (data) => {
+          buffer += data.toString();
 
-        for (let i = 0; i < buffer.length; i++) {
-          const char = buffer[i];
+          let start = 0;
+          let depth = 0;
+          let inString = false;
+          let escapeNext = false;
+          const completeEvents = [];
 
-          if (escapeNext) {
-            escapeNext = false;
-            continue;
-          }
+          for (let i = 0; i < buffer.length; i++) {
+            const char = buffer[i];
 
-          if (char === '\\') {
-            escapeNext = true;
-            continue;
-          }
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
 
-          if (char === '"' && !inString) {
-            inString = true;
-          } else if (char === '"' && inString) {
-            inString = false;
-          }
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
 
-          if (!inString) {
-            if (char === '{') depth++;
-            if (char === '}') {
-              depth--;
-              if (depth === 0) {
-                // Complete JSON object found
-                const jsonStr = buffer.substring(start, i + 1);
-                start = i + 1;
+            if (char === '"' && !inString) {
+              inString = true;
+            } else if (char === '"' && inString) {
+              inString = false;
+            }
 
-                // Skip empty strings
-                if (jsonStr.trim()) {
-                  completeEvents.push(jsonStr);
+            if (!inString) {
+              if (char === '{') depth++;
+              if (char === '}') {
+                depth--;
+                if (depth === 0) {
+                  const jsonStr = buffer.substring(start, i + 1);
+                  start = i + 1;
+
+                  if (jsonStr.trim()) {
+                    completeEvents.push(jsonStr);
+                  }
                 }
               }
             }
           }
-        }
 
-        // Keep remaining incomplete data in buffer
-        buffer = buffer.substring(start);
+          buffer = buffer.substring(start);
 
-        // Process all complete events
-        for (const event of completeEvents) {
-          if (event.trim()) {
-            await YeastarService.processEvent(ispId, event, prisma);
+          for (const event of completeEvents) {
+            if (event.trim()) {
+              await YeastarService.processEvent(ispId, event, prisma);
+            }
           }
-        }
-      });
+        });
 
-      client.on('close', () => {
-        console.warn(`[YEASTAR ${ispId}] TCP Connection closed. Reconnecting in 10s...`);
-        setTimeout(connectToPBX, 10000);
-      });
+        client.on('timeout', () => {
+          const message = `TCP connection timeout to ${config.pbxIp}:${config.tcpPort}`;
+          listener.status = 'error';
+          listener.connected = false;
+          listener.lastError = message;
+          console.error(`[YEASTAR ${ispId}] ${message}`);
+          resolveInitialOnce({ success: false, error: message });
+          client.destroy();
+        });
 
-      client.on('error', (err) => {
-        console.error(`[YEASTAR ${ispId}] TCP Error:`, err.message);
-      });
+        client.on('close', () => {
+          if (listener.stopped) return;
 
+          listener.status = 'reconnecting';
+          listener.connected = false;
+          console.warn(`[YEASTAR ${ispId}] TCP Connection closed. Reconnecting in 10s...`);
+          listener.reconnectTimer = setTimeout(connectToPBX, 10000);
+        });
 
-
-      // Store listener
-      global.activeYeastarListeners.set(ispId, {
-        client,
-        config,
-        startedAt: Date.now(),
-        events: []
-      });
+        client.on('error', (err) => {
+          listener.status = 'error';
+          listener.connected = false;
+          listener.lastError = err.message;
+          console.error(`[YEASTAR ${ispId}] TCP Error:`, err.message);
+          resolveInitialOnce({ success: false, error: err.message });
+        });
+      };
 
       connectToPBX();
+      const initialResult = await initialConnection;
+
+      if (!initialResult.success) {
+        YeastarService.stopListener(ispId);
+        return {
+          success: false,
+          error: initialResult.error,
+          message: 'TCP listener failed to connect',
+          ispId,
+          pbxIp: config.pbxIp,
+          tcpPort: config.tcpPort
+        };
+      }
 
       return {
         success: true,
         message: 'TCP listener started',
         ispId,
         pbxIp: config.pbxIp,
-        tcpPort: config.tcpPort
+        tcpPort: config.tcpPort,
+        status: listener.status
       };
     } catch (error) {
       console.error(`[YEASTAR] Start listener failed:`, error.message);
@@ -2261,7 +2328,9 @@ class YeastarService {
   static stopListener(ispId) {
     if (global.activeYeastarListeners?.has(ispId)) {
       const listener = global.activeYeastarListeners.get(ispId);
-      listener.client.destroy();
+      listener.stopped = true;
+      if (listener.reconnectTimer) clearTimeout(listener.reconnectTimer);
+      listener.client?.destroy();
       global.activeYeastarListeners.delete(ispId);
       console.log(`[YEASTAR ${ispId}] Listener stopped`);
     }
@@ -2278,7 +2347,10 @@ class YeastarService {
           tcpPort: data.config.tcpPort,
           startedAt: data.startedAt,
           uptime: Date.now() - data.startedAt,
-          eventCount: data.events?.length || 0
+          eventCount: data.events?.length || 0,
+          status: data.status || 'unknown',
+          connected: !!data.connected,
+          lastError: data.lastError || null
         });
       }
     }
