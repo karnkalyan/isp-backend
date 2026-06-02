@@ -483,25 +483,35 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { extension, number, dialpermission = 'permit' } = req.body;
+      const {
+        extension,
+        number,
+        caller = extension,
+        callee = number,
+        dialpermission,
+        autoanswer = 'no'
+      } = req.body;
+      const callerNumber = String(caller || '').trim();
+      const calleeNumber = String(callee || '').trim();
 
-      if (!extension || !number) {
+      if (!callerNumber || !calleeNumber) {
         return res.status(400).json({
           success: false,
-          error: 'Extension and destination number are required',
+          error: 'Caller and callee numbers are required',
           message: 'Missing required parameters'
         });
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.makeCall(extension, number, dialpermission);
+      const result = await service.makeCall(callerNumber, calleeNumber, { dialpermission, autoanswer });
 
       if (result.success) {
         // Log audit
         this.#logAudit(userId, ispId, 'call_make', {
-          extension,
-          number,
+          extension: callerNumber,
+          number: calleeNumber,
           dialpermission,
+          autoanswer,
           result: result.data,
           timestamp: new Date().toISOString()
         });

@@ -328,7 +328,7 @@ class YeastarService {
       console.error(`[YEASTAR ${this.#config.ispId}] API Error ${action}:`, error.message);
 
       // Special handling for token errors - retry once
-      if (/token|expired|20006|20005|10004/i.test(error.message) && this.#token !== null) {
+      if (/token|expired|20006|20005|20004/i.test(error.message) && this.#token !== null) {
         console.warn(`[YEASTAR ${this.#config.ispId}] Token issue detected, re-authenticating`);
         this.#token = null;
         this.#tokenExpiry = null;
@@ -1137,24 +1137,35 @@ class YeastarService {
 
 
 
-  async makeCall(extension, number, dialpermission = 'permit') {
+  async makeCall(extension, number, options = {}) {
     try {
-      if (!extension || !number) {
+      const caller = String(extension || '').trim();
+      const callee = String(number || '').trim();
+      const autoanswer = options.autoanswer === 'yes' ? 'yes' : 'no';
+      const dialpermission = String(options.dialpermission || '').trim();
+
+      if (!caller || !callee) {
         throw new Error('Extension and destination number are required');
       }
 
-      const result = await this.#apiRequest('call.dial', {
-        number: extension,
-        dial: number,
-        dialpermission: dialpermission
-      });
+      const payload = {
+        caller,
+        callee,
+        autoanswer
+      };
+
+      if (dialpermission) {
+        payload.dialpermission = dialpermission;
+      }
+
+      const result = await this.#apiRequest('call.dial', payload);
 
       if (result.success) {
         const callData = {
           callid: result.data?.callid,
           channelid: result.data?.channelid,
-          caller: extension,
-          called: number,
+          caller,
+          called: callee,
           direction: 'outbound',
           status: 'dialing',
           startTime: new Date().toISOString()
@@ -1166,7 +1177,7 @@ class YeastarService {
         return {
           success: true,
           data: callData,
-          message: `Call initiated from ${extension} to ${number}`
+          message: `Call initiated from ${caller} to ${callee}`
         };
       }
 
