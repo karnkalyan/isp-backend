@@ -1870,6 +1870,10 @@ class YeastarService {
                 callData.status = this.#mapCallStatus(member.outbound.memberstatus);
                 callData.channelid = member.outbound.channelid;
               } else if (member.ext) {
+                callData.extension = member.ext.number || callData.extension;
+                if (callData.direction === 'inbound' && member.ext.number) {
+                  callData.called = member.ext.number;
+                }
                 callData.status = this.#mapCallStatus(member.ext.memberstatus);
                 callData.channelid = member.ext.channelid;
                 if (!callData.caller && member.ext.number) {
@@ -2472,6 +2476,7 @@ class YeastarService {
         createdAt: new Date(),
         rawData: event
       };
+      let updatedExistingCall = false;
 
       // Handle different event types
       if (eventType === 'CallStatus' && event.callid) {
@@ -2515,6 +2520,9 @@ class YeastarService {
               data.memberstatus = member.ext.memberstatus;
               data.channelid = member.ext.channelid;
               data.extensionNumber = member.ext.number;
+              if (member.ext.number && data.direction === 'inbound') {
+                data.called = member.ext.number;
+              }
 
               // Look up extension ID
               if (member.ext.number) {
@@ -2576,11 +2584,17 @@ class YeastarService {
                 memberstatus: data.memberstatus,
                 status: data.status,
                 channelid: data.channelid,
+                caller: data.caller || existingCall.caller,
+                called: data.called || existingCall.called,
+                direction: data.direction || existingCall.direction,
+                trunkname: data.trunkname || existingCall.trunkname,
+                callpath: data.callpath || existingCall.callpath,
+                extensionId: data.extensionId || existingCall.extensionId,
                 updatedAt: new Date()
               }
             });
+            updatedExistingCall = true;
             console.log(`[YEASTAR ${ispId}] Updated existing call ${data.callid}: ${data.memberstatus}`);
-            return true;
           }
         }
 
@@ -2685,12 +2699,12 @@ class YeastarService {
         eventType === 'ExtensionStatus' ||
         ['ALERT', 'RING', 'ANSWER', 'ANSWERED'].includes(data.memberstatus);
 
-      if (shouldCreateNewRecord) {
+      if (shouldCreateNewRecord && !updatedExistingCall) {
         await prisma.yeastarCallLog.create({
           data: validData
         });
         console.log(`[YEASTAR ${ispId}] Created new ${eventType} record: ${data.callid || data.extensionId || 'unknown'}`);
-      } else {
+      } else if (!updatedExistingCall) {
         console.log(`[YEASTAR ${ispId}] Skipping duplicate/insignificant event: ${eventType}`);
         return true;
       }

@@ -6,6 +6,47 @@ class YeastarController {
     console.log('✅ YeastarController initialized with enhanced call APIs');
   }
 
+  #formatCallLog(log) {
+    const caller = log.caller || log.callerId || log.callfrom || '';
+    const called = log.called || log.calledNumber || log.callto || '';
+    const extension = log.extension || log.extensionNumber || log.extensionId || '';
+
+    return {
+      ...log,
+      caller,
+      called,
+      callerId: caller || '-',
+      calledNumber: called || '-',
+      extension: extension ? String(extension) : '',
+      channelId: log.channelid || log.channelId || '',
+      callId: log.callid || log.callId || '',
+      status: log.status || log.memberstatus || 'unknown',
+      direction: log.direction || 'internal',
+      startTime: log.startTime || log.createdAt,
+      endTime: log.endTime || log.updatedAt,
+      duration: log.duration || 0
+    };
+  }
+
+  #formatActiveCall(call) {
+    const caller = call.caller || call.callerId || '';
+    const called = call.called || call.calledNumber || '';
+
+    return {
+      ...call,
+      caller: caller || '-',
+      called: called || '-',
+      callerId: caller || '-',
+      calledNumber: called || '-',
+      channelId: call.channelid || call.channelId || '',
+      callId: call.callid || call.callId || '',
+      status: call.status || 'unknown',
+      direction: call.direction || 'internal',
+      startTime: call.startTime || call.createdAt,
+      duration: call.duration || 0
+    };
+  }
+
 
   #handleServiceError(error, operation = 'operation') {
     console.error(`[YeastarController] ${operation} error:`, error);
@@ -1042,9 +1083,10 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { channelid } = req.body;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
 
-      if (!channelid) {
+      if (!targetChannelId) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID is required',
@@ -1053,11 +1095,11 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.hangupCall(channelid);
+      const result = await service.hangupCall(targetChannelId);
 
       if (result.success) {
         this.#logAudit(userId, ispId, 'call_hangup', {
-          channelid,
+          channelid: targetChannelId,
           result: result.data,
           timestamp: new Date().toISOString()
         });
@@ -1156,7 +1198,7 @@ class YeastarController {
       // Pagination
       const startIndex = (page - 1) * limit;
       const endIndex = startIndex + parseInt(limit);
-      const paginatedLogs = filteredLogs.slice(startIndex, endIndex);
+      const paginatedLogs = filteredLogs.slice(startIndex, endIndex).map(log => this.#formatCallLog(log));
 
       res.json({
         success: true,
@@ -1178,9 +1220,10 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { channelid } = req.body;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
 
-      if (!channelid) {
+      if (!targetChannelId) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID is required',
@@ -1189,11 +1232,11 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.holdCall(channelid);
+      const result = await service.holdCall(targetChannelId);
 
       if (result.success) {
         this.#logAudit(userId, ispId, 'call_hold', {
-          channelid,
+          channelid: targetChannelId,
           result: result.data,
           timestamp: new Date().toISOString()
         });
@@ -1209,9 +1252,10 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
-      const { channelid } = req.body;
+      const { channelid, channelId } = req.body;
+      const targetChannelId = channelid || channelId;
 
-      if (!channelid) {
+      if (!targetChannelId) {
         return res.status(400).json({
           success: false,
           error: 'Channel ID is required',
@@ -1220,11 +1264,11 @@ class YeastarController {
       }
 
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.unholdCall(channelid);
+      const result = await service.unholdCall(targetChannelId);
 
       if (result.success) {
         this.#logAudit(userId, ispId, 'call_unhold', {
-          channelid,
+          channelid: targetChannelId,
           result: result.data,
           timestamp: new Date().toISOString()
         });
@@ -1301,7 +1345,7 @@ class YeastarController {
 
       res.json({
         success: true,
-        data: activeCalls,
+        data: activeCalls.map(call => this.#formatActiveCall(call)),
         total: activeCalls.length,
         timestamp: new Date().toISOString()
       });
