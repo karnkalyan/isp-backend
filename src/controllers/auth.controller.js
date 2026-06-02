@@ -232,6 +232,7 @@ async function refresh(req, res) {
 // Get current authenticated user profile
 async function me(req, res) {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const userId = req.user.id;
 
     const user = await prisma.user.findUnique({

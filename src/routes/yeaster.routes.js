@@ -43,9 +43,6 @@ module.exports = (prisma) => {
   router.post('/calls/make', (req, res) =>
     controller.makeCall(req, res));
 
-  router.get('/calls/:callid', checkPermission('yeaster_read'), (req, res) =>
-    controller.queryCall(req, res));
-
   router.post('/calls/park', checkPermission('yeaster_manage'), (req, res) =>
     controller.parkCall(req, res));
 
@@ -81,6 +78,9 @@ module.exports = (prisma) => {
     controller.attendedTransferOperate(req, res));
 
   // Call query and monitoring
+  router.get('/calls/my-extension', checkPermission('yeaster_read'), (req, res) =>
+    controller.getMyExtensionCallStatus(req, res));
+
   router.get('/calls/active', checkPermission('yeaster_read'), (req, res) =>
     controller.getActiveCalls(req, res));
 
@@ -96,6 +96,9 @@ module.exports = (prisma) => {
   // Call logs and history
   router.get('/calls/logs', checkPermission('yeaster_read'), (req, res) =>
     controller.getCallLogs(req, res));
+
+  router.get('/calls/:callid', checkPermission('yeaster_read'), (req, res) =>
+    controller.queryCall(req, res));
 
   /* ========== EXTENSION MANAGEMENT ROUTES ========== */
   router.get('/extensions', (req, res) =>

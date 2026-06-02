@@ -493,12 +493,29 @@ class YeastarController {
       } = req.body;
       const callerNumber = String(caller || '').trim();
       const calleeNumber = String(callee || '').trim();
+      const assignedExtension = String(req.user?.extId || req.extId || '').trim();
+
+      if (!assignedExtension) {
+        return res.status(403).json({
+          success: false,
+          error: 'No Yeastar extension is assigned to your user account.',
+          message: 'Please ask an administrator to assign a VoIP extension before making calls.'
+        });
+      }
 
       if (!callerNumber || !calleeNumber) {
         return res.status(400).json({
           success: false,
           error: 'Caller and callee numbers are required',
           message: 'Missing required parameters'
+        });
+      }
+
+      if (callerNumber !== assignedExtension) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only make calls from your assigned Yeastar extension.',
+          message: `Your assigned extension is ${assignedExtension}.`
         });
       }
 
@@ -935,14 +952,48 @@ class YeastarController {
 
   async getActiveCalls(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
+      const number = req.query.number || 'all';
       const service = await YeastarService.create(ispId, this.prisma);
-      const result = await service.getActiveCalls();
+      const result = await service.getActiveCalls(number);
       res.json(result);
     } catch (error) {
       res.status(500).json({
         success: false,
         error: error.message
+      });
+    }
+  }
+
+  async getMyExtensionCallStatus(req, res) {
+    try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      const ispId = req.ispId;
+      const assignedExtension = String(req.user?.extId || req.extId || '').trim();
+
+      if (!assignedExtension) {
+        return res.status(403).json({
+          success: false,
+          error: 'No Yeastar extension is assigned to your user account.',
+          data: { status: 'Failed', calllist: [] },
+          total: 0
+        });
+      }
+
+      const service = await YeastarService.create(ispId, this.prisma);
+      const result = await service.getExtensionCallStatus(assignedExtension);
+
+      res.json({
+        ...result,
+        assignedExtension
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        data: { status: 'Failed', calllist: [] },
+        total: 0
       });
     }
   }

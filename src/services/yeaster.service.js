@@ -1509,9 +1509,42 @@ class YeastarService {
 
 
 
-  async getActiveCalls() {
+  async getExtensionCallStatus(number = 'all') {
     try {
-      const result = await this.#apiRequest('extension.query_call', { number: 'all' });
+      const queryNumber = String(number || '').trim() || 'all';
+      const result = await this.#apiRequest('extension.query_call', { number: queryNumber });
+      const calllist = Array.isArray(result.data?.calllist) ? result.data.calllist : [];
+      const calls = this.#parseCallData(calllist);
+
+      await this.#updateActiveCalls(calls);
+
+      this.#emitWebSocket('calls.active', { calls });
+
+      return {
+        success: true,
+        data: {
+          status: result.data?.status || 'Success',
+          calllist
+        },
+        total: calls.length,
+        message: `${calls.length} active calls found`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        data: {
+          status: 'Failed',
+          calllist: []
+        },
+        total: 0
+      };
+    }
+  }
+
+  async getActiveCalls(number = 'all') {
+    try {
+      const result = await this.#apiRequest('extension.query_call', { number });
       const calls = this.#parseCallData(result.data?.calllist || []);
 
       // Update active calls in database
