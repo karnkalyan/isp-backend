@@ -6,6 +6,7 @@ const path = require('path');
 const cookieParser = require('cookie-parser');
 const WebSocketManager = require('./lib/websocket.js'); // Your WebSocketManager class
 const YeastarService = require('./services/yeaster.service');
+const { licenseGuard } = require('./services/license.service');
 
 require('dotenv').config();
 // Trigger nodemon reload
@@ -43,6 +44,7 @@ const nasRouter = require('./routes/nas.routes');
 const tr069DeviceRouter = require('./routes/tr069device.routes');
 const inventoryRouter = require('./routes/inventory.routes');
 const settingsRouter = require('./routes/settings.routes');
+const licenseRouter = require('./routes/license.routes');
 const fiberMapRouter = require('./routes/fiberMap.routes');
 const billingRouter = require('./routes/billing.routes');
 const ticketRouter = require('./routes/ticket.routes');
@@ -103,6 +105,10 @@ app.use(cors((req, callback) => {
 
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
 app.use('/api/uploads', express.static(path.resolve(__dirname, '../uploads')));
+
+app.use('/license', licenseRouter(prisma));
+app.use('/api/license', licenseRouter(prisma));
+app.use(licenseGuard(prisma));
 
 app.use('/users', usersRouter(prisma));
 app.use('/auth', authRouter(prisma));

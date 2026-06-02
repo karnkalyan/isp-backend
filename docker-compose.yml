@@ -35,6 +35,7 @@ services:
 
     container_name: kisan-api
     restart: unless-stopped
+    command: sh -c "npm run dockerStartup && npm start"
 
     depends_on:
       db:
@@ -55,6 +56,8 @@ services:
 
       ACCESS_SECRET: "IspMainAdminPanel123@!23"
       REFRESH_SECRET: "ispMainAdminPanelRefresh123"
+      LICENSE_SECRET: "SimulcastLicenseSecretChangeMe"
+      LICENSE_HARDWARE_ID: ""
 
       FREE_RADIUS_API_TOKEN: "Bearer YOUR_REAL_TOKEN_HERE"
       RADIUS_BASE_URL: "http://10.3.2.6:3005/api"

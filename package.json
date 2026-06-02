@@ -7,7 +7,9 @@
     "dev": "nodemon src/index.js",
     "seed": "node prisma/seed.js",
     "servicesSeed": "node src/utils/script/setupDefaultServices.js",
-    "fullSeed": "node prisma/kisanNetFullSeed.js",
+    "dockerStartup": "node src/utils/script/dockerStartup.js",
+    "fullSeed": "node prisma/defaultFullSeed.js",
+    "defaultFullSeed": "node prisma/defaultFullSeed.js",
     "kisanNetFullSeed": "node prisma/kisanNetFullSeed.js",
     "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js",
     "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js"
