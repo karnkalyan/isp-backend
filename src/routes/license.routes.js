@@ -160,6 +160,18 @@ module.exports = (prisma) => {
     }
   });
 
+  router.post('/generated/:id/install', auth, async (req, res, next) => {
+    try {
+      if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can install generated licenses.' });
+      if (!hasGeneratorAccess(req)) return res.status(403).json({ error: 'License generator access has expired. Please enter the access secret again.' });
+      const { token } = await getGeneratedLicenseToken(prisma, req.params.id);
+      await saveToken(prisma, req.ispId, token);
+      res.json(await getStatus(prisma));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/generated/:id/status', auth, async (req, res, next) => {
     try {
       if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can update license status.' });

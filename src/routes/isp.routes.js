@@ -5,6 +5,7 @@ const fs = require('fs');
 const {
   createIsp,
   activeIsp,
+  updateActiveIsp,
   updateActiveIspBranding,
   getAllIsps,
   getIspById,
@@ -84,6 +85,12 @@ module.exports = (prisma) => {
   router.get(
     '/active',
     activeIsp
+  );
+
+  router.put(
+    '/active',
+    checkPermission('settings_update'),
+    updateActiveIsp
   );
 
   router.put(

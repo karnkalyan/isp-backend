@@ -83,10 +83,17 @@ async function main() {
             website: 'https://ispmanager.com',
             contactPerson: 'ISP Manager Admin',
             phoneNumber: '9800000000',
+            description: 'Default ISP management profile for Radius Manager.',
             address: 'Kathmandu, Nepal',
             city: 'Kathmandu',
             state: 'Bagmati',
+            zipCode: '44600',
             country: 'Nepal',
+            asnNumber: 'AS00000',
+            ipv4Blocks: '192.168.0.0/24',
+            ipv6Blocks: '2001:db8::/32',
+            upstreamProviders: 'Default Upstream Provider',
+            logoUrl: null,
         }
     });
     console.log(`📡 ISP Created: ${isp.companyName}`);

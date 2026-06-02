@@ -284,6 +284,118 @@ async function updateActiveIspBranding(req, res, next) {
   }
 }
 
+async function updateActiveIsp(req, res, next) {
+  try {
+    const ispId = req.ispId;
+    if (!ispId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication error: ISP ID not found.'
+      });
+    }
+
+    const existingIsp = await req.prisma.iSP.findUnique({ where: { id: ispId } });
+    if (!existingIsp) {
+      return res.status(404).json({
+        success: false,
+        error: 'Active ISP not found in database'
+      });
+    }
+
+    const allowedFields = [
+      'companyName',
+      'businessType',
+      'website',
+      'contactPerson',
+      'phoneNumber',
+      'masterEmail',
+      'description',
+      'address',
+      'city',
+      'state',
+      'zipCode',
+      'country',
+      'asnNumber',
+      'ipv4Blocks',
+      'ipv6Blocks',
+      'upstreamProviders'
+    ];
+
+    const data = {};
+    allowedFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        const value = req.body[field];
+        data[field] = typeof value === 'string' && value.trim() === '' ? null : value;
+      }
+    });
+
+    if (data.companyName === null) {
+      return res.status(400).json({ success: false, error: 'Company name is required' });
+    }
+
+    if (data.masterEmail === null) {
+      return res.status(400).json({ success: false, error: 'Master email is required' });
+    }
+
+    if (data.masterEmail && data.masterEmail !== existingIsp.masterEmail) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(data.masterEmail)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
+      }
+
+      const emailExists = await req.prisma.iSP.findFirst({
+        where: {
+          masterEmail: data.masterEmail,
+          NOT: { id: ispId }
+        }
+      });
+
+      if (emailExists) {
+        return res.status(409).json({
+          success: false,
+          error: 'Email already exists in the system',
+          field: 'masterEmail'
+        });
+      }
+    }
+
+    if (data.companyName && data.companyName !== existingIsp.companyName) {
+      const companyExists = await req.prisma.iSP.findFirst({
+        where: {
+          companyName: data.companyName,
+          NOT: { id: ispId }
+        }
+      });
+
+      if (companyExists) {
+        return res.status(409).json({
+          success: false,
+          error: 'Company name already exists in the system',
+          field: 'companyName'
+        });
+      }
+    }
+
+    const updated = await req.prisma.iSP.update({
+      where: { id: ispId },
+      data
+    });
+    const sidebarBranding = await getSidebarBranding(req.prisma, ispId);
+
+    res.json({
+      success: true,
+      message: 'ISP information updated successfully',
+      data: { ...updated, sidebarBranding }
+    });
+  } catch (err) {
+    console.error('Update active ISP error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update ISP information'
+    });
+  }
+}
+
 // --- Update ISP ---
 async function updateIsp(req, res, next) {
   try {
@@ -466,6 +578,7 @@ function deleteOldFile(fileUrl) {
 module.exports = {
   createIsp,
   activeIsp,
+  updateActiveIsp,
   updateActiveIspBranding,
   getAllIsps,
   getIspById,
