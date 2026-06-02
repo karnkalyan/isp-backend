@@ -373,6 +373,20 @@ class ServiceController {
       await this.prisma.$transaction(async (tx) => {
         // UPSERT each credential
         for (const cred of credentials) {
+          const hasValue = cred.value !== undefined && cred.value !== null && String(cred.value) !== '';
+          const existingCredential = await tx.serviceCredential.findUnique({
+            where: {
+              ispServiceId_key: {
+                ispServiceId: ispService.id,
+                key: cred.key
+              }
+            }
+          });
+
+          if (!existingCredential && !hasValue) {
+            throw new Error(`Missing value for credential: ${cred.key}`);
+          }
+
           await tx.serviceCredential.upsert({
             where: {
               ispServiceId_key: {
@@ -381,7 +395,7 @@ class ServiceController {
               }
             },
             update: {
-              value: cred.value,
+              ...(hasValue && { value: String(cred.value) }),
               credentialType: cred.credentialType || 'api_key',
               label: cred.label || cred.key,
               isEncrypted: cred.isEncrypted !== undefined ? cred.isEncrypted : true,
@@ -393,7 +407,7 @@ class ServiceController {
             create: {
               credentialType: cred.credentialType || 'api_key',
               key: cred.key,
-              value: cred.value,
+              value: String(cred.value),
               label: cred.label || cred.key,
               isEncrypted: cred.isEncrypted !== undefined ? cred.isEncrypted : true,
               description: cred.description,
