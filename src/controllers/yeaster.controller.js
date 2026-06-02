@@ -772,9 +772,12 @@ class YeastarController {
         extension,
         cstacallid,
         cstaCallId,
+        callid,
+        callId,
         ipaddress,
         ipAddress
       } = req.body;
+      const targetCallId = String(callid || callId || '').trim();
       const targetExtension = String(extnumber || extension || req.user.extId || req.user.yeastarExt || '').trim();
       const explicitUacstaCall = targetExtension && (cstacallid || cstaCallId) && (ipaddress || ipAddress)
         ? {
@@ -860,13 +863,17 @@ class YeastarController {
         });
       }
 
-      res.status(result.success ? 200 : 400).json({
+      const staleChannel = !result.success && /10103|channelid does not exist/i.test(String(result.error || result.message || ''));
+
+      res.status(result.success ? 200 : staleChannel ? 410 : 400).json({
         ...result,
+        callid: targetCallId || undefined,
         acceptedChannelId,
         attemptedChannelIds: uniqueChannelIds,
         remoteAnswered: false,
         acceptedBy: result.success ? 'inbound_control' : null,
         requiresUaCsta: result.success,
+        staleChannel,
         uacstaAvailable: Boolean(cachedUacstaCall),
         uacstaError: uacstaResult && !uacstaResult.success ? uacstaResult.error : null,
         uacstaAttempt: cachedUacstaCall
@@ -881,7 +888,9 @@ class YeastarController {
           ? (uacstaResult && !uacstaResult.success
               ? 'Inbound route accepted by PBX, but uaCSTA remote answer failed. Make sure PBX and phone uaCSTA are enabled and click Receive while the extension is still ringing.'
               : 'Inbound route accepted by PBX, but no uaCSTA ringing event was available to remotely answer the extension. Enable uaCSTA on PBX and phone to answer from the inquiry dashboard.')
-          : result.message
+          : staleChannel
+            ? 'This call already ended or the PBX channel expired. Receive is only available while the extension is actively ringing.'
+            : result.message
       });
     } catch (error) {
       res.status(500).json(this.#handleServiceError(error, 'accept_inbound_call'));
