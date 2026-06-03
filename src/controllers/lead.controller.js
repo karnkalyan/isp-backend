@@ -193,7 +193,10 @@ const getAllLeads = async (req, res, next) => {
       }
     }
 
-    const offset = (page - 1) * limit;
+    const fetchAll = String(limit).toLowerCase() === 'all';
+    const parsedLimit = Math.max(1, parseInt(limit) || 20);
+    const parsedPage = Math.max(1, parseInt(page) || 1);
+    const offset = (parsedPage - 1) * parsedLimit;
 
     const [count, rows] = await Promise.all([
       req.prisma.lead.count({
@@ -201,8 +204,7 @@ const getAllLeads = async (req, res, next) => {
       }),
       req.prisma.lead.findMany({
         where,
-        skip: parseInt(offset),
-        take: parseInt(limit),
+        ...(fetchAll ? {} : { skip: parseInt(offset), take: parsedLimit }),
         include: {
           assignedUser: {
             select: {
@@ -233,12 +235,12 @@ const getAllLeads = async (req, res, next) => {
       success: true,
       data: rows,
       pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(count / limit),
+        currentPage: fetchAll ? 1 : parsedPage,
+        totalPages: fetchAll ? 1 : Math.ceil(count / parsedLimit),
         totalItems: count,
-        itemsPerPage: parseInt(limit),
-        hasNextPage: page < Math.ceil(count / limit),
-        hasPreviousPage: page > 1
+        itemsPerPage: fetchAll ? count : parsedLimit,
+        hasNextPage: fetchAll ? false : parsedPage < Math.ceil(count / parsedLimit),
+        hasPreviousPage: fetchAll ? false : parsedPage > 1
       },
       filters: {
         userRole,

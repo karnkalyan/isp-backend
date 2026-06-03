@@ -1131,7 +1131,10 @@ async function listCustomers(req, res, next) {
       ];
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const fetchAll = String(limit).toLowerCase() === 'all';
+    const parsedLimit = Math.max(1, parseInt(limit) || 20);
+    const parsedPage = Math.max(1, parseInt(page) || 1);
+    const skip = (parsedPage - 1) * parsedLimit;
     const [customers, total] = await Promise.all([
       req.prisma.customer.findMany({
         where,
@@ -1158,8 +1161,7 @@ async function listCustomers(req, res, next) {
           subBranch: { select: { id: true, name: true } }
         },
         orderBy: { [sortBy]: sortOrder },
-        skip,
-        take: parseInt(limit)
+        ...(fetchAll ? {} : { skip, take: parsedLimit })
       }),
       req.prisma.customer.count({ where })
     ]);
@@ -1187,10 +1189,10 @@ async function listCustomers(req, res, next) {
     return res.json({
       data: transformed,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: fetchAll ? 1 : parsedPage,
+        limit: fetchAll ? total : parsedLimit,
         total,
-        totalPages: Math.ceil(total / parseInt(limit))
+        totalPages: fetchAll ? 1 : Math.ceil(total / parsedLimit)
       }
     });
   } catch (err) {
