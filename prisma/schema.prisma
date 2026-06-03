@@ -1173,6 +1173,58 @@ model ServiceLog {
   @@index([status])
 }
 
+model SmsCampaign {
+  id             Int      @id @default(autoincrement())
+  ispId          Int
+  createdById    Int?
+  recipientType  String
+  provider       String
+  message        String   @db.Text
+  filters        Json?
+  status         String   @default("queued")
+  totalCount     Int      @default(0)
+  queuedCount    Int      @default(0)
+  sentCount      Int      @default(0)
+  failedCount    Int      @default(0)
+  skippedCount   Int      @default(0)
+  batchSize      Int      @default(100)
+  errorMessage   String?  @db.Text
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  logs SmsCampaignLog[]
+
+  @@index([ispId])
+  @@index([createdAt])
+  @@index([status])
+  @@map("sms_campaigns")
+}
+
+model SmsCampaignLog {
+  id           Int      @id @default(autoincrement())
+  campaignId   Int
+  recipientId  Int?
+  recipientType String
+  name         String?
+  phone        String
+  status       String   @default("queued")
+  provider     String?
+  response     Json?
+  errorMessage String?  @db.Text
+  sentAt       DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  campaign SmsCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([phone])
+  @@index([status])
+  @@map("sms_campaign_logs")
+}
+
 // ==================== YEASTAR MODELS ====================
 model YeastarExtension {
   id              Int       @id @default(autoincrement())

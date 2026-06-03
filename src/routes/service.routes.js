@@ -128,6 +128,9 @@ module.exports = (prisma) => {
 
     router.get('/sms/credit', checkPermission('services_read'), serviceController.getSmsCredit.bind(serviceController));
     router.post('/sms/send-bulk', checkPermission('services_manage'), serviceController.sendBulkSms.bind(serviceController));
+    router.post('/sms/campaigns', checkPermission('services_manage'), serviceController.enqueueSmsCampaign.bind(serviceController));
+    router.get('/sms/campaigns', checkPermission('services_read'), serviceController.getSmsCampaigns.bind(serviceController));
+    router.get('/sms/campaigns/:id/logs', checkPermission('services_read'), serviceController.getSmsCampaignLogs.bind(serviceController));
 
     // ==================== HEALTH CHECK ====================
     router.get('/health', (req, res) => {

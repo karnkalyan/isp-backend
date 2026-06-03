@@ -1,9 +1,24 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES, SERVICE_CATEGORIES, DEFAULT_CREDENTIALS } = require('../lib/serviceConstants');
 
+const smsCampaignQueue = {
+  processing: false,
+  nextTimer: null
+};
+
+const SMS_CAMPAIGN_BATCH_SIZE = Number(process.env.SMS_CAMPAIGN_BATCH_SIZE || 100);
+const SMS_CAMPAIGN_BATCH_DELAY_MS = Number(process.env.SMS_CAMPAIGN_BATCH_DELAY_MS || 1000);
+
+function normalizePhone(phone) {
+  if (!phone) return null;
+  const cleaned = String(phone).replace(/[^\d+]/g, '').trim();
+  return cleaned.length >= 7 ? cleaned : null;
+}
+
 class ServiceController {
   constructor(prisma) {
     this.prisma = prisma;
+    this.scheduleSmsCampaignProcessing(2000);
   }
 
   sendGenieACSError(res, error, fallbackError = 'GenieACS request failed') {
@@ -3442,6 +3457,384 @@ class ServiceController {
     } catch (error) {
       console.error('Error sending bulk SMS:', error);
       return res.status(500).json({ success: false, error: 'Failed to send SMS', message: error.message });
+    }
+  }
+
+  buildSmsLeadWhere(ispId, filters = {}) {
+    const where = {
+      isDeleted: false,
+      ispId: Number(ispId),
+      phoneNumber: { not: null }
+    };
+
+    if (filters.status && filters.status !== 'all') where.status = filters.status;
+    if (Array.isArray(filters.branchIds) && filters.branchIds.length > 0) {
+      const ids = filters.branchIds.map(Number).filter(Boolean);
+      if (ids.length > 0) {
+        where.OR = [
+          { branchId: { in: ids } },
+          { subBranchId: { in: ids } }
+        ];
+      }
+    }
+    if (filters.area) {
+      const area = String(filters.area).trim();
+      if (area) {
+        where.AND = where.AND || [];
+        where.AND.push({
+          OR: [
+            { address: { contains: area } },
+            { street: { contains: area } },
+            { district: { contains: area } },
+            { province: { contains: area } }
+          ]
+        });
+      }
+    }
+
+    return where;
+  }
+
+  buildSmsCustomerWhere(ispId, filters = {}) {
+    const where = {
+      isDeleted: false,
+      ispId: Number(ispId),
+      lead: { phoneNumber: { not: null } }
+    };
+
+    if (filters.status && filters.status !== 'all') where.status = filters.status;
+    if (filters.oltId && filters.oltId !== 'all') {
+      where.serviceDetails = { some: { oltId: Number(filters.oltId) } };
+    }
+    if (filters.splitterId && filters.splitterId !== 'all') {
+      where.serviceDetails = { some: { splitterId: Number(filters.splitterId) } };
+    }
+    if (Array.isArray(filters.branchIds) && filters.branchIds.length > 0) {
+      const ids = filters.branchIds.map(Number).filter(Boolean);
+      if (ids.length > 0) {
+        where.OR = [
+          { branchId: { in: ids } },
+          { subBranchId: { in: ids } }
+        ];
+      }
+    }
+    if (filters.area) {
+      const area = String(filters.area).trim();
+      if (area) {
+        where.lead = {
+          ...where.lead,
+          OR: [
+            { address: { contains: area } },
+            { street: { contains: area } },
+            { district: { contains: area } },
+            { province: { contains: area } }
+          ]
+        };
+      }
+    }
+
+    return where;
+  }
+
+  async getSmsCampaignRecipients(ispId, recipientType, filters = {}) {
+    if (recipientType === 'lead') {
+      const leads = await this.prisma.lead.findMany({
+        where: this.buildSmsLeadWhere(ispId, filters),
+        select: { id: true, firstName: true, lastName: true, phoneNumber: true },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return leads.map((lead) => ({
+        recipientId: lead.id,
+        recipientType: 'lead',
+        name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || null,
+        phone: normalizePhone(lead.phoneNumber)
+      })).filter((recipient) => recipient.phone);
+    }
+
+    const customers = await this.prisma.customer.findMany({
+      where: this.buildSmsCustomerWhere(ispId, filters),
+      select: {
+        id: true,
+        lead: { select: { firstName: true, lastName: true, phoneNumber: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return customers.map((customer) => ({
+      recipientId: customer.id,
+      recipientType: 'customer',
+      name: `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || null,
+      phone: normalizePhone(customer.lead?.phoneNumber)
+    })).filter((recipient) => recipient.phone);
+  }
+
+  dedupeSmsRecipients(recipients) {
+    const seen = new Set();
+    const unique = [];
+    const skipped = [];
+
+    recipients.forEach((recipient) => {
+      const phone = normalizePhone(recipient.phone);
+      if (!phone) return;
+      if (seen.has(phone)) {
+        skipped.push({ ...recipient, phone });
+        return;
+      }
+      seen.add(phone);
+      unique.push({ ...recipient, phone });
+    });
+
+    return { unique, skipped };
+  }
+
+  async enqueueSmsCampaign(req, res) {
+    try {
+      const ispId = Number(req.ispId);
+      const {
+        to,
+        text,
+        type = 'customer',
+        provider,
+        filters = {},
+        selectAll = false,
+        batchSize
+      } = req.body;
+
+      if (!text || !String(text).trim()) {
+        return res.status(400).json({ success: false, error: 'Message text is required' });
+      }
+
+      const recipientType = type === 'lead' ? 'lead' : 'customer';
+      const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
+      const recipients = selectAll
+        ? await this.getSmsCampaignRecipients(ispId, recipientType, filters)
+        : (Array.isArray(to) ? to : [to]).map((phone) => ({ recipientType, phone: normalizePhone(phone) })).filter((recipient) => recipient.phone);
+
+      const { unique, skipped } = this.dedupeSmsRecipients(recipients);
+
+      if (unique.length === 0) {
+        return res.status(400).json({ success: false, error: 'No valid recipient phone numbers found' });
+      }
+
+      const safeBatchSize = Math.max(1, Math.min(Number(batchSize) || SMS_CAMPAIGN_BATCH_SIZE, 500));
+
+      const campaign = await this.prisma.smsCampaign.create({
+        data: {
+          ispId,
+          createdById: req.user?.id || null,
+          recipientType,
+          provider: resolvedProvider,
+          message: String(text),
+          filters,
+          status: 'queued',
+          totalCount: unique.length + skipped.length,
+          queuedCount: unique.length,
+          skippedCount: skipped.length,
+          batchSize: safeBatchSize,
+          logs: {
+            create: [
+              ...unique.map((recipient) => ({
+                recipientId: recipient.recipientId ? Number(recipient.recipientId) : null,
+                recipientType,
+                name: recipient.name || null,
+                phone: recipient.phone,
+                provider: resolvedProvider,
+                status: 'queued'
+              })),
+              ...skipped.map((recipient) => ({
+                recipientId: recipient.recipientId ? Number(recipient.recipientId) : null,
+                recipientType,
+                name: recipient.name || null,
+                phone: recipient.phone,
+                provider: resolvedProvider,
+                status: 'skipped',
+                errorMessage: 'Duplicate phone number in campaign target'
+              }))
+            ]
+          }
+        }
+      });
+
+      this.scheduleSmsCampaignProcessing();
+
+      return res.status(202).json({
+        success: true,
+        data: {
+          campaignId: campaign.id,
+          status: campaign.status,
+          totalCount: campaign.totalCount,
+          queuedCount: campaign.queuedCount,
+          skippedCount: campaign.skippedCount,
+          batchSize: campaign.batchSize
+        }
+      });
+    } catch (error) {
+      console.error('Error enqueueing SMS campaign:', error);
+      return res.status(500).json({ success: false, error: 'Failed to queue SMS campaign', message: error.message });
+    }
+  }
+
+  scheduleSmsCampaignProcessing(delay = 0) {
+    if (smsCampaignQueue.nextTimer) return;
+    smsCampaignQueue.nextTimer = setTimeout(() => {
+      smsCampaignQueue.nextTimer = null;
+      this.processSmsCampaignQueue().catch((error) => {
+        console.error('SMS campaign queue error:', error);
+      });
+    }, delay);
+  }
+
+  async processSmsCampaignQueue() {
+    if (smsCampaignQueue.processing) return;
+    smsCampaignQueue.processing = true;
+
+    try {
+      const campaign = await this.prisma.smsCampaign.findFirst({
+        where: { status: { in: ['queued', 'processing'] } },
+        orderBy: { createdAt: 'asc' }
+      });
+
+      if (!campaign) return;
+
+      if (campaign.status === 'queued') {
+        await this.prisma.smsCampaign.update({
+          where: { id: campaign.id },
+          data: { status: 'processing', startedAt: new Date() }
+        });
+      }
+
+      const pendingLogs = await this.prisma.smsCampaignLog.findMany({
+        where: { campaignId: campaign.id, status: 'queued' },
+        orderBy: { id: 'asc' },
+        take: campaign.batchSize || SMS_CAMPAIGN_BATCH_SIZE
+      });
+
+      if (pendingLogs.length === 0) {
+        const [sentCount, failedCount, skippedCount] = await Promise.all([
+          this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'sent' } }),
+          this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'failed' } }),
+          this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'skipped' } })
+        ]);
+
+        await this.prisma.smsCampaign.update({
+          where: { id: campaign.id },
+          data: {
+            status: failedCount > 0 && sentCount === 0 ? 'failed' : 'completed',
+            sentCount,
+            failedCount,
+            skippedCount,
+            queuedCount: 0,
+            completedAt: new Date()
+          }
+        });
+        return;
+      }
+
+      const client = await ServiceFactory.getClient(campaign.provider, campaign.ispId);
+      const phones = pendingLogs.map((log) => log.phone);
+
+      try {
+        const result = await client.sendBulkSms(phones, campaign.message);
+        await this.prisma.smsCampaignLog.updateMany({
+          where: { id: { in: pendingLogs.map((log) => log.id) } },
+          data: {
+            status: 'sent',
+            response: result,
+            sentAt: new Date()
+          }
+        });
+      } catch (error) {
+        const errorMessage = error.response?.data?.message || error.response?.data?.error || error.message || 'SMS provider failed';
+        await this.prisma.smsCampaignLog.updateMany({
+          where: { id: { in: pendingLogs.map((log) => log.id) } },
+          data: {
+            status: 'failed',
+            errorMessage,
+            response: error.response?.data || null
+          }
+        });
+      }
+
+      const [queuedCount, sentCount, failedCount, skippedCount] = await Promise.all([
+        this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'queued' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'sent' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'failed' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId: campaign.id, status: 'skipped' } })
+      ]);
+
+      await this.prisma.smsCampaign.update({
+        where: { id: campaign.id },
+        data: {
+          status: queuedCount > 0 ? 'processing' : (failedCount > 0 && sentCount === 0 ? 'failed' : 'completed'),
+          queuedCount,
+          sentCount,
+          failedCount,
+          skippedCount,
+          completedAt: queuedCount > 0 ? null : new Date()
+        }
+      });
+
+      this.scheduleSmsCampaignProcessing(queuedCount > 0 ? SMS_CAMPAIGN_BATCH_DELAY_MS : 0);
+    } finally {
+      smsCampaignQueue.processing = false;
+    }
+  }
+
+  async getSmsCampaigns(req, res) {
+    try {
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 100);
+      const where = { ispId: Number(req.ispId) };
+
+      const [rows, total] = await Promise.all([
+        this.prisma.smsCampaign.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit
+        }),
+        this.prisma.smsCampaign.count({ where })
+      ]);
+
+      return res.json({ success: true, data: rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Failed to load SMS campaigns', message: error.message });
+    }
+  }
+
+  async getSmsCampaignLogs(req, res) {
+    try {
+      const campaignId = Number(req.params.id);
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const limit = Math.min(Math.max(1, Number(req.query.limit) || 100), 500);
+      const status = req.query.status;
+
+      const campaign = await this.prisma.smsCampaign.findFirst({
+        where: { id: campaignId, ispId: Number(req.ispId) }
+      });
+      if (!campaign) {
+        return res.status(404).json({ success: false, error: 'SMS campaign not found' });
+      }
+
+      const where = {
+        campaignId,
+        ...(status && status !== 'all' ? { status: String(status) } : {})
+      };
+
+      const [rows, total] = await Promise.all([
+        this.prisma.smsCampaignLog.findMany({
+          where,
+          orderBy: { id: 'asc' },
+          skip: (page - 1) * limit,
+          take: limit
+        }),
+        this.prisma.smsCampaignLog.count({ where })
+      ]);
+
+      return res.json({ success: true, data: rows, campaign, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Failed to load SMS campaign logs', message: error.message });
     }
   }
 
