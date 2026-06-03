@@ -274,6 +274,10 @@ model PackagePlan {
   dataLimit Int?
   downSpeed Int?
   upSpeed   Int?
+  intUpload Int?
+  firDownload Int?
+  localUpload Int?
+  localDownload Int?
 
   ispId Int?
   isp   ISP? @relation(fields: [ispId], references: [id])
@@ -281,6 +285,21 @@ model PackagePlan {
   deviceLimit Int?
   isPopular   Boolean @default(false)
   description String?
+  nasType String?
+  service String?
+  priority String?
+  vendorProfiles Json?
+  packageType String?
+  allowRename Boolean @default(false)
+  fupApply Boolean @default(true)
+  isFupPackage Boolean @default(false)
+  onlyRenewal Boolean @default(false)
+  applyFramedPool Boolean @default(false)
+  framedPoolValue String?
+  customRadiusAttributes Json?
+  maxDiscountPercentage Float? @default(100)
+  maxDiscountCount Int? @default(0)
+  highPriority Boolean @default(false)
 
   isActive  Boolean @default(true)
   isDeleted Boolean @default(false)

@@ -11,6 +11,48 @@ async function convertMbpsToBps(mbps) {
   return mbps * 1000000;
 }
 
+function calculateJuniperBurstBytes(mbps) {
+  const speed = Number(mbps) || 0;
+  return Math.round((speed * 1000000 / 8) * 0.005);
+}
+
+function formatMikrotikRateLimit(plan, upMbps, downMbps) {
+  const upload = Number(upMbps) || 0;
+  const download = Number(downMbps) || 0;
+  const priority = Number(plan.priority) >= 1 && Number(plan.priority) <= 8 ? Number(plan.priority) : 8;
+  const burstUpload = Number(plan.mikrotikBurstUpload || plan.burstUpload || upload) || upload;
+  const burstDownload = Number(plan.mikrotikBurstDownload || plan.burstDownload || download) || download;
+  const thresholdUpload = Number(plan.mikrotikBurstThresholdUpload || plan.burstThresholdUpload || Math.floor(upload * 0.8)) || upload;
+  const thresholdDownload = Number(plan.mikrotikBurstThresholdDownload || plan.burstThresholdDownload || Math.floor(download * 0.8)) || download;
+  const burstTime = plan.mikrotikBurstTime || plan.burstTime || '5/5';
+  const minUpload = Number(plan.mikrotikMinUpload || plan.minUpload || upload) || upload;
+  const minDownload = Number(plan.mikrotikMinDownload || plan.minDownload || download) || download;
+
+  return [
+    `${upload}M/${download}M`,
+    `${burstUpload}M/${burstDownload}M`,
+    `${thresholdUpload}M/${thresholdDownload}M`,
+    burstTime,
+    String(priority),
+    `${minUpload}M/${minDownload}M`
+  ].join(' ');
+}
+
+function normalizeVendorProfiles(plan) {
+  const selectedNas = (plan.nasType || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const profiles = Array.isArray(plan.vendorProfiles) ? [...plan.vendorProfiles] : [];
+  const hasVendor = (vendor) => profiles.some(profile => (profile.vendor || "").toLowerCase() === vendor);
+
+  if (selectedNas.includes('juniper') && !hasVendor('juniper')) {
+    profiles.push({ vendor: 'juniper', profile: 'x-ppp-profile' });
+  }
+  if (selectedNas.includes('nokia') && !hasVendor('nokia')) {
+    profiles.push({ vendor: 'nokia', profile: plan.planCode || `pkg-${Number(plan.downSpeed) || 0}mbps` });
+  }
+
+  return profiles;
+}
+
 /**
  * Generates vendor-specific RADIUS attributes based on plan speeds and profiles.
  * Supports MikroTik (static), Juniper (dynamic), and Nokia (dynamic).
@@ -27,35 +69,40 @@ async function generateRadiusAttributes(plan) {
     replyAttrs.push({
       attribute: 'Mikrotik-Rate-Limit',
       op: ':=',
-      value: `${downMbps}M/${upMbps}M`
+      value: formatMikrotikRateLimit(plan, upMbps, downMbps)
     });
   }
 
   // 2. Generic / Multi-vendor Dynamic Profiles
-  const vendorProfiles = plan.vendorProfiles || [];
+  const vendorProfiles = normalizeVendorProfiles(plan);
   if (Array.isArray(vendorProfiles)) {
     for (const vp of vendorProfiles) {
       const vendor = (vp.vendor || "").toLowerCase();
       const profile = vp.profile || "";
 
       if (vendor === 'juniper') {
-        const upBps = await convertMbpsToBps(upMbps);
-        const downBps = await convertMbpsToBps(downMbps);
+        const bandwidthMbps = downMbps || upMbps;
+        const burstBytes = calculateJuniperBurstBytes(bandwidthMbps);
         replyAttrs.push(
-          { attribute: 'ERX-Service-Activate', op: ':=', value: profile || 'x-ppp-profile' },
-          { attribute: 'Juniper-Input-Rate', op: ':=', value: String(upBps) },
-          { attribute: 'Juniper-Output-Rate', op: ':=', value: String(downBps) }
+          { attribute: 'Juniper-Dynamic-Profile-Name', op: '=', value: profile || 'x-ppp-profile' },
+          { attribute: 'Juniper-Profile-String', op: '+=', value: `bandwidth=${bandwidthMbps}m` },
+          { attribute: 'Juniper-Profile-String', op: '+=', value: `burst=${burstBytes}` }
         );
       }
 
       if (vendor === 'nokia') {
         const upKbps = await convertMbpsToKbps(upMbps);
         const downKbps = await convertMbpsToKbps(downMbps);
+        const slaProfile = profile || plan.planCode || `pkg-${downMbps}mbps`;
+        const subProfile = vp.subProfile || 'sub-default';
         replyAttrs.push(
-          { attribute: 'Alc-Sub-Serv-Activate', op: ':=', value: profile || 'DEFAULT-INTERNET' },
-          { attribute: 'Alc-Subscriber-QoS-Override', op: '+=', value: `E:Q:1:pir=${downKbps},cir=${downKbps}` },
-          { attribute: 'Alc-Subscriber-QoS-Override', op: '+=', value: `I:P:1:pir=${upKbps},cir=${upKbps}` }
+          { attribute: 'Alc-Subsc-Prof-Str', op: '=', value: subProfile },
+          { attribute: 'Alc-SLA-Prof-Str', op: '=', value: slaProfile },
+          { attribute: 'Alc-Subsc-Id-Str', op: '=', value: '%{User-Name}' }
         );
+        if (vp.dynamicRate) {
+          replyAttrs.push({ attribute: 'Alc-Agg-Rate-Limit', op: '=', value: String(Math.max(upKbps, downKbps)) });
+        }
       }
     }
   }
@@ -63,10 +110,10 @@ async function generateRadiusAttributes(plan) {
   // 3. Fallback / Global attributes if none of above matched but we need basic ones
   // (Optional: adding standard Alcatel attribute if not using Nokia profiles but Nokia NAS is selected)
   if (nasList.includes('nokia') && !vendorProfiles.some(v => v.vendor === 'nokia')) {
-    const upKbps = await convertMbpsToKbps(upMbps);
-    const downKbps = await convertMbpsToKbps(downMbps);
     replyAttrs.push(
-      { attribute: 'Alc-Sub-Serv-Activate:1', op: ':=', value: `rate-limit;${downKbps};${upKbps}` }
+      { attribute: 'Alc-Subsc-Prof-Str', op: '=', value: 'sub-default' },
+      { attribute: 'Alc-SLA-Prof-Str', op: '=', value: plan.planCode || `pkg-${downMbps}mbps` },
+      { attribute: 'Alc-Subsc-Id-Str', op: '=', value: '%{User-Name}' }
     );
   }
 
@@ -158,9 +205,14 @@ async function createPackagePlan(req, res, next) {
       branchIds
     } = req.body;
 
+    const connectionTypeId = Number(connectionType);
+    if (!Number.isInteger(connectionTypeId) || connectionTypeId <= 0) {
+      return res.status(400).json({ error: 'connectionType is required' });
+    }
+
     const planData = {
       planName, planCode,
-      connectionType: Number(connectionType),
+      connectionTypeDetails: { connect: { id: connectionTypeId } },
       dataLimit: Number(dataLimit) || 0,
       downSpeed: downSpeed ? Number(downSpeed) : null,
       upSpeed: upSpeed ? Number(upSpeed) : null,
@@ -187,14 +239,10 @@ async function createPackagePlan(req, res, next) {
       maxDiscountCount: maxDiscountCount !== undefined ? Number(maxDiscountCount) : 0,
       highPriority: Boolean(highPriority),
       isActive: true,
-      ispId: req.ispId,
+      isp: req.ispId ? { connect: { id: req.ispId } } : undefined,
       isDeleted: false,
       updatedAt: new Date()
     };
-
-    if (!Number.isInteger(planData.connectionType)) {
-      return res.status(400).json({ error: 'connectionType is required' });
-    }
 
     const isExisting = await req.prisma.PackagePlan.findFirst({
       where: { planCode, ispId: req.ispId, isDeleted: false }
@@ -286,7 +334,7 @@ async function updatePackagePlan(req, res, next) {
 
     if (req.body.connectionType !== undefined) {
       if (!req.body.connectionType) return res.status(400).json({ error: 'connectionType is required' });
-      data.connectionType = Number(req.body.connectionType);
+      data.connectionTypeDetails = { connect: { id: Number(req.body.connectionType) } };
     }
     data.updatedAt = new Date();
 
