@@ -82,7 +82,7 @@ module.exports = (prisma) => {
   });
 
   router.get('/hwid', async (req, res) => {
-    res.json({ hwid: getHardwareFingerprint() });
+    res.json({ hwid: await getHardwareFingerprint(prisma) });
   });
 
   router.post('/install', auth, async (req, res, next) => {

@@ -1,8 +1,10 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const os = require('os');
 const jwt = require('jsonwebtoken');
 
 const LICENSE_TOKEN_KEY = 'appLicenseToken';
+const LICENSE_HWID_KEY = 'appHardwareFingerprint';
 const LICENSE_SECRET = process.env.LICENSE_SECRET || process.env.ACCESS_SECRET || 'SimulcastLicenseSecretChangeMe';
 const ISSUER = 'Simulcast Technologies Pvt Ltd';
 const EXPIRED_MESSAGE = 'Your license has been expired. Contact Simulcast Technologies Pvt Ltd.';
@@ -10,25 +12,111 @@ const ACTIVE_STATUS = 'ACTIVE';
 const BLOCKED_STATUSES = new Set(['INACTIVE', 'DEACTIVE', 'DEACTIVATED', 'STOLEN', 'REVOKED']);
 const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
 
-function getHardwareFingerprint() {
+function readFirstExistingFile(paths) {
+  for (const filePath of paths) {
+    try {
+      const value = fs.readFileSync(filePath, 'utf8').trim();
+      if (value) return value;
+    } catch {
+      // Ignore unavailable host identifiers.
+    }
+  }
+  return '';
+}
+
+function hashHardwareSeed(seed) {
+  return crypto.createHash('sha256').update(seed).digest('hex');
+}
+
+function getRuntimeHardwareFingerprint() {
+  if (process.env.LICENSE_HARDWARE_ID) {
+    return hashHardwareSeed(`env::${process.env.LICENSE_HARDWARE_ID}`);
+  }
+
+  const machineId = readFirstExistingFile([
+    '/etc/machine-id',
+    '/var/lib/dbus/machine-id'
+  ]);
+  const dmiId = readFirstExistingFile([
+    '/sys/class/dmi/id/product_uuid',
+    '/sys/class/dmi/id/board_serial',
+    '/sys/class/dmi/id/product_serial'
+  ]);
+
   const interfaces = os.networkInterfaces();
   const macs = Object.values(interfaces)
     .flat()
     .filter(Boolean)
+    .filter((iface) => !iface.internal)
     .map((iface) => iface.mac)
     .filter((mac) => mac && mac !== '00:00:00:00:00:00')
     .sort();
 
   const raw = [
-    process.env.LICENSE_HARDWARE_ID || '',
-    os.hostname(),
+    machineId,
+    dmiId,
     os.platform(),
     os.arch(),
     os.cpus()?.[0]?.model || '',
     macs.join('|')
   ].join('::');
 
-  return crypto.createHash('sha256').update(raw).digest('hex');
+  return hashHardwareSeed(raw);
+}
+
+async function getHardwareFingerprint(prisma) {
+  if (process.env.LICENSE_HARDWARE_ID) {
+    return getRuntimeHardwareFingerprint();
+  }
+
+  if (!prisma) {
+    return getRuntimeHardwareFingerprint();
+  }
+
+  const stored = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_HWID_KEY } });
+  if (stored?.value) return stored.value;
+
+  const existingTokenSetting = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_TOKEN_KEY } });
+  if (existingTokenSetting?.value) {
+    const decoded = jwt.decode(existingTokenSetting.value);
+    if (decoded?.aud && typeof decoded.aud === 'string') {
+      await prisma.iSPSettings.upsert({
+        where: { key: LICENSE_HWID_KEY },
+        update: {
+          value: decoded.aud,
+          description: 'Stable application hardware fingerprint',
+          updatedAt: new Date()
+        },
+        create: {
+          ispId: Number(process.env.DEFAULT_ISP_ID || 1),
+          key: LICENSE_HWID_KEY,
+          value: decoded.aud,
+          description: 'Stable application hardware fingerprint',
+          updatedAt: new Date()
+        }
+      });
+      return decoded.aud;
+    }
+  }
+
+  const hwid = getRuntimeHardwareFingerprint();
+  await prisma.iSPSettings.upsert({
+    where: { key: LICENSE_HWID_KEY },
+    update: {
+      value: hwid,
+      description: 'Stable application hardware fingerprint',
+      updatedAt: new Date()
+    },
+    create: {
+      ispId: Number(process.env.DEFAULT_ISP_ID || 1),
+      key: LICENSE_HWID_KEY,
+      value: hwid,
+      description: 'Stable application hardware fingerprint',
+      updatedAt: new Date()
+    }
+  });
+
+  return hwid;
 }
 
 async function getStoredToken(prisma) {
@@ -130,7 +218,7 @@ async function deleteToken(prisma) {
 }
 
 async function verifyToken(prisma, token) {
-  const hwid = getHardwareFingerprint();
+  const hwid = await getHardwareFingerprint(prisma);
   const decoded = jwt.verify(token, LICENSE_SECRET, {
     issuer: ISSUER,
     audience: hwid
@@ -184,7 +272,7 @@ async function verifyToken(prisma, token) {
 }
 
 async function getStatus(prisma) {
-  const hwid = getHardwareFingerprint();
+  const hwid = await getHardwareFingerprint(prisma);
   const token = await getStoredToken(prisma);
 
   if (!token) {
@@ -213,7 +301,7 @@ async function getStatus(prisma) {
 }
 
 async function generateLicense(prisma, { company, contact, expiresAt, licenseId, hwid }, user) {
-  const targetHwid = hwid || getHardwareFingerprint();
+  const targetHwid = hwid || await getHardwareFingerprint(prisma);
   if (!company) throw new Error('Company is required');
   if (!targetHwid) throw new Error('Hardware ID is required');
   if (!expiresAt) throw new Error('Expire date is required');
