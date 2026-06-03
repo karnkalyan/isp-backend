@@ -6,9 +6,9 @@ const prisma = new PrismaClient();
  * Gets the SMTP transporter configured from ISP settings
  * @param {number} ispId 
  */
-async function getTransporter(ispId) {
+async function getTransporter(ispId, options = {}) {
     const settings = await prisma.iSPSettings.findMany({
-        where: { ispId, key: { in: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'enableMailNotifications'] } }
+        where: { ispId, key: { in: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'enableMailNotifications', 'enableEmailService'] } }
     });
 
     const settingsObj = settings.reduce((acc, s) => {
@@ -16,7 +16,11 @@ async function getTransporter(ispId) {
         return acc;
     }, {});
 
-    if (settingsObj.enableMailNotifications !== 'true') {
+    if (settingsObj.enableEmailService === 'false') {
+        throw new Error("Email service is disabled in settings");
+    }
+
+    if (!options.ignoreNotificationSetting && settingsObj.enableMailNotifications !== 'true') {
         throw new Error("Mail notifications are disabled in settings");
     }
 
@@ -40,14 +44,14 @@ async function getTransporter(ispId) {
  * @param {number} ispId 
  * @param {object} mailOptions { to, subject, text, html }
  */
-async function sendMail(ispId, mailOptions) {
+async function sendMail(ispId, mailOptions, options = {}) {
     try {
         const settings = await prisma.iSPSettings.findFirst({
             where: { ispId, key: 'smtpFrom' }
         });
         const fromAddress = settings ? settings.value : 'noreply@kisanisp.com';
 
-        const transporter = await getTransporter(ispId);
+        const transporter = await getTransporter(ispId, options);
 
         const info = await transporter.sendMail({
             from: fromAddress,

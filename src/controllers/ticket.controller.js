@@ -199,15 +199,34 @@ async function createTicket(req, res, next) {
         const shouldNotify = notifyEmail !== false;
 
         if (shouldNotify) {
+            const mailHelper = require('../utils/mailHelper');
+            const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+            const baseTemplateData = {
+                ispName: req.user?.isp?.companyName || 'ISP',
+                ticketNumber,
+                title,
+                description: description || '',
+                priority: priority || 'MEDIUM',
+                customerName: subject ? `${subject.firstName || ''} ${subject.lastName || ''}`.trim() : '',
+                customerEmail: subject?.email || '',
+                customerPhone: subject?.phoneNumber || '',
+                branchName: ticket.branch?.name || ''
+            };
             // 1) Email Notification to customer
             if (subject && subject.email) {
                 try {
-                    const mailHelper = require('../utils/mailHelper');
+                    const rendered = await renderTemplate(ispId, 'EMAIL', 'support_ticket_customer', {
+                        ...baseTemplateData,
+                        customerName: baseTemplateData.customerName || 'Customer'
+                    }, {
+                        subject: `Ticket Created: ${ticketNumber}`,
+                        body: `Dear ${subject.firstName || 'Customer'},\n\nA new support ticket (${ticketNumber}) has been created for you.\n\nTitle: ${title}\n\nWe will look into this and get back to you shortly.`
+                    }, req.prisma);
                     await mailHelper.sendMail(ispId, {
                         to: subject.email,
-                        subject: `Ticket Created: ${ticketNumber}`,
-                        html: `<p>Dear ${subject.firstName},</p><p>A new support ticket (<b>${ticketNumber}</b>) has been created for you.</p><p><b>Title:</b> ${title}</p><p>We will look into this and get back to you shortly.</p>`
-                    });
+                        subject: rendered.subject,
+                        html: textToHtml(rendered.body)
+                    }, { ignoreNotificationSetting: true });
                 } catch (e) {
                     console.error("Failed to send ticket email notification to customer:", e);
                 }
@@ -216,12 +235,18 @@ async function createTicket(req, res, next) {
             // 2) Email Notification to Assignee
             if (ticket.assignedTo && ticket.assignedTo.email) {
                 try {
-                    const mailHelper = require('../utils/mailHelper');
+                    const rendered = await renderTemplate(ispId, 'EMAIL', 'support_ticket_assignee', {
+                        ...baseTemplateData,
+                        userName: ticket.assignedTo.name || ticket.assignedTo.email
+                    }, {
+                        subject: `Ticket Assigned: ${ticketNumber}`,
+                        body: `Dear ${ticket.assignedTo.name || 'Team Member'},\n\nA support ticket (${ticketNumber}) has been assigned to you.\n\nTitle: ${title}\nDescription: ${description || ''}\n\nPlease review and take action.`
+                    }, req.prisma);
                     await mailHelper.sendMail(ispId, {
                         to: ticket.assignedTo.email,
-                        subject: `Ticket Assigned: ${ticketNumber}`,
-                        html: `<p>Dear ${ticket.assignedTo.name},</p><p>A support ticket (<b>${ticketNumber}</b>) has been assigned to you.</p><p><b>Title:</b> ${title}</p><p><b>Description:</b> ${description || ''}</p><p>Please review and take action.</p>`
-                    });
+                        subject: rendered.subject,
+                        html: textToHtml(rendered.body)
+                    }, { ignoreNotificationSetting: true });
                 } catch (e) {
                     console.error("Failed to send ticket assignee email notification:", e);
                 }
@@ -252,11 +277,18 @@ async function createTicket(req, res, next) {
                         const mailHelper = require('../utils/mailHelper');
                         for (const user of filteredUsers) {
                             if (user.email) {
+                                const rendered = await renderTemplate(ispId, 'EMAIL', 'support_ticket_branch', {
+                                    ...baseTemplateData,
+                                    userName: user.name || user.email
+                                }, {
+                                    subject: `New Ticket Created in your Branch: ${ticketNumber}`,
+                                    body: `Dear ${user.name || 'Team Member'},\n\nA new support ticket (${ticketNumber}) has been created in your branch.\n\nTitle: ${title}\nDescription: ${description || ''}\n\nPlease review and take action.`
+                                }, req.prisma);
                                 await mailHelper.sendMail(ispId, {
                                     to: user.email,
-                                    subject: `New Ticket Created in your Branch: ${ticketNumber}`,
-                                    html: `<p>Dear ${user.name},</p><p>A new support ticket (<b>${ticketNumber}</b>) has been created in your branch.</p><p><b>Title:</b> ${title}</p><p><b>Description:</b> ${description || ''}</p><p>Please review and take action.</p>`
-                                }).catch(err => console.error(`Error sending support notify email to ${user.email}:`, err));
+                                    subject: rendered.subject,
+                                    html: textToHtml(rendered.body)
+                                }, { ignoreNotificationSetting: true }).catch(err => console.error(`Error sending support notify email to ${user.email}:`, err));
                             }
                         }
                     }

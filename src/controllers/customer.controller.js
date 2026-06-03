@@ -577,6 +577,22 @@ async function createCustomer(req, res, next) {
               continue; // skip this device
             }
 
+            let inventoryItem = null;
+            if (device.inventoryItemId) {
+              inventoryItem = await tx.InventoryItem.findFirst({
+                where: {
+                  id: Number(device.inventoryItemId),
+                  ispId: req.ispId,
+                  status: 'ASSIGNED_TO_USER',
+                  userId: req.user.id,
+                },
+              });
+
+              if (!inventoryItem) {
+                throw new Error('Selected inventory device is not assigned to your user');
+              }
+            }
+
             await tx.customerDevice.create({
               data: {
                 customerId: createdCustomer.id,
@@ -589,6 +605,30 @@ async function createCustomer(req, res, next) {
                 provisioningStatus: 'pending',
               },
             });
+
+            if (inventoryItem) {
+              await tx.InventoryItem.update({
+                where: { id: inventoryItem.id },
+                data: {
+                  status: 'ASSIGNED_TO_CUSTOMER',
+                  customerId: createdCustomer.id,
+                  userId: null,
+                  updatedAt: new Date(),
+                },
+              });
+
+              await tx.InventoryLog.create({
+                data: {
+                  inventoryItemId: inventoryItem.id,
+                  fromStatus: inventoryItem.status,
+                  toStatus: 'ASSIGNED_TO_CUSTOMER',
+                  entityType: 'CUSTOMER',
+                  toEntityId: createdCustomer.id,
+                  actionByUserId: req.user.id,
+                  note: `Assigned to customer ${createdCustomer.customerUniqueId}`,
+                },
+              });
+            }
           } catch (deviceErr) {
             // Log but don't stop the whole transaction
             console.warn('Device creation error (skipped):', deviceErr.message);
@@ -692,6 +732,45 @@ async function createCustomer(req, res, next) {
 
     // ---------- Build response ----------
     const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || `Customer ${createdCustomer.id}`;
+    const customerTemplateData = {
+      ispName: req.user?.isp?.companyName || 'ISP',
+      customerName,
+      customerUniqueId: createdCustomer.customerUniqueId,
+      packageName: trialPackage?.packageName || 'Package',
+      planStart: subscription?.planStart ? new Date(subscription.planStart).toLocaleDateString() : '',
+      planEnd: subscription?.planEnd ? new Date(subscription.planEnd).toLocaleDateString() : '',
+      username: Array.isArray(parsedWirelessCredentials) ? (parsedWirelessCredentials.find(cu => cu.username || cu.password)?.username || '') : '',
+      password: Array.isArray(parsedWirelessCredentials) ? (parsedWirelessCredentials.find(cu => cu.username || cu.password)?.password || '') : '',
+      phoneNumber: lead.phoneNumber || ''
+    };
+
+    if (lead.email) {
+      try {
+        const mailHelper = require('../utils/mailHelper');
+        const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+        const rendered = await renderTemplate(req.ispId, 'EMAIL', 'customer_new_connection', customerTemplateData, {
+          subject: 'Customer Account Created',
+          body: `Dear ${customerName},\n\nYour customer account has been created successfully.\n\nCustomer ID: ${createdCustomer.customerUniqueId}`
+        }, req.prisma);
+        await mailHelper.sendMail(req.ispId, {
+          to: lead.email,
+          subject: rendered.subject,
+          html: textToHtml(rendered.body)
+        }, { ignoreNotificationSetting: true });
+      } catch (err) {
+        console.error('Failed to send customer creation email:', err.message);
+      }
+    }
+
+    if (lead.phoneNumber) {
+      try {
+        const smsHelper = require('../utils/smsHelper');
+        await smsHelper.sendEventSms(req.ispId, 'customer_new_connection', customerTemplateData);
+      } catch (err) {
+        console.error('Failed to send customer creation SMS:', err.message);
+      }
+    }
+
     const response = {
       success: true,
       customer: {
@@ -1767,7 +1846,7 @@ async function changePackage(req, res, next) {
       } else {
         updatedSubscription = await tx.customerSubscription.create({
           data: {
-            customerId: customerId,
+            customer: { connect: { id: customerId } },
             packagePriceId: Number(newPackageId),
             planStart: now,
             planEnd: expiryDate,

@@ -11,6 +11,12 @@ const smsHelper = {
     async sendEventSms(ispId, eventType, data) {
         try {
             const prisma = require('../../prisma/client');
+            const { renderTemplate } = require('./templateHelper');
+            const serviceSetting = await prisma.iSPSettings.findFirst({
+                where: { ispId, key: 'enableSmsService' }
+            });
+            if (serviceSetting?.value === 'false') return;
+
             const services = await prisma.iSPService.findMany({
                 where: {
                     ispId,
@@ -50,7 +56,13 @@ const smsHelper = {
             const config = defaultService.config || {};
             const eventConfig = config.events?.[eventType];
 
-            if (!eventConfig || !eventConfig.enabled || !eventConfig.template) {
+            let templateText = eventConfig?.template || '';
+            const dbTemplate = await renderTemplate(ispId, 'SMS', eventType, data, { body: templateText }, prisma);
+            templateText = dbTemplate.body || templateText;
+
+            if ((!eventConfig || eventConfig.enabled !== false) && templateText) {
+                // Continue with the DB/default template.
+            } else {
                 return;
             }
 
@@ -58,7 +70,7 @@ const smsHelper = {
             const client = await ServiceFactory.getClient(defaultService.service.code, ispId);
             
             // 4. Prepare the message
-            let message = eventConfig.template;
+            let message = templateText;
             Object.keys(data).forEach(key => {
                 const value = data[key] !== undefined && data[key] !== null ? data[key] : '';
                 message = message.replace(new RegExp(`{${key}}`, 'g'), value);

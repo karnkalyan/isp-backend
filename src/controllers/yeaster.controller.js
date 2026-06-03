@@ -534,7 +534,7 @@ class YeastarController {
       } = req.body;
       const callerNumber = String(caller || '').trim();
       const calleeNumber = String(callee || '').trim();
-      const assignedExtension = String(req.user?.extId || req.extId || '').trim();
+      const assignedExtension = String(req.user?.yeastarExt || req.user?.extId || req.extId || '').trim();
 
       if (!assignedExtension) {
         return res.status(403).json({
@@ -1409,7 +1409,7 @@ class YeastarController {
     try {
       res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
-      const assignedExtension = String(req.user?.extId || req.extId || '').trim();
+      const assignedExtension = String(req.user?.yeastarExt || req.user?.extId || req.extId || '').trim();
 
       if (!assignedExtension) {
         return res.status(403).json({

@@ -170,6 +170,38 @@ async function createTask(req, res, next) {
 
         await logAudit(req.prisma, createdById, 'TASK_CREATE', { id: task.id, title: task.title }, req);
 
+        if (assignedToId) {
+            try {
+                const assignedUser = await req.prisma.user.findFirst({
+                    where: { id: Number(assignedToId), ispId, isDeleted: false },
+                    select: { name: true, email: true }
+                });
+                if (assignedUser?.email) {
+                    const mailHelper = require('../utils/mailHelper');
+                    const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+                    const rendered = await renderTemplate(ispId, 'EMAIL', 'task_assigned_user', {
+                        ispName: req.user?.isp?.companyName || 'ISP',
+                        userName: assignedUser.name || assignedUser.email,
+                        taskTitle: title,
+                        priority: priority || 'MEDIUM',
+                        description: description || '',
+                        customerName: '',
+                        ticketNumber: ''
+                    }, {
+                        subject: `Task Assigned: ${title}`,
+                        body: `Dear ${assignedUser.name || 'Team Member'},\n\nA task has been assigned to you.\n\nTitle: ${title}\nPriority: ${priority || 'MEDIUM'}\n${description || ''}`
+                    }, req.prisma);
+                    await mailHelper.sendMail(ispId, {
+                        to: assignedUser.email,
+                        subject: rendered.subject,
+                        html: textToHtml(rendered.body)
+                    }, { ignoreNotificationSetting: true });
+                }
+            } catch (err) {
+                console.error('Failed to send task assignment email:', err.message);
+            }
+        }
+
         res.status(201).json({ ...task, warning });
     } catch (err) {
         next(err);

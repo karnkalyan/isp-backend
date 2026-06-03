@@ -565,6 +565,19 @@ class ServiceController {
 
   // ==================== SERVICE-SPECIFIC OPERATIONS ====================
 
+  #optionalServiceUnavailable(res, serviceName, error) {
+    const message = error?.message || `${serviceName} service is not configured or enabled.`;
+    if (/not configured|not enabled|not.*enabled|Failed to create service client/i.test(message)) {
+      return res.json({
+        success: true,
+        configured: false,
+        data: null,
+        message: `${serviceName} service is not configured or enabled for this ISP.`
+      });
+    }
+    return null;
+  }
+
   // NetTV Operations
   async getNetTVSubscribers(req, res) {
     try {
@@ -575,6 +588,8 @@ class ServiceController {
       return res.json({ success: true, data: subscribers });
     } catch (error) {
       console.error('Error getting NetTV subscribers:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get subscribers', message: error.message });
     }
   }
@@ -588,6 +603,8 @@ class ServiceController {
       return res.json({ success: true, data: subscriber });
     } catch (error) {
       console.error('Error getting NetTV subscriber:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get subscriber', message: error.message });
     }
   }
@@ -761,6 +778,8 @@ class ServiceController {
       });
     } catch (error) {
       console.error('Error getting Tshul customers:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'TSHUL', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get customers', message: error.message });
     }
   }
@@ -778,6 +797,8 @@ class ServiceController {
 
     } catch (error) {
       console.error('Error getting Tshul customers:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'TSHUL', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get customers', message: error.message });
     }
   }
@@ -805,6 +826,8 @@ class ServiceController {
       return res.json({ success: true, data: users });
     } catch (error) {
       console.error('Error getting Radius users:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'Radius', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get users', message: error.message });
     }
   }
@@ -841,6 +864,8 @@ class ServiceController {
       return res.json({ success: true, data: user });
     } catch (error) {
       console.error('Error getting Radius user:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'Radius', error);
+      if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get user', message: error.message });
     }
   }
