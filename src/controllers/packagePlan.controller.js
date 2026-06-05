@@ -199,7 +199,7 @@ async function createPackagePlan(req, res, next) {
       planName, planCode, connectionType, dataLimit, downSpeed, upSpeed,
       intUpload, firDownload, localUpload, localDownload, isPopular,
       description, deviceLimit, nasType, service, priority,
-      packageType, allowRename, fupApply, isFupPackage,
+      packageType, allowRename, fupApply, fupLimitGb, fupPenaltyPlanId, isFupPackage,
       onlyRenewal, applyFramedPool, framedPoolValue, customRadiusAttributes,
       vendorProfiles, maxDiscountPercentage, maxDiscountCount, highPriority,
       branchIds
@@ -230,6 +230,8 @@ async function createPackagePlan(req, res, next) {
       packageType: packageType || null,
       allowRename: Boolean(allowRename),
       fupApply: fupApply !== undefined ? Boolean(fupApply) : true,
+      fupLimitGb: fupLimitGb !== undefined && fupLimitGb !== null && fupLimitGb !== '' ? Number(fupLimitGb) : null,
+      fupPenaltyPlanId: fupPenaltyPlanId !== undefined && fupPenaltyPlanId !== null && fupPenaltyPlanId !== '' ? Number(fupPenaltyPlanId) : null,
       isFupPackage: Boolean(isFupPackage),
       onlyRenewal: Boolean(onlyRenewal),
       applyFramedPool: Boolean(applyFramedPool),
@@ -314,7 +316,7 @@ async function updatePackagePlan(req, res, next) {
       'intUpload', 'firDownload', 'localUpload', 'localDownload',
       'isPopular', 'description', 'deviceLimit', 'isActive',
       'nasType', 'service', 'priority', 'vendorProfiles',
-      'packageType', 'allowRename', 'fupApply',
+      'packageType', 'allowRename', 'fupApply', 'fupLimitGb', 'fupPenaltyPlanId',
       'isFupPackage', 'onlyRenewal', 'applyFramedPool',
       'framedPoolValue', 'customRadiusAttributes',
       'maxDiscountPercentage', 'maxDiscountCount', 'highPriority'
@@ -322,7 +324,7 @@ async function updatePackagePlan(req, res, next) {
 
     fields.forEach(f => {
       if (req.body[f] !== undefined) {
-        if (['downSpeed', 'upSpeed', 'intUpload', 'firDownload', 'localUpload', 'localDownload', 'dataLimit', 'maxDiscountPercentage', 'maxDiscountCount'].includes(f)) {
+        if (['downSpeed', 'upSpeed', 'intUpload', 'firDownload', 'localUpload', 'localDownload', 'dataLimit', 'fupLimitGb', 'fupPenaltyPlanId', 'maxDiscountPercentage', 'maxDiscountCount'].includes(f)) {
           data[f] = req.body[f] === null ? null : Number(req.body[f]);
         } else if (['isPopular', 'isActive', 'allowRename', 'fupApply', 'isFupPackage', 'onlyRenewal', 'applyFramedPool', 'highPriority'].includes(f)) {
           data[f] = Boolean(req.body[f]);

@@ -292,6 +292,8 @@ model PackagePlan {
   packageType String?
   allowRename Boolean @default(false)
   fupApply Boolean @default(true)
+  fupLimitGb Int?
+  fupPenaltyPlanId Int?
   isFupPackage Boolean @default(false)
   onlyRenewal Boolean @default(false)
   applyFramedPool Boolean @default(false)
