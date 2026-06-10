@@ -341,15 +341,23 @@ async function renewSubscription(req, res, next) {
                 isDeleted: false,
                 ...(req.branchId ? { branchId: req.branchId } : {})
             },
-            select: { id: true, branchId: true }
+            select: { id: true, branchId: true, isRechargeable: true }
         });
 
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
+        const newPackageAmount = pkgPrice.initialTotalWithTax !== null && pkgPrice.initialTotalWithTax !== undefined
+            ? Number(pkgPrice.initialTotalWithTax)
+            : Number(pkgPrice.price || 0);
+        const renewalAmount = pkgPrice.renewAmountWithTax !== null && pkgPrice.renewAmountWithTax !== undefined
+            ? Number(pkgPrice.renewAmountWithTax)
+            : Number(pkgPrice.price || 0);
+        const expectedAmount = customer.isRechargeable ? renewalAmount : newPackageAmount;
+
         // Amount validation
         if (amount !== undefined && amount !== null) {
-            if (Number(amount) !== Number(pkgPrice.price)) {
-                return res.status(400).json({ error: `Incorrect payment amount. Expected: ${pkgPrice.price}, Received: ${amount}` });
+            if (Number(amount) !== Number(expectedAmount)) {
+                return res.status(400).json({ error: `Incorrect payment amount. Expected: ${expectedAmount}, Received: ${amount}` });
             }
         }
 
@@ -388,7 +396,7 @@ async function renewSubscription(req, res, next) {
         }
         
         let planStart = new Date(subscription.planEnd);
-        if (planStart < new Date()) {
+        if (!subscription.isTrial && planStart < new Date()) {
             planStart = new Date();
         }
 
@@ -424,7 +432,7 @@ async function renewSubscription(req, res, next) {
 
             // Create order for renewal
             const orderItems = [
-              { itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal', referenceId: pkgPrice.referenceId, itemPrice: pkgPrice.price }
+              { itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal', referenceId: pkgPrice.referenceId, itemPrice: expectedAmount }
             ];
 
             await tx.customerOrderManagement.create({
@@ -435,7 +443,7 @@ async function renewSubscription(req, res, next) {
                     orderDate: new Date(),
                     packageStart: planStart,
                     packageEnd: planEnd,
-                    totalAmount: amount !== undefined ? Number(amount) : orderItems.reduce((s, i) => s + i.itemPrice, 0),
+                    totalAmount: amount !== undefined ? Number(amount) : expectedAmount,
                     isPaid: false,
                     isActive: true,
                     invoiceId: invoiceId ? String(invoiceId) : null,
@@ -443,6 +451,13 @@ async function renewSubscription(req, res, next) {
                     updatedAt: new Date()
                 }
             });
+
+            if (!customer.isRechargeable) {
+                await tx.customer.update({
+                    where: { id: customer.id },
+                    data: { isRechargeable: true }
+                });
+            }
 
             return created;
         });

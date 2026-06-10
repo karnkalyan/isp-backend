@@ -432,7 +432,6 @@ async function createCustomer(req, res, next) {
       customerTypeId,
       installedById,
       existingISPId,
-      assignedPkg,
       subscribedPkgId,
       idNumber,
       panNumber,
@@ -461,7 +460,6 @@ async function createCustomer(req, res, next) {
     const errors = [];
     if (!leadId) errors.push('leadId is required');
     if (!idNumber) errors.push('idNumber is required');
-    if (!assignedPkg) errors.push('assignedPkg (trial package) is required');
     if (errors.length > 0) {
       return res.status(400).json({ success: false, error: 'Validation failed', details: errors });
     }
@@ -472,6 +470,9 @@ async function createCustomer(req, res, next) {
     });
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (lead.convertedToCustomer) return res.status(409).json({ success: false, error: 'Lead already converted' });
+    if (lead.status !== 'qualified') {
+      return res.status(400).json({ success: false, error: 'Only qualified leads can be converted to customers' });
+    }
 
     // Validate duplicate Mobile and Email based on CustomerType rules
     const targetTypeId = customerTypeId ? Number(customerTypeId) : null;
@@ -505,13 +506,19 @@ async function createCustomer(req, res, next) {
       }
     }
 
-    // Validate trial package
-    const trialPackage = await prisma.packagePrice.findFirst({
-      where: { id: Number(assignedPkg), isActive: true, isDeleted: false, ispId: req.ispId },
+    const selectedSubscribedPkgId = subscribedPkgId || lead.interestedPackageId;
+    if (!selectedSubscribedPkgId) {
+      return res.status(400).json({ success: false, error: 'subscribedPkgId is required' });
+    }
+
+    // Validate subscribed package. New customers get a fixed 3-day test period
+    // on this package instead of selecting a separate trial package.
+    const subscribedPackage = await prisma.packagePrice.findFirst({
+      where: { id: Number(selectedSubscribedPkgId), isActive: true, isDeleted: false, isTrial: false, ispId: req.ispId },
       include: { oneTimeCharges: { where: { isDeleted: false } } },
     });
-    if (!trialPackage || !trialPackage.isTrial) {
-      return res.status(400).json({ success: false, error: 'Invalid or non-trial package selected' });
+    if (!subscribedPackage) {
+      return res.status(400).json({ success: false, error: 'Invalid subscribed package selected' });
     }
 
     // Data preparation
@@ -541,8 +548,8 @@ async function createCustomer(req, res, next) {
           ...(req.ispId && { isp: { connect: { id: Number(req.ispId) } } }),
           ...(installedById && { installedBy: { connect: { id: Number(installedById) } } }),
           ...(existingISPId && { existingISP: { connect: { id: Number(existingISPId) } } }),
-          packagePrice: { connect: { id: Number(assignedPkg) } },
-          ...(subscribedPkgId && { subscribedPkg: { connect: { id: Number(subscribedPkgId) } } }),
+          packagePrice: { connect: { id: subscribedPackage.id } },
+          subscribedPkg: { connect: { id: subscribedPackage.id } },
           status: 'draft',
           onboardStatus: 'pending',
         }
@@ -672,14 +679,16 @@ async function createCustomer(req, res, next) {
         }
       }
 
-      // 6. Trial Subscription
-      const expiryDateObj = computeExpiryFromBase(String(trialPackage.packageDuration || '1 month'));
+      // 6. Free 3-day test subscription on the selected subscribed package.
+      const testStart = new Date();
+      const testEnd = new Date(testStart);
+      testEnd.setDate(testEnd.getDate() + 3);
       subscription = await tx.customerSubscription.create({
         data: {
           customer: { connect: { id: createdCustomer.id } },
-          packagePrice: { connect: { id: trialPackage.id } },
-          planStart: new Date(),
-          planEnd: expiryDateObj,
+          packagePrice: { connect: { id: subscribedPackage.id } },
+          planStart: testStart,
+          planEnd: testEnd,
           isTrial: true,
           isActive: true,
           isInvoicing: false,
@@ -688,19 +697,14 @@ async function createCustomer(req, res, next) {
 
       // 7. Order
       const orderItems = [
-        { itemName: trialPackage.packageName || 'Trial Package', referenceId: trialPackage.referenceId, itemPrice: 0 },
-        ...(trialPackage.oneTimeCharges || []).map(otc => ({
-          itemName: otc.name || 'One Time Charge',
-          referenceId: otc.referenceId,
-          itemPrice: otc.amount || 0,
-        })),
+        { itemName: `${subscribedPackage.packageName || 'Package'} - 3 Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
       ];
 
       order = await tx.customerOrderManagement.create({
         data: {
           customer: { connect: { id: createdCustomer.id } },
           subscription: { connect: { id: subscription.id } },
-          packagePrice: { connect: { id: trialPackage.id } },
+          packagePrice: { connect: { id: subscribedPackage.id } },
           packageStart: subscription.planStart,
           packageEnd: subscription.planEnd,
           orderDate: new Date(),
@@ -736,7 +740,7 @@ async function createCustomer(req, res, next) {
       ispName: req.user?.isp?.companyName || 'ISP',
       customerName,
       customerUniqueId: createdCustomer.customerUniqueId,
-      packageName: trialPackage?.packageName || 'Package',
+      packageName: subscribedPackage?.packageName || 'Package',
       planStart: subscription?.planStart ? new Date(subscription.planStart).toLocaleDateString() : '',
       planEnd: subscription?.planEnd ? new Date(subscription.planEnd).toLocaleDateString() : '',
       username: Array.isArray(parsedWirelessCredentials) ? (parsedWirelessCredentials.find(cu => cu.username || cu.password)?.username || '') : '',
@@ -884,9 +888,9 @@ async function provisionCustomer(req, res, next) {
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
     if (customer.status === 'active') return res.status(400).json({ error: 'Customer is already active' });
 
-    const trialSubscription = customer.customerSubscriptions[0];
-    if (!trialSubscription) {
-      return res.status(400).json({ error: 'No active trial subscription found' });
+    const testSubscription = customer.customerSubscriptions[0];
+    if (!testSubscription) {
+      return res.status(400).json({ error: 'No active test-period subscription found' });
     }
 
     // Prepare results for each service
@@ -994,10 +998,10 @@ async function provisionCustomer(req, res, next) {
         onboardStatus: 'fully_onboarded',
       },
       subscription: {
-        id: trialSubscription.id,
-        planStart: trialSubscription.planStart,
-        planEnd: trialSubscription.planEnd,
-        packageName: trialSubscription.packagePrice?.packageName,
+        id: testSubscription.id,
+        planStart: testSubscription.planStart,
+        planEnd: testSubscription.planEnd,
+        packageName: testSubscription.packagePrice?.packageName,
       },
       order: null,
       provisioning: {
@@ -1615,6 +1619,8 @@ const subscribePackage = async (req, res, next) => {
             id: true,
             packageName: true,
             price: true,
+            initialTotalWithTax: true,
+            renewAmountWithTax: true,
             packageDuration: true,
             referenceId: true,
             oneTimeCharges: {
@@ -1633,7 +1639,13 @@ const subscribePackage = async (req, res, next) => {
 
     // FIX: use the correct database field 'isRechargeable'
     const isRechargeable = Boolean(customer.isRechargeable);
-    const packagePrice = Number(pkg.price || 0);
+    const newPackageAmount = pkg.initialTotalWithTax !== null && pkg.initialTotalWithTax !== undefined
+      ? Number(pkg.initialTotalWithTax)
+      : Number(pkg.price || 0);
+    const renewalAmount = pkg.renewAmountWithTax !== null && pkg.renewAmountWithTax !== undefined
+      ? Number(pkg.renewAmountWithTax)
+      : Number(pkg.price || 0);
+    const packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
 
     const otcItems = isRechargeable
       ? []
@@ -1698,7 +1710,7 @@ const subscribePackage = async (req, res, next) => {
         isInvoicing: true
       };
       if (subscription.isTrial) {
-        updatedSubData.planStart = new Date();
+        updatedSubData.planStart = previousPlanEnd;
       }
 
       const updatedSubscription = await tx.customerSubscription.update({

@@ -10,6 +10,8 @@ async function getCustomerPackageDetails(prisma, ispId, customerId) {
         select: {
           id: true,
           price: true,
+          initialTotalWithTax: true,
+          renewAmountWithTax: true,
           packageDuration: true,
           referenceId: true,
           packagePlanDetails: { select: { planName: true } },
@@ -31,8 +33,14 @@ async function getCustomerPackageDetails(prisma, ispId, customerId) {
   }
 
   const pkg = customer.subscribedPkg;
-  const isRechargeable = Boolean(customer.rechargeable);
-  const packagePrice = Number(pkg.price || 0);
+  const isRechargeable = Boolean(customer.isRechargeable);
+  const newPackageAmount = pkg.initialTotalWithTax !== null && pkg.initialTotalWithTax !== undefined
+    ? Number(pkg.initialTotalWithTax)
+    : Number(pkg.price || 0);
+  const renewalAmount = pkg.renewAmountWithTax !== null && pkg.renewAmountWithTax !== undefined
+    ? Number(pkg.renewAmountWithTax)
+    : Number(pkg.price || 0);
+  const packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
 
   const otcItems = isRechargeable
     ? []
@@ -106,7 +114,7 @@ async function createSubscriptionOrder(prisma, ispId, customerId) {
     };
 
     if (subscription.isTrial) {
-      updatedSubData.planStart = new Date();
+      updatedSubData.planStart = previousPlanEnd;
     }
 
     const updatedSubscription = await tx.customerSubscription.update({
@@ -114,10 +122,10 @@ async function createSubscriptionOrder(prisma, ispId, customerId) {
       data: updatedSubData
     });
 
-    if (!customer.rechargeable) {
+    if (!customer.isRechargeable) {
       await tx.customer.update({
         where: { id: customer.id },
-        data: { rechargeable: true }
+        data: { isRechargeable: true }
       });
     }
 
