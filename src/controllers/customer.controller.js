@@ -4,6 +4,7 @@ const { logAudit } = require('../utils/auditLogger');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this line
 // ----------------------------------------------------------------------
@@ -437,6 +438,8 @@ async function createCustomer(req, res, next) {
       panNumber,
       devices,
       wirelessCredentials,
+      customerLoginUsername,
+      customerLoginPassword,
       serviceConnection,
       subscribedServices,
     } = req.body;
@@ -522,6 +525,19 @@ async function createCustomer(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid subscribed package selected' });
     }
 
+    const requestedLoginUsername = normalizeCustomerLoginUsername(customerLoginUsername);
+    if (requestedLoginUsername) {
+      const requestedLoginEmail = toCustomerLoginEmail(requestedLoginUsername);
+      const existingLogin = await prisma.user.findUnique({ where: { email: requestedLoginEmail } });
+      if (existingLogin) {
+        return res.status(409).json({
+          success: false,
+          error: 'Customer login username already exists',
+          details: `The username "${requestedLoginUsername}" is already used by another login account.`
+        });
+      }
+    }
+
     // Data preparation
     const finalPan = await generateUniquePAN(prisma, panNumber);
     const membership = membershipId
@@ -533,6 +549,7 @@ async function createCustomer(req, res, next) {
     let createdCustomer;
     let subscription;
     let order;
+    let customerLogin = null;
     const skippedDevices = []; // track duplicates
 
     await prisma.$transaction(async (tx) => {
@@ -562,6 +579,41 @@ async function createCustomer(req, res, next) {
         where: { id: createdCustomer.id },
         data: { customerUniqueId },
       });
+
+      const loginUsername = requestedLoginUsername || normalizeCustomerLoginUsername(customerUniqueId);
+      const loginEmail = toCustomerLoginEmail(loginUsername);
+      const loginPassword = String(customerLoginPassword || '').trim() || generateSecurePassword(10);
+
+      if (loginEmail) {
+        const customerRole = await tx.role.upsert({
+          where: { name: 'Customer' },
+          update: { isActive: true },
+          create: { name: 'Customer', isActive: true },
+        });
+        const existingLogin = await tx.user.findUnique({ where: { email: loginEmail } });
+        if (existingLogin) {
+          throw new Error('Customer login username already exists');
+        }
+
+        await tx.user.create({
+          data: {
+            email: loginEmail,
+            passwordHash: await bcrypt.hash(loginPassword, 10),
+            name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+            roleId: customerRole.id,
+            status: 'active',
+            ispId: req.ispId ? Number(req.ispId) : null,
+            branchId: branchId ? Number(branchId) : null,
+          },
+        });
+
+        customerLogin = {
+          username: loginUsername,
+          loginEmail,
+          password: loginPassword,
+          generatedPassword: !String(customerLoginPassword || '').trim(),
+        };
+      }
 
       // 3. Create Devices – handle duplicates individually
       if (parsedDevices.length > 0) {
@@ -794,6 +846,7 @@ async function createCustomer(req, res, next) {
         id: order.id,
         totalAmount: order.totalAmount,
       } : null,
+      customerLogin,
       message: 'Customer created successfully in draft status',
     };
 
@@ -815,12 +868,29 @@ async function createCustomer(req, res, next) {
         details: `A record with this ${err.meta?.target} already exists.`,
       });
     }
+    if (err.message === 'Customer login username already exists') {
+      return res.status(409).json({
+        success: false,
+        error: 'Customer login username already exists',
+        details: 'Choose another customer login username.'
+      });
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to create customer',
       details: err.message,
     });
   }
+}
+
+function normalizeCustomerLoginUsername(username) {
+  return String(username || '').trim().replace(/\s+/g, '').toLowerCase();
+}
+
+function toCustomerLoginEmail(username) {
+  const normalized = normalizeCustomerLoginUsername(username);
+  if (!normalized) return null;
+  return isValidEmail(normalized) ? normalized : `${normalized}@customer.local`;
 }
 
 async function getCustomerProfile(req, res, next) {
@@ -1594,36 +1664,20 @@ async function deleteCustomer(req, res, next) {
       return res.status(404).json({ error: "Customer not found" });
     }
 
-    await req.prisma.$transaction(async (tx) => {
-      const assignedInventory = await tx.InventoryItem.findMany({
-        where: { customerId: id, ispId: req.ispId }
+    const assignedInventory = await req.prisma.InventoryItem.findMany({
+      where: { customerId: id, ispId: req.ispId },
+      select: { id: true, name: true, type: true, serialNumber: true, macAddress: true, status: true }
+    });
+
+    if (assignedInventory.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Customer cannot be deleted while hardware is assigned. Return or refund assigned devices to stock/office/staff before deleting or inactivating this customer.",
+        assignedInventory
       });
+    }
 
-      for (const item of assignedInventory) {
-        const nextStatus = item.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
-        await tx.InventoryItem.update({
-          where: { id: item.id },
-          data: {
-            customerId: null,
-            userId: null,
-            status: nextStatus,
-            availableQty: item.qty || item.availableQty || 1,
-            updatedAt: new Date()
-          }
-        });
-        await tx.InventoryLog.create({
-          data: {
-            inventoryItemId: item.id,
-            fromStatus: item.status,
-            toStatus: nextStatus,
-            toEntityId: item.branchId || null,
-            entityType: item.branchId ? 'BRANCH' : 'HEAD_OFFICE',
-            actionByUserId: req.user.id,
-            note: `Released from deleted customer ${existing.customerUniqueId || existing.id}`
-          }
-        });
-      }
-
+    await req.prisma.$transaction(async (tx) => {
       await tx.customer.update({
         where: { id },
         data: { isDeleted: true, status: 'deleted', onboardStatus: 'reverted_to_lead' }
@@ -1657,7 +1711,7 @@ async function deleteCustomer(req, res, next) {
       await logAudit(tx, req.user.id, 'CUSTOMER_DELETE_REVERT_LEAD', {
         id,
         leadId: existing.leadId,
-        releasedInventory: assignedInventory.map(item => item.id)
+        releasedInventory: []
       }, req);
     });
 

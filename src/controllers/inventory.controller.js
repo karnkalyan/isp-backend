@@ -20,7 +20,7 @@ function normalizeInventoryType(value) {
 
 async function listInventoryItems(req, res, next) {
     try {
-        const { type, status, branchId, userId, customerId, serialNumber } = req.query;
+        const { type, status, branchId, userId, customerId, serialNumber, search } = req.query;
         const ispId = req.ispId;
         const normalizedType = normalizeInventoryType(type);
 
@@ -50,6 +50,26 @@ async function listInventoryItems(req, res, next) {
             where.branchId = requestedBranchId;
         }
 
+        let searchOrConditions = null;
+        if (search) {
+            const rawSearch = String(search).trim();
+            const normalizedSearch = rawSearch.replace(/[^a-zA-Z0-9]/g, '');
+            searchOrConditions = [
+                { name: { contains: rawSearch } },
+                { model: { contains: rawSearch } },
+                { serialNumber: { contains: rawSearch } },
+                { ponSerialNumber: { contains: rawSearch } },
+                { macAddress: { contains: rawSearch } },
+            ];
+            if (normalizedSearch && normalizedSearch !== rawSearch) {
+                searchOrConditions.push(
+                    { serialNumber: { contains: normalizedSearch } },
+                    { ponSerialNumber: { contains: normalizedSearch } },
+                    { macAddress: { contains: normalizedSearch } }
+                );
+            }
+        }
+
         const statuses = Array.isArray(status) ? status : (status ? [status] : []);
         if (statuses.includes('IN_STOCK')) {
             const otherStatuses = statuses.filter(s => s !== 'IN_STOCK');
@@ -71,6 +91,13 @@ async function listInventoryItems(req, res, next) {
             where.status = statuses[0];
         } else if (statuses.length > 1) {
             where.status = { in: statuses };
+        }
+
+        if (searchOrConditions) {
+            where.AND = [
+                ...(where.AND || []),
+                { OR: searchOrConditions }
+            ];
         }
 
 
@@ -559,6 +586,36 @@ async function assignInventoryItem(req, res, next) {
         if (customerId) toStatus = 'ASSIGNED_TO_CUSTOMER';
         else if (userId) toStatus = 'ASSIGNED_TO_USER';
         else if (assignedRoleId) toStatus = 'ASSIGNED_TO_ROLE';
+
+        if (customerId) {
+            const targetCustomerId = Number(customerId);
+            if (item.status === 'ASSIGNED_TO_CUSTOMER' || item.customerId) {
+                return res.status(400).json({
+                    error: item.customerId === targetCustomerId
+                        ? 'This hardware is already assigned to this customer.'
+                        : 'This hardware is already assigned to a customer. Return it to stock, branch, or staff before assigning it to another customer.'
+                });
+            }
+
+            const customerAssignableStatuses = new Set([
+                'IN_STOCK',
+                'ASSIGNED_TO_BRANCH',
+                'ASSIGNED_TO_USER',
+                'ASSIGNED_TO_ROLE',
+                'RETURNED'
+            ]);
+            if (!customerAssignableStatuses.has(item.status)) {
+                return res.status(400).json({
+                    error: `Hardware in ${item.status.replace(/_/g, ' ')} status cannot be assigned to a customer. Return it to stock, branch, or staff first.`
+                });
+            }
+
+            if (item.availableQty <= 0) {
+                return res.status(400).json({
+                    error: 'This hardware has no available quantity. Return it before assigning it to a customer.'
+                });
+            }
+        }
 
         let updated;
 
