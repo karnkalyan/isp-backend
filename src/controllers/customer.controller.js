@@ -1253,9 +1253,15 @@ async function getCustomerById(req, res, next) {
     // Enrich serviceDetails with VLAN objects
     await enrichServiceDetailsWithVlans(req.prisma, customer);
 
+    const inventoryItems = await req.prisma.InventoryItem.findMany({
+      where: { customerId: id, ispId: req.ispId },
+      orderBy: { updatedAt: 'desc' }
+    });
+
     // Flatten lead fields
     const response = {
       ...customer,
+      inventoryItems,
       firstName: customer.lead?.firstName,
       lastName: customer.lead?.lastName,
       middleName: customer.lead?.middleName,
