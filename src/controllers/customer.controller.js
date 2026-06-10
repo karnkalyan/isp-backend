@@ -460,6 +460,7 @@ async function createCustomer(req, res, next) {
     const errors = [];
     if (!leadId) errors.push('leadId is required');
     if (!idNumber) errors.push('idNumber is required');
+    if (!customerTypeId) errors.push('customerTypeId is required');
     if (errors.length > 0) {
       return res.status(400).json({ success: false, error: 'Validation failed', details: errors });
     }
@@ -1389,7 +1390,9 @@ async function updateCustomer(req, res, next) {
       // Customer fields
       idNumber, panNumber,
       status, onboardStatus,
-      membershipId, existingISPId,
+      membershipId, existingISPId, customerTypeId, subBranchId, installedById, subscribedPkgId,
+      deviceName, deviceMac,
+      connectionType, vlanId, vlanPriority, oltId, splitterId, oltPort, splitterPort,
 
       ...rest
     } = req.body;
@@ -1440,6 +1443,11 @@ async function updateCustomer(req, res, next) {
     if (existingISPId !== undefined) customerUpdate.existingISPId = existingISPId ? Number(existingISPId) : null;
     if (customerTypeId !== undefined) customerUpdate.customerTypeId = customerTypeId ? Number(customerTypeId) : null;
     if (subBranchId !== undefined) customerUpdate.subBranchId = subBranchId ? Number(subBranchId) : null;
+    if (installedById !== undefined) customerUpdate.installedById = installedById ? Number(installedById) : null;
+    if (subscribedPkgId !== undefined) {
+      customerUpdate.subscribedPkgId = subscribedPkgId ? Number(subscribedPkgId) : null;
+      customerUpdate.assignedPkg = subscribedPkgId ? Number(subscribedPkgId) : null;
+    }
 
     // Build Lead update
     const leadUpdate = {};
@@ -1580,20 +1588,76 @@ async function deleteCustomer(req, res, next) {
       return res.status(404).json({ error: "Customer not found" });
     }
 
-    await req.prisma.$transaction([
-      req.prisma.customer.update({
+    await req.prisma.$transaction(async (tx) => {
+      const assignedInventory = await tx.InventoryItem.findMany({
+        where: { customerId: id, ispId: req.ispId }
+      });
+
+      for (const item of assignedInventory) {
+        const nextStatus = item.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
+        await tx.InventoryItem.update({
+          where: { id: item.id },
+          data: {
+            customerId: null,
+            userId: null,
+            status: nextStatus,
+            availableQty: item.qty || item.availableQty || 1,
+            updatedAt: new Date()
+          }
+        });
+        await tx.InventoryLog.create({
+          data: {
+            inventoryItemId: item.id,
+            fromStatus: item.status,
+            toStatus: nextStatus,
+            toEntityId: item.branchId || null,
+            entityType: item.branchId ? 'BRANCH' : 'HEAD_OFFICE',
+            actionByUserId: req.user.id,
+            note: `Released from deleted customer ${existing.customerUniqueId || existing.id}`
+          }
+        });
+      }
+
+      await tx.customer.update({
         where: { id },
-        data: { isDeleted: true, status: 'inactive' }
-      }),
-      req.prisma.lead.update({
-        where: { id: existing.leadId },
+        data: { isDeleted: true, status: 'deleted', onboardStatus: 'reverted_to_lead' }
+      });
+
+      await tx.customerSubscription.updateMany({
+        where: { customerId: id },
+        data: { isActive: false, isInvoicing: false }
+      });
+
+      await tx.customerServiceConnection.updateMany({
+        where: { customerId: id },
+        data: { status: 'deleted' }
+      });
+
+      await tx.connectionUser.updateMany({
+        where: { customerId: id },
         data: { isDeleted: true }
-      })
-    ]);
+      });
+
+      await tx.lead.update({
+        where: { id: existing.leadId },
+        data: {
+          isDeleted: false,
+          convertedToCustomer: false,
+          convertedAt: null,
+          status: 'qualified'
+        }
+      });
+
+      await logAudit(tx, req.user.id, 'CUSTOMER_DELETE_REVERT_LEAD', {
+        id,
+        leadId: existing.leadId,
+        releasedInventory: assignedInventory.map(item => item.id)
+      }, req);
+    });
 
     return res.json({
       success: true,
-      message: "Customer deleted successfully",
+      message: "Customer removed and lead reverted to qualified",
       id
     });
   } catch (err) {

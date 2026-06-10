@@ -1,17 +1,35 @@
 /**
  * Get all inventory items with filtering
  */
+function normalizeInventoryType(value) {
+    if (!value) return undefined;
+    const normalized = String(value).trim().toUpperCase();
+    const aliases = {
+        ROUTER: 'ROUTE',
+        ROUTE: 'ROUTE',
+        ONT: 'ONT',
+        OLT: 'OLT',
+        DROPWIRE: 'DROPWIRE',
+        DROP_WIRE: 'DROPWIRE',
+        SWITCH: 'SWITCH',
+        STB: 'STB',
+        OTHER: 'OTHER'
+    };
+    return aliases[normalized] || normalized;
+}
+
 async function listInventoryItems(req, res, next) {
     try {
         const { type, status, branchId, userId, customerId, serialNumber } = req.query;
         const ispId = req.ispId;
+        const normalizedType = normalizeInventoryType(type);
 
         const { getBranchFilter } = require('../utils/branchHelper');
         const branchFilter = await getBranchFilter(req);
 
         const where = {
             ispId,
-            ...(type && { type }),
+            ...(normalizedType && { type: normalizedType }),
             ...(userId && { userId: Number(userId) }),
             ...(customerId && { customerId: Number(customerId) }),
             ...(serialNumber && { serialNumber: { contains: serialNumber } })
@@ -128,6 +146,7 @@ async function listInventoryItems(req, res, next) {
 async function addInventoryItem(req, res, next) {
     try {
         const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty } = req.body;
+        const normalizedType = normalizeInventoryType(type) || 'ONT';
         const ispId = req.ispId;
 
         // Verify serial number uniqueness only if provided
@@ -150,7 +169,7 @@ async function addInventoryItem(req, res, next) {
         try {
             const item = await req.prisma.InventoryItem.create({
                 data: {
-                    type,
+                    type: normalizedType,
                     name,
                     serialNumber,
                     model,
@@ -403,6 +422,7 @@ async function bulkAddInventoryItems(req, res, next) {
         for (const itemData of items) {
             try {
                 const { type, name, serialNumber, model, ponSerialNumber, macAddress } = itemData;
+                const normalizedType = normalizeInventoryType(type) || 'ONT';
 
                 // Verify serial number uniqueness only if provided
                 if (serialNumber) {
@@ -417,8 +437,8 @@ async function bulkAddInventoryItems(req, res, next) {
 
                 const created = await req.prisma.InventoryItem.create({
                     data: {
-                        type: type || 'ONT',
-                        name: name || `Device ${type}`,
+                        type: normalizedType,
+                        name: name || `Device ${normalizedType}`,
                         serialNumber,
                         model,
                         ponSerialNumber,

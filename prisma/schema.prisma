@@ -1042,6 +1042,11 @@ model CustomerSubscription {
   isTrial      Boolean                   @default(false)
   planStart    DateTime
   planEnd      DateTime
+  isPaused     Boolean                   @default(false)
+  pauseDate    DateTime?
+  extensionCount   Int                   @default(0)
+  graceDaysBalance Int                   @default(0)
+  compensationDays Int                   @default(0)
   isActive     Boolean                   @default(true)
   isInvoicing  Boolean                   @default(true)
   orders       CustomerOrderManagement[]
