@@ -37,6 +37,8 @@ module.exports = (prisma) => {
     // NetTV Operations
     router.get('/nettv/countries', checkPermission('services_read'), serviceController.countriesProvince.bind(serviceController));
     router.get('/nettv/subscribers', checkPermission('services_read'), serviceController.getNetTVSubscribers.bind(serviceController));
+    router.get('/nettv/packages', checkPermission('services_read'), serviceController.getNetTVPackages.bind(serviceController));
+    router.get('/nettv/stbs', checkPermission('services_read'), serviceController.getNetTVSTBs.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));
     router.post('/nettv/subscribers', checkPermission('services_manage'), serviceController.createNetTVSubscriber.bind(serviceController));
 
@@ -57,12 +59,13 @@ module.exports = (prisma) => {
 
     // Radius Operations
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));
-    router.get('/radius/act/:username', checkPermission('services_manage'), serviceController.getRadiusAccountbyUser.bind(serviceController));
+    router.get('/radius/act/:username', checkPermission('services_read'), serviceController.getRadiusAccountbyUser.bind(serviceController));
     router.get('/radius/users/:username', checkPermission('services_read'), serviceController.getRadiusUser.bind(serviceController));
     router.post('/radius/users', checkPermission('services_manage'), serviceController.createRadiusUser.bind(serviceController));
 
     router.delete('/radius/users/:username', checkPermission('services_manage'), serviceController.deleteRadiusUser.bind(serviceController));
     router.get('/radius/stats', checkPermission('services_read'), serviceController.getRadiusStats.bind(serviceController));
+    router.post('/radius/users/:username/coa', checkPermission('services_manage'), serviceController.sendRadiusCoA.bind(serviceController));
     router.post('/radius/test-auth', checkPermission('services_test'), serviceController.testRadiusAuth.bind(serviceController));
 
     // eSewa Operations

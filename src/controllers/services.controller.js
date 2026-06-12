@@ -654,6 +654,36 @@ class ServiceController {
       return res.status(500).json({ success: false, error: 'Failed to create subscriber', message: error.message });
     }
   }
+
+  async getNetTVPackages(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { page = 1, perPage = 20 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const packages = await client.getPackages(parseInt(page), parseInt(perPage));
+      return res.json({ success: true, data: packages });
+    } catch (error) {
+      console.error('Error getting NetTV packages:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV packages', message: error.message });
+    }
+  }
+
+  async getNetTVSTBs(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { subscriberId, page = 1, perPage = 20 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const stbs = await client.getSTBs(subscriberId || null, parseInt(page), parseInt(perPage));
+      return res.json({ success: true, data: stbs });
+    } catch (error) {
+      console.error('Error getting NetTV STBs:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV STBs', message: error.message });
+    }
+  }
   // Mikrotik Operations
   async getMikrotikResources(req, res) {
     try {
@@ -946,6 +976,21 @@ class ServiceController {
     } catch (error) {
       console.error('Error testing Radius auth:', error);
       return res.status(500).json({ success: false, error: 'Failed to test authentication', message: error.message });
+    }
+  }
+
+  async sendRadiusCoA(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+      const result = await client.sendCoA(username, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error sending Radius COA:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'Radius', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to send Radius COA', message: error.message });
     }
   }
 

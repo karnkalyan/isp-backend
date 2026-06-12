@@ -9,6 +9,8 @@ module.exports = (prisma) => {
 
     router.get('/', auth, checkPermission('inventory_read'), inventoryController.listInventoryItems);
     router.post('/', auth, checkPermission('inventory_manage'), inventoryController.addInventoryItem);
+    router.put('/:itemId', auth, checkPermission('inventory_manage'), inventoryController.updateInventoryItem);
+    router.delete('/:itemId', auth, checkPermission('inventory_manage'), inventoryController.deleteInventoryItem);
     router.get('/:itemId/logs', auth, checkPermission('inventory_read'), inventoryController.getItemLogs);
     router.put('/:itemId/transfer', auth, checkPermission('inventory_manage'), inventoryController.transferItem);
     router.post('/bulk-import', auth, checkPermission('inventory_manage'), inventoryController.bulkAddInventoryItems);

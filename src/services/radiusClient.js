@@ -600,6 +600,23 @@ class RadiusClient {
     }
   }
 
+  async sendCoA(username, options = {}) {
+    if (!username) {
+      throw new Error('Username is required for Radius COA');
+    }
+
+    const payload = {
+      username,
+      action: options.action || 'disconnect',
+      nasIpAddress: options.nasIpAddress || options.nas || undefined,
+      framedIpAddress: options.framedIpAddress || options.framedIp || undefined,
+      sessionId: options.sessionId || options.acctSessionId || undefined,
+      attributes: options.attributes || {}
+    };
+
+    return this.#apiRequest('post', '/api/coa', payload);
+  }
+
   // --- Convenience Methods ---
 
   // Create a complete user

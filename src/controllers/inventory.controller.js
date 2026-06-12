@@ -18,6 +18,13 @@ function normalizeInventoryType(value) {
     return aliases[normalized] || normalized;
 }
 
+function formatEponMacAddress(value) {
+    if (!value) return value;
+    const hex = String(value).replace(/[^a-fA-F0-9]/g, '').slice(0, 12).toLowerCase();
+    if (hex.length !== 12) return String(value).trim();
+    return `${hex.slice(0, 4)}.${hex.slice(4, 8)}.${hex.slice(8, 12)}`;
+}
+
 async function listInventoryItems(req, res, next) {
     try {
         const { type, status, branchId, userId, customerId, serialNumber, search } = req.query;
@@ -201,7 +208,7 @@ async function addInventoryItem(req, res, next) {
                     serialNumber,
                     model,
                     ponSerialNumber,
-                    macAddress,
+                    macAddress: formatEponMacAddress(macAddress),
                     ispId,
                     branchId: targetBranchId,
                     status: initialStatus,
@@ -233,6 +240,112 @@ async function addInventoryItem(req, res, next) {
         if (err.code === 'P2002') {
             return res.status(400).json({ error: 'Serial number already exists' });
         }
+        next(err);
+    }
+}
+
+async function updateInventoryItem(req, res, next) {
+    try {
+        const { itemId } = req.params;
+        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, condition } = req.body;
+        const item = await req.prisma.InventoryItem.findUnique({
+            where: { id: Number(itemId) }
+        });
+
+        if (!item || item.ispId !== req.ispId) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        const data = {
+            ...(type !== undefined && { type: normalizeInventoryType(type) || item.type }),
+            ...(name !== undefined && { name }),
+            ...(serialNumber !== undefined && { serialNumber: serialNumber || null }),
+            ...(model !== undefined && { model: model || null }),
+            ...(ponSerialNumber !== undefined && { ponSerialNumber: ponSerialNumber || null }),
+            ...(macAddress !== undefined && { macAddress: macAddress ? formatEponMacAddress(macAddress) : null }),
+            ...(condition !== undefined && { condition: condition || null }),
+            updatedAt: new Date()
+        };
+
+        if (branchId !== undefined) {
+            data.branchId = branchId === null || branchId === '' || branchId === 'none' ? null : Number(branchId);
+            if (!item.customerId && !item.userId && !item.assignedRoleId) {
+                data.status = data.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
+            }
+        }
+
+        if (qty !== undefined) {
+            const nextQty = Number(qty);
+            if (!Number.isInteger(nextQty) || nextQty < 1) {
+                return res.status(400).json({ error: 'Quantity must be a positive whole number' });
+            }
+            if (item.customerId || item.userId || item.assignedRoleId) {
+                return res.status(400).json({ error: 'Quantity cannot be edited while item is assigned. Return it first.' });
+            }
+            data.qty = nextQty;
+            data.availableQty = nextQty;
+        }
+
+        const updated = await req.prisma.InventoryItem.update({
+            where: { id: Number(itemId) },
+            data
+        });
+
+        await req.prisma.InventoryLog.create({
+            data: {
+                inventoryItemId: updated.id,
+                fromStatus: item.status,
+                toStatus: updated.status,
+                toEntityId: updated.branchId,
+                entityType: updated.branchId ? 'BRANCH' : 'HEAD_OFFICE',
+                actionByUserId: req.user.id,
+                note: 'Inventory item details updated'
+            }
+        });
+
+        res.json(updated);
+    } catch (err) {
+        if (err.code === 'P2002') {
+            return res.status(400).json({ error: 'Serial number already exists' });
+        }
+        next(err);
+    }
+}
+
+async function deleteInventoryItem(req, res, next) {
+    try {
+        const { itemId } = req.params;
+        const item = await req.prisma.InventoryItem.findUnique({
+            where: { id: Number(itemId) }
+        });
+
+        if (!item || item.ispId !== req.ispId) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        const customerDeviceDelete = item.serialNumber || item.macAddress
+            ? req.prisma.CustomerDevice.deleteMany({
+                where: {
+                    OR: [
+                        ...(item.serialNumber ? [{ serialNumber: item.serialNumber }] : []),
+                        ...(item.macAddress ? [{ macAddress: item.macAddress }] : [])
+                    ]
+                }
+            })
+            : null;
+
+        await req.prisma.$transaction([
+            ...(customerDeviceDelete ? [customerDeviceDelete] : []),
+            req.prisma.InventoryLog.deleteMany({
+                where: { inventoryItemId: item.id }
+            }),
+            req.prisma.InventoryItem.delete({
+                where: { id: item.id }
+            })
+        ]);
+
+        res.json({ success: true, message: 'Inventory item deleted' });
+    } catch (err) {
         next(err);
     }
 }
@@ -469,7 +582,7 @@ async function bulkAddInventoryItems(req, res, next) {
                         serialNumber,
                         model,
                         ponSerialNumber,
-                        macAddress,
+                        macAddress: formatEponMacAddress(macAddress),
                         ispId,
                         branchId: selectedBranchId,
                         status: selectedBranchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK',
@@ -720,6 +833,8 @@ async function assignInventoryItem(req, res, next) {
 module.exports = {
     listInventoryItems,
     addInventoryItem,
+    updateInventoryItem,
+    deleteInventoryItem,
     bulkAddInventoryItems,
     transferItem,
     bulkTransferItems,
