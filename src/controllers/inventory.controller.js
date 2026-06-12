@@ -323,19 +323,40 @@ async function deleteInventoryItem(req, res, next) {
             return res.status(404).json({ error: 'Item not found' });
         }
 
-        const customerDeviceDelete = item.serialNumber || item.macAddress
-            ? req.prisma.CustomerDevice.deleteMany({
+        const linkedCustomerDevices = item.serialNumber || item.macAddress
+            ? await req.prisma.CustomerDevice.findMany({
                 where: {
                     OR: [
                         ...(item.serialNumber ? [{ serialNumber: item.serialNumber }] : []),
                         ...(item.macAddress ? [{ macAddress: item.macAddress }] : [])
                     ]
+                },
+                select: {
+                    id: true,
+                    customerId: true,
+                    serialNumber: true,
+                    macAddress: true,
+                    customer: { select: { customerUniqueId: true } }
                 }
             })
-            : null;
+            : [];
+
+        if (item.customerId || linkedCustomerDevices.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Device is linked with a customer and cannot be deleted. Return/unassign the hardware first.',
+                item: {
+                    id: item.id,
+                    name: item.name,
+                    serialNumber: item.serialNumber,
+                    macAddress: item.macAddress,
+                    customerId: item.customerId
+                },
+                linkedCustomerDevices
+            });
+        }
 
         await req.prisma.$transaction([
-            ...(customerDeviceDelete ? [customerDeviceDelete] : []),
             req.prisma.InventoryLog.deleteMany({
                 where: { inventoryItemId: item.id }
             }),

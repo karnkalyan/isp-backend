@@ -13,6 +13,7 @@ module.exports = (prisma) => {
     router.get('/drums', auth, checkPermission('reports_read'), reportController.getDrumsReport);
     router.get('/users', auth, checkPermission('reports_read'), reportController.getUsersPerformanceReport);
     router.get('/branches', auth, checkPermission('reports_read'), reportController.getBranchesReport);
+    router.get('/overview', auth, checkPermission('reports_read'), reportController.getOverviewReport);
 
     return router;
 };

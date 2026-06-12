@@ -94,7 +94,37 @@ async function sendExcelResponse(res, filename, data, headers) {
 }
 
 // Helper to generate PDF using pdfkit
-function sendPDFResponse(res, title, data, headers) {
+async function getIspInfo(req) {
+    if (!req?.ispId) return null;
+    return req.prisma.iSP.findUnique({
+        where: { id: Number(req.ispId) },
+        select: { companyName: true, name: true, address: true, phoneNumber: true, masterEmail: true, panNo: true }
+    }).catch(() => null);
+}
+
+function formatIspHeader(isp) {
+    if (!isp) return '';
+    const parts = [
+        isp.companyName || isp.name,
+        isp.address,
+        isp.phoneNumber ? `Tel: ${isp.phoneNumber}` : null,
+        isp.masterEmail ? `Email: ${isp.masterEmail}` : null,
+        isp.panNo ? `PAN: ${isp.panNo}` : null
+    ].filter(Boolean);
+    return parts.join(' | ');
+}
+
+function withIspRows(reportData, headers, isp) {
+    const firstKey = Object.keys(headers)[0];
+    if (!firstKey || !isp) return reportData;
+    return [
+        { [firstKey]: formatIspHeader(isp) },
+        { [firstKey]: '' },
+        ...reportData
+    ];
+}
+
+function sendPDFResponse(res, title, data, headers, isp) {
     const doc = new PDFDocument({ margin: 30, size: 'A4', layout: 'landscape' });
     
     res.setHeader('Content-Type', 'application/pdf');
@@ -103,6 +133,14 @@ function sendPDFResponse(res, title, data, headers) {
     doc.pipe(res);
 
     // Document Header
+    if (isp) {
+        doc.fontSize(15).font('Helvetica-Bold').text(isp.companyName || isp.name || 'ISP', { align: 'center' });
+        doc.fontSize(9).font('Helvetica').text(
+            [isp.address, isp.phoneNumber ? `Tel: ${isp.phoneNumber}` : null, isp.masterEmail ? `Email: ${isp.masterEmail}` : null, isp.panNo ? `PAN: ${isp.panNo}` : null].filter(Boolean).join('  '),
+            { align: 'center' }
+        );
+        doc.moveDown(0.6);
+    }
     doc.fontSize(20).text(title, { align: 'center' });
     doc.fontSize(10).text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.moveDown(2);
@@ -233,18 +271,19 @@ async function getTasksReport(req, res, next) {
             createdAt: 'Created Date'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="tasks_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'tasks_report', reportData, headers);
+            return await sendExcelResponse(res, 'tasks_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'Tasks Enhancement Report', reportData, headers);
+            return sendPDFResponse(res, 'Tasks Enhancement Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
     } catch (err) {
         next(err);
     }
@@ -309,18 +348,19 @@ async function getTicketsReport(req, res, next) {
             resolvedAt: 'Resolved At'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="tickets_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'tickets_report', reportData, headers);
+            return await sendExcelResponse(res, 'tickets_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'Tickets Report', reportData, headers);
+            return sendPDFResponse(res, 'Tickets Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
     } catch (err) {
         next(err);
     }
@@ -362,18 +402,19 @@ async function getInventoryReport(req, res, next) {
             usedQuantity: 'Used Qty'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="inventory_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'inventory_report', reportData, headers);
+            return await sendExcelResponse(res, 'inventory_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'Bulk Stock Inventory Report', reportData, headers);
+            return sendPDFResponse(res, 'Bulk Stock Inventory Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
     } catch (err) {
         next(err);
     }
@@ -428,18 +469,19 @@ async function getDrumsReport(req, res, next) {
             manufacturer: 'Manufacturer'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="drums_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'drums_report', reportData, headers);
+            return await sendExcelResponse(res, 'drums_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'Fiber Cable Drums Report', reportData, headers);
+            return sendPDFResponse(res, 'Fiber Cable Drums Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
     } catch (err) {
         next(err);
     }
@@ -504,18 +546,19 @@ async function getUsersPerformanceReport(req, res, next) {
             ticketsResolved: 'Tickets Resolved'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="users_performance_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'users_performance_report', reportData, headers);
+            return await sendExcelResponse(res, 'users_performance_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'User Productivity Performance Report', reportData, headers);
+            return sendPDFResponse(res, 'User Productivity Performance Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
     } catch (err) {
         next(err);
     }
@@ -558,18 +601,53 @@ async function getBranchesReport(req, res, next) {
             ticketsClosed: 'Tickets Closed/Resolved'
         };
 
+        const isp = await getIspInfo(req);
         if (format === 'csv') {
-            const csv = convertToCSV(reportData, headers);
+            const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', 'attachment; filename="branches_report.csv"');
             return res.send(csv);
         } else if (format === 'excel' || format === 'xlsx') {
-            return await sendExcelResponse(res, 'branches_report', reportData, headers);
+            return await sendExcelResponse(res, 'branches_report', withIspRows(reportData, headers, isp), headers);
         } else if (format === 'pdf') {
-            return sendPDFResponse(res, 'Branch Performance Statistics Report', reportData, headers);
+            return sendPDFResponse(res, 'Branch Performance Statistics Report', reportData, headers, isp);
         }
 
-        res.json(reportData);
+        res.json({ isp, data: reportData });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getOverviewReport(req, res, next) {
+    try {
+        const ispId = req.ispId;
+        const [isp, totalLeads, totalCustomers, activeCustomers, inactiveCustomers, expiredSubscriptions, inventoryItems, openTickets, pendingTasks] = await Promise.all([
+            getIspInfo(req),
+            req.prisma.lead.count({ where: { ispId, isDeleted: false } }),
+            req.prisma.customer.count({ where: { ispId, isDeleted: false } }),
+            req.prisma.customer.count({ where: { ispId, isDeleted: false, status: 'active' } }),
+            req.prisma.customer.count({ where: { ispId, isDeleted: false, status: { not: 'active' } } }),
+            req.prisma.customerSubscription.count({ where: { isActive: true, planEnd: { lt: new Date() }, customer: { ispId, isDeleted: false } } }),
+            req.prisma.InventoryItem.count({ where: { ispId } }),
+            req.prisma.ticket.count({ where: { ispId, isDeleted: false, status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
+            req.prisma.task.count({ where: { ispId, status: { in: ['PENDING', 'ACCEPTED', 'IN_PROGRESS', 'ON_HOLD'] } } })
+        ]);
+
+        res.json({
+            success: true,
+            isp,
+            data: {
+                totalLeads,
+                totalCustomers,
+                activeCustomers,
+                inactiveCustomers,
+                expiredSubscriptions,
+                inventoryItems,
+                openTickets,
+                pendingTasks
+            }
+        });
     } catch (err) {
         next(err);
     }
@@ -581,5 +659,6 @@ module.exports = {
     getInventoryReport,
     getDrumsReport,
     getUsersPerformanceReport,
-    getBranchesReport
+    getBranchesReport,
+    getOverviewReport
 };

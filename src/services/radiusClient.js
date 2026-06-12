@@ -564,6 +564,37 @@ class RadiusClient {
     return this.#apiRequest('get', `/api/radacct?limit=${limit}`);
   }
 
+  async getTable(table, limit = 500, offset = 0) {
+    const allowedTables = {
+      radcheck: () => this.getRadcheck(),
+      radreply: () => this.getRadreply(),
+      radusergroup: () => this.getRadusergroup(),
+      radgroupreply: () => this.getRadgroupreply(),
+      radgroupcheck: () => this.getRadgroupcheck(),
+      radacct: () => this.getRadacctlimit(limit),
+      nas: () => this.getNas()
+    };
+
+    const loader = allowedTables[String(table || '').toLowerCase()];
+    if (!loader) {
+      throw new Error('Unsupported Radius table');
+    }
+
+    const rows = await loader();
+    const list = Array.isArray(rows) ? rows : [];
+    const start = Math.max(Number(offset) || 0, 0);
+    const safeLimit = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+
+    return {
+      table,
+      rows: list.slice(start, start + safeLimit),
+      total: list.length,
+      limit: safeLimit,
+      offset: start,
+      hasMore: start + safeLimit < list.length
+    };
+  }
+
   // Get radacct by ID
   async getRadacctById(id) {
     return this.#apiRequest('get', `/api/radacct/${id}`);
@@ -717,12 +748,18 @@ class RadiusClient {
         this.getRadusergroupByUsername(username),
         this.getRadacctByUsername(username, 50)
       ]);
+      const groupNames = [...new Set(radusergroup.map((entry) => entry.groupname).filter(Boolean))];
+      const allGroupReplies = groupNames.length ? await this.getRadgroupreply() : [];
+      const radgroupreply = Array.isArray(allGroupReplies)
+        ? allGroupReplies.filter((entry) => groupNames.includes(entry.groupname))
+        : [];
 
       return {
         username,
         radcheck,
         radreply,
         radusergroup,
+        radgroupreply,
         radacct,
         hasActiveSession: radacct.some(entry =>
           !entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00'

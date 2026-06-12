@@ -141,6 +141,38 @@ async function getCustomerOwnedDeviceSerials(prisma, customer) {
   return { serials: Array.from(serials), tr069Devices: [] };
 }
 
+async function deactivateExpiredCustomers(prisma, ispId) {
+  if (!ispId) return 0;
+
+  const expired = await prisma.customerSubscription.findMany({
+    where: {
+      isActive: true,
+      planEnd: { lt: new Date() },
+      customer: {
+        ispId,
+        isDeleted: false,
+        status: 'active'
+      }
+    },
+    select: { customerId: true }
+  });
+
+  const customerIds = [...new Set(expired.map((item) => item.customerId).filter(Boolean))];
+  if (customerIds.length === 0) return 0;
+
+  await prisma.customer.updateMany({
+    where: { id: { in: customerIds }, ispId, isDeleted: false, status: 'active' },
+    data: { status: 'inactive', onboardStatus: 'expired_package' }
+  });
+
+  await prisma.customerServiceConnection.updateMany({
+    where: { customerId: { in: customerIds }, status: 'active' },
+    data: { status: 'inactive' }
+  });
+
+  return customerIds.length;
+}
+
 async function assertCustomerOwnsSerial(req, res, next) {
   try {
     const serialNumber = req.params.serialNumber;
@@ -1149,6 +1181,7 @@ async function enrichServiceDetailsWithVlans(prisma, customers) {
  */
 async function listCustomers(req, res, next) {
   try {
+    await deactivateExpiredCustomers(req.prisma, req.ispId);
     const {
       search,
       status,
@@ -1282,6 +1315,7 @@ async function listCustomers(req, res, next) {
  */
 async function getCustomerById(req, res, next) {
   try {
+    await deactivateExpiredCustomers(req.prisma, req.ispId);
     const id = Number(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
 

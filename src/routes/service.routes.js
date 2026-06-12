@@ -61,6 +61,7 @@ module.exports = (prisma) => {
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));
     router.get('/radius/act/:username', checkPermission('services_read'), serviceController.getRadiusAccountbyUser.bind(serviceController));
     router.get('/radius/users/:username', checkPermission('services_read'), serviceController.getRadiusUser.bind(serviceController));
+    router.get('/radius/tables/:table', checkPermission('services_read'), serviceController.getRadiusTable.bind(serviceController));
     router.post('/radius/users', checkPermission('services_manage'), serviceController.createRadiusUser.bind(serviceController));
 
     router.delete('/radius/users/:username', checkPermission('services_manage'), serviceController.deleteRadiusUser.bind(serviceController));

@@ -957,6 +957,22 @@ class ServiceController {
     }
   }
 
+  async getRadiusTable(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { table } = req.params;
+      const { limit = 500, offset = 0 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+      const result = await client.getTable(table, parseInt(limit), parseInt(offset));
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting Radius table:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'Radius', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get Radius table', message: error.message });
+    }
+  }
+
   // Radius: Test authentication
   async testRadiusAuth(req, res) {
     try {
