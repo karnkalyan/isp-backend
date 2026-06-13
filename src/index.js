@@ -54,7 +54,7 @@ const mailRouter = require('./routes/mail.routes');
 const templateRouter = require('./routes/template.routes');
 const taskRouter = require('./routes/task.routes');
 const taskLogger = require('./middlewares/taskLogger');
-const createRateLimit = require('./middleware/rateLimit');
+const createRateLimit = require('./middlewares/rateLimit');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
