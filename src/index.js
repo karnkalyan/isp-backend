@@ -53,13 +53,18 @@ const messageRouter = require('./routes/message.routes');
 const mailRouter = require('./routes/mail.routes');
 const templateRouter = require('./routes/template.routes');
 const taskRouter = require('./routes/task.routes');
-const taskLogger = require('./middleware/taskLogger');
+const taskLogger = require('./middlewares/taskLogger');
+const createRateLimit = require('./middleware/rateLimit');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(taskLogger());
 app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+app.use(createRateLimit({
+    windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60000),
+    max: Number(process.env.API_RATE_LIMIT_MAX || 300)
+}));
 
 const allowedOrigins = [
     'https://radius.kisan.net.np',

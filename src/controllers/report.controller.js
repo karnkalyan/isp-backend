@@ -653,6 +653,196 @@ async function getOverviewReport(req, res, next) {
     }
 }
 
+async function exportRows(req, res, title, filename, reportData, headers) {
+    const isp = await getIspInfo(req);
+    const format = req.query.format;
+    if (format === 'csv') {
+        const csv = convertToCSV(withIspRows(reportData, headers, isp), headers);
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+        return res.send(csv);
+    }
+    if (format === 'excel' || format === 'xlsx') {
+        return await sendExcelResponse(res, filename, withIspRows(reportData, headers, isp), headers);
+    }
+    if (format === 'pdf') {
+        return sendPDFResponse(res, title, reportData, headers, isp);
+    }
+    return res.json({ isp, data: reportData });
+}
+
+async function getLeadsReport(req, res, next) {
+    try {
+        const { status, startDate, endDate, branchId } = req.query;
+        const where = {
+            ispId: req.ispId,
+            isDeleted: false,
+            ...(status ? { status } : {}),
+            ...(branchId ? { branchId: Number(branchId) } : {}),
+            ...(startDate || endDate ? { createdAt: { ...(startDate ? { gte: new Date(startDate) } : {}), ...(endDate ? { lte: new Date(endDate) } : {}) } } : {})
+        };
+        const leads = await req.prisma.lead.findMany({
+            where,
+            include: { branch: { select: { name: true } }, assignedUser: { select: { name: true } } },
+            orderBy: { createdAt: 'desc' }
+        });
+        const data = leads.map(lead => ({
+            id: lead.id,
+            name: [lead.firstName, lead.middleName, lead.lastName].filter(Boolean).join(' '),
+            phone: lead.phoneNumber || '',
+            email: lead.email || '',
+            status: lead.status,
+            source: lead.source || '',
+            branch: lead.branch?.name || 'N/A',
+            assignedTo: lead.assignedUser?.name || 'Unassigned',
+            createdAt: lead.createdAt?.toLocaleDateString()
+        }));
+        return exportRows(req, res, 'Leads Report', 'leads_report', data, {
+            id: 'Lead ID',
+            name: 'Name',
+            phone: 'Phone',
+            email: 'Email',
+            status: 'Status',
+            source: 'Source',
+            branch: 'Branch',
+            assignedTo: 'Assigned To',
+            createdAt: 'Created Date'
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getCustomersReport(req, res, next) {
+    try {
+        const { status, branchId } = req.query;
+        const where = {
+            ispId: req.ispId,
+            isDeleted: false,
+            ...(status ? { status } : {}),
+            ...(branchId ? { branchId: Number(branchId) } : {})
+        };
+        const customers = await req.prisma.customer.findMany({
+            where,
+            include: { branch: { select: { name: true } }, lead: { select: { firstName: true, lastName: true, email: true, phoneNumber: true } }, connectionUsers: { where: { isDeleted: false } } },
+            orderBy: { createdAt: 'desc' }
+        });
+        const data = customers.map(customer => ({
+            id: customer.customerUniqueId || customer.id,
+            name: customer.lead ? [customer.lead.firstName, customer.lead.lastName].filter(Boolean).join(' ') : `Customer ${customer.id}`,
+            username: customer.connectionUsers?.map(user => user.username).join(', ') || '',
+            phone: customer.lead?.phoneNumber || '',
+            email: customer.lead?.email || '',
+            status: customer.status,
+            branch: customer.branch?.name || 'N/A',
+            createdAt: customer.createdAt?.toLocaleDateString()
+        }));
+        return exportRows(req, res, 'Customers Report', 'customers_report', data, {
+            id: 'Customer ID',
+            name: 'Name',
+            username: 'Radius Username',
+            phone: 'Phone',
+            email: 'Email',
+            status: 'Status',
+            branch: 'Branch',
+            createdAt: 'Created Date'
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getYeastarLogsReport(req, res, next) {
+    try {
+        const logs = await req.prisma.serviceLog.findMany({
+            where: { ispId: req.ispId, serviceCode: { in: ['YEASTAR', 'YEASTER'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 1000
+        });
+        const data = logs.map(log => ({
+            id: log.id,
+            operation: log.operation,
+            status: log.status,
+            message: log.message || '',
+            duration: log.duration || '',
+            createdAt: log.createdAt?.toLocaleString()
+        }));
+        return exportRows(req, res, 'Yeastar Logs Report', 'yeastar_logs_report', data, {
+            id: 'ID',
+            operation: 'Operation',
+            status: 'Status',
+            message: 'Message',
+            duration: 'Duration ms',
+            createdAt: 'Created At'
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getAsteriskLogsReport(req, res, next) {
+    try {
+        const logs = await req.prisma.asteriskCallLog.findMany({
+            where: { ispId: req.ispId },
+            orderBy: [{ startTime: 'desc' }, { createdAt: 'desc' }],
+            take: 1000
+        });
+        const data = logs.map(log => ({
+            id: log.id,
+            caller: log.caller || '',
+            called: log.called || '',
+            direction: log.direction || '',
+            duration: log.duration || 0,
+            status: log.status || '',
+            trunk: log.trunkname || '',
+            startTime: log.startTime?.toLocaleString() || ''
+        }));
+        return exportRows(req, res, 'Asterisk Logs Report', 'asterisk_logs_report', data, {
+            id: 'ID',
+            caller: 'Caller',
+            called: 'Called',
+            direction: 'Direction',
+            duration: 'Duration',
+            status: 'Status',
+            trunk: 'Trunk',
+            startTime: 'Start Time'
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getSmsLogsReport(req, res, next) {
+    try {
+        const logs = await req.prisma.smsCampaignLog.findMany({
+            where: { campaign: { ispId: req.ispId } },
+            include: { campaign: { select: { provider: true, recipientType: true, status: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: 1000
+        });
+        const data = logs.map(log => ({
+            id: log.id,
+            provider: log.campaign?.provider || '',
+            recipient: log.phone || '',
+            status: log.status,
+            message: log.campaign?.recipientType || log.recipientType || '',
+            error: log.errorMessage || '',
+            createdAt: log.createdAt?.toLocaleString()
+        }));
+        return exportRows(req, res, 'SMS Logs Report', 'sms_logs_report', data, {
+            id: 'ID',
+            provider: 'Provider',
+            recipient: 'Recipient',
+            status: 'Status',
+            message: 'Message',
+            error: 'Error',
+            createdAt: 'Created At'
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
     getTasksReport,
     getTicketsReport,
@@ -660,5 +850,10 @@ module.exports = {
     getDrumsReport,
     getUsersPerformanceReport,
     getBranchesReport,
-    getOverviewReport
+    getOverviewReport,
+    getLeadsReport,
+    getCustomersReport,
+    getYeastarLogsReport,
+    getAsteriskLogsReport,
+    getSmsLogsReport
 };

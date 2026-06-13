@@ -8,6 +8,7 @@ module.exports = (prisma) => {
 
     router.get('/', auth, messageController.getMessages);
     router.post('/', auth, messageController.sendMessage);
+    router.put('/read-all', auth, messageController.markAllMessagesRead);
     router.put('/:id/read', auth, messageController.markMessageRead);
     router.delete('/:id', auth, messageController.deleteMessage);
 

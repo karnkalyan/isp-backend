@@ -1,4 +1,5 @@
 const prisma = require('../../prisma/client');
+const { logAudit } = require('../utils/auditLogger');
 
 /**
  * Middleware to log system tasks automatically for POST, PUT, DELETE requests.
@@ -7,7 +8,7 @@ const prisma = require('../../prisma/client');
 function taskLogger() {
     return (req, res, next) => {
         // Only log mutational requests
-        if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
             // Hook into the finish event of the response
             res.on('finish', async () => {
                 // Only log successful operations
@@ -24,6 +25,7 @@ function taskLogger() {
                         let action = '';
                         if (req.method === 'POST') action = 'Created';
                         if (req.method === 'PUT') action = 'Updated';
+                        if (req.method === 'PATCH') action = 'Updated';
                         if (req.method === 'DELETE') action = 'Deleted';
 
                         // Parse the resource name from the URL (e.g. /api/customers -> customer)
@@ -43,6 +45,16 @@ function taskLogger() {
 
                         const title = `${userName} ${action} ${resourceName}`;
                         const description = `A ${resourceName.toLowerCase()} was ${action.toLowerCase()} via ${req.method} ${req.originalUrl}`;
+
+                        await logAudit(prisma, userId, `${req.method}_${resourceName.toUpperCase()}`, {
+                            action,
+                            resource: resourceName,
+                            method: req.method,
+                            url: req.originalUrl,
+                            statusCode: res.statusCode,
+                            branchId,
+                            ispId
+                        }, req);
 
                         const notification = await prisma.notification.create({
                             data: {

@@ -83,6 +83,27 @@ async function markMessageRead(req, res, next) {
     }
 }
 
+async function markAllMessagesRead(req, res, next) {
+    try {
+        const userId = req.user.id;
+        const ispId = req.ispId;
+
+        const result = await req.prisma.message.updateMany({
+            where: {
+                ispId,
+                receiverId: userId,
+                isRead: false,
+                isDeleted: false
+            },
+            data: { isRead: true, updatedAt: new Date() }
+        });
+
+        res.json({ success: true, count: result.count });
+    } catch (err) {
+        next(err);
+    }
+}
+
 // Delete message
 async function deleteMessage(req, res, next) {
     try {
@@ -109,5 +130,6 @@ module.exports = {
     getMessages,
     sendMessage,
     markMessageRead,
+    markAllMessagesRead,
     deleteMessage
 };

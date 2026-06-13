@@ -636,12 +636,24 @@ class RadiusClient {
       throw new Error('Username is required for Radius COA');
     }
 
+    let activeSession = null;
+    if (!options.sessionId && !options.acctSessionId) {
+      try {
+        const sessions = await this.getRadacctByUsername(username, 1000);
+        activeSession = Array.isArray(sessions)
+          ? sessions.find(entry => !entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00') || sessions[0]
+          : null;
+      } catch (error) {
+        console.warn(`[RADIUS] Failed to resolve active session for ${username}: ${error.message}`);
+      }
+    }
+
     const payload = {
       username,
       action: options.action || 'disconnect',
-      nasIpAddress: options.nasIpAddress || options.nas || undefined,
-      framedIpAddress: options.framedIpAddress || options.framedIp || undefined,
-      sessionId: options.sessionId || options.acctSessionId || undefined,
+      nasIpAddress: options.nasIpAddress || options.nas || activeSession?.nasipaddress || activeSession?.nasIpAddress || undefined,
+      framedIpAddress: options.framedIpAddress || options.framedIp || activeSession?.framedipaddress || activeSession?.framedIpAddress || undefined,
+      sessionId: options.sessionId || options.acctSessionId || activeSession?.acctsessionid || activeSession?.acctSessionId || undefined,
       attributes: options.attributes || {}
     };
 
