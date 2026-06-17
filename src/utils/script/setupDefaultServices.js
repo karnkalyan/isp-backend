@@ -127,6 +127,13 @@ const DEFAULT_SERVICES = [
         description: "Sparrow SMS integration service",
         category: "COMMUNICATION",
         iconUrl: "/icons/sms.svg"
+    },
+    {
+        name: "Nepurix Accounting",
+        code: "NEPURIX",
+        description: "Nepurix Cloud Accounting & Invoicing system",
+        category: "BILLING",
+        iconUrl: "/icons/nepurix.svg"
     }
 ];
 

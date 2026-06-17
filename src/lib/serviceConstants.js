@@ -18,7 +18,8 @@ module.exports = {
         EMAIL_SERVICE: 'EMAIL_SERVICE',
         GENIEACS: 'GENIEACS',
         AAKASHSMS: 'AAKASHSMS',
-        SPARROWSMS: 'SPARROWSMS'
+        SPARROWSMS: 'SPARROWSMS',
+        NEPURIX: 'NEPURIX'
     },
 
     SERVICE_CATEGORIES: {
@@ -135,6 +136,11 @@ module.exports = {
         SPARROWSMS: [
             { credentialType: 'api_key', key: 'auth_token', label: 'Auth Token', isEncrypted: true, required: true },
             { credentialType: 'api_key', key: 'sender_id', label: 'Sender ID / Identity', required: true }
+        ],
+        NEPURIX: [
+            { credentialType: 'username_password', key: 'username', label: 'Username', required: true },
+            { credentialType: 'username_password', key: 'password', label: 'Password', isEncrypted: true, required: true },
+            { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
         ]
     },
 
@@ -194,6 +200,11 @@ module.exports = {
             defaultApiVersion: 'v2',
             requiresBaseUrl: false,
             testEndpoint: '/credit'
+        },
+        NEPURIX: {
+            defaultApiVersion: 'v1',
+            requiresBaseUrl: true,
+            testEndpoint: '/api/v1/company'
         }
     },
 
@@ -224,6 +235,7 @@ module.exports = {
             'provision_pppoe_wifi'
         ],
         AAKASHSMS: ['send_sms', 'send_bulk_sms', 'check_credit', 'get_report'],
-        SPARROWSMS: ['send_sms', 'send_bulk_sms', 'check_credit']
+        SPARROWSMS: ['send_sms', 'send_bulk_sms', 'check_credit'],
+        NEPURIX: ['list_customers', 'create_customer', 'create_invoice', 'get_transactions']
     }
 };

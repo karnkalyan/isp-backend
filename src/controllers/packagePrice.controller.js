@@ -52,35 +52,39 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
           }
         });
         
-        // Also sync it to Tshul!
+        // Sync it to all active billing clients!
         try {
-          const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-          if (tshul) {
-            const itemPayload = {
-              Name: newRecord.name,
-              Code: newCode,
-              Unit: 'Psc',
-              ReferenceId: referenceId,
-              ItemGroupReferenceId: 'TI-001',
-              IsTaxable: newRecord.isTaxable,
-              IsExcisable: false,
-              IsPurchaseItem: false,
-              IsSalesItem: true,
-              IsServiceItem: true,
-              ReorderLevel: 0,
-              ReorderQty: 0,
-              IsBatchApplied: false,
-              IsBatchPerQuantity: false,
-              IsExpirable: false,
-              PurchaseRate: 0.00,
-              SalesMargin: 0.00,
-              SalesRate: newRecord.amount || 0,
-              IsBOM: false
-            };
-            await tshul.item.create(itemPayload);
+          const billingClients = await ServiceFactory.getActiveBillingClients(ispId, prisma);
+          for (const { code, client } of billingClients) {
+            try {
+              const itemPayload = {
+                Name: newRecord.name,
+                Code: newCode,
+                Unit: 'Psc',
+                ReferenceId: referenceId,
+                ItemGroupReferenceId: 'TI-001',
+                IsTaxable: newRecord.isTaxable,
+                IsExcisable: false,
+                IsPurchaseItem: false,
+                IsSalesItem: true,
+                IsServiceItem: true,
+                ReorderLevel: 0,
+                ReorderQty: 0,
+                IsBatchApplied: false,
+                IsBatchPerQuantity: false,
+                IsExpirable: false,
+                PurchaseRate: 0.00,
+                SalesMargin: 0.00,
+                SalesRate: newRecord.amount || 0,
+                IsBOM: false
+              };
+              await client.item.create(itemPayload);
+            } catch (syncErr) {
+              console.warn(`[WARNING] ${code} sync failed for new custom addon charge:`, syncErr.message);
+            }
           }
-        } catch (tshulErr) {
-          console.warn('[WARNING] Tshul sync failed for new custom addon charge:', tshulErr.message);
+        } catch (err) {
+          console.warn('[WARNING] Failed to fetch active billing clients for custom addon charge sync:', err.message);
         }
 
         finalIds.push(newRecord.id);
@@ -160,51 +164,45 @@ async function createPackagePrice(req, res, next) {
       });
     }
 
-    // Build item payload for Tshul
-    const itemPayload = {
-      Name: record.packageName,
-      Code: `${cleanPlanCode}${cleanDuration}`,
-      Unit: 'Mbps',
-      ReferenceId: referenceId,
-      ItemGroupReferenceId: 'TI-001',
-      IsTaxable: true,
-      IsExcisable: false,
-      IsPurchaseItem: false,
-      IsSalesItem: true,
-      IsServiceItem: true,
-      ReorderLevel: 0,
-      ReorderQty: 0,
-      IsBatchApplied: false,
-      IsBatchPerQuantity: false,
-      IsExpirable: false,
-      PurchaseRate: 0.00,
-      SalesMargin: 0.00,
-      SalesRate: record.price,
-      IsBOM: false
-    };
-
+    // Sync package price creation to all active billing clients!
+    const syncResponses = {};
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-      if (tshul) {
-        console.log('[DEBUG] Item Payload:', itemPayload);
-        const itemResponse = await tshul.item.create(itemPayload);
-
-        if (itemResponse && itemResponse.Error) {
-          console.error('[ERROR] Tshul API returned error:', itemResponse.Error);
-          return res.status(201).json({
-            dbRecord: record,
-            message: `Item created in DB but T-Shul sync failed: ${itemResponse.Error}`
-          });
+      const billingClients = await ServiceFactory.getActiveBillingClients(ispId, req.prisma);
+      for (const { code, client } of billingClients) {
+        try {
+          const itemPayload = {
+            Name: record.packageName,
+            Code: `${cleanPlanCode}${cleanDuration}`,
+            Unit: 'Mbps',
+            ReferenceId: referenceId,
+            ItemGroupReferenceId: 'TI-001',
+            IsTaxable: true,
+            IsExcisable: false,
+            IsPurchaseItem: false,
+            IsSalesItem: true,
+            IsServiceItem: true,
+            ReorderLevel: 0,
+            ReorderQty: 0,
+            IsBatchApplied: false,
+            IsBatchPerQuantity: false,
+            IsExpirable: false,
+            PurchaseRate: 0.00,
+            SalesMargin: 0.00,
+            SalesRate: record.price,
+            IsBOM: false
+          };
+          const itemResponse = await client.item.create(itemPayload);
+          syncResponses[code] = itemResponse;
+        } catch (syncErr) {
+          console.warn(`[WARNING] ${code} sync failed for package price:`, syncErr.message);
+          syncResponses[code] = { Error: syncErr.message };
         }
-
-        console.log('[SUCCESS] Item created in Tshul:', itemResponse);
-        return res.status(201).json({ dbRecord: record, tshulItem: itemResponse });
       }
-    } catch (tshulErr) {
-      console.warn('[WARNING] Tshul sync failed or skipped:', tshulErr.message);
+    } catch (err) {
+      console.warn('[WARNING] Failed to fetch active billing clients for package price sync:', err.message);
     }
 
-    return res.status(201).json({ dbRecord: record });
+    return res.status(201).json({ dbRecord: record, syncResponses });
   } catch (err) {
     console.error('[ERROR] Failed to create item in DB:', err.message);
     return next(err);
@@ -369,37 +367,41 @@ async function deletePackagePrice(req, res, next) {
   }
 }
 
-// Resync prices with T-Shul
+// Resync prices with active billing clients
 async function resyncPackagePrice(req, res, next) {
   try {
     const ispId = Number(req.ispId);
-    const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-    if (!tshul) return res.status(400).json({ error: 'T-Shul service not available' });
+    const billingClients = await ServiceFactory.getActiveBillingClients(ispId, req.prisma);
+    if (billingClients.length === 0) return res.status(400).json({ error: 'No active billing service available' });
 
     const prices = await req.prisma.PackagePrice.findMany({
       where: { ispId, isDeleted: false },
       include: { packagePlanDetails: true }
     });
 
-    let successCount = 0;
-    for (const p of prices) {
-      const payload = {
-        Name: `${p.packagePlanDetails?.planName || 'Plan'} - ${p.packageDuration}`,
-        Code: p.referenceId?.split('-')[1] || p.id.toString(),
-        Unit: 'Mbps',
-        ReferenceId: p.referenceId,
-        IsSalesItem: true,
-        SalesRate: p.price
-      };
-      try {
-        await tshul.item.create(payload);
-        successCount++;
-      } catch (e) {
-        console.warn(`Sync failed for price ${p.id}:`, e.message);
+    const results = {};
+    for (const { code, client } of billingClients) {
+      let successCount = 0;
+      for (const p of prices) {
+        const payload = {
+          Name: `${p.packagePlanDetails?.planName || 'Plan'} - ${p.packageDuration}`,
+          Code: p.referenceId?.split('-')[1] || p.id.toString(),
+          Unit: 'Mbps',
+          ReferenceId: p.referenceId,
+          IsSalesItem: true,
+          SalesRate: p.price
+        };
+        try {
+          await client.item.create(payload);
+          successCount++;
+        } catch (e) {
+          console.warn(`[${code}] Sync failed for price ${p.id}:`, e.message);
+        }
       }
+      results[code] = { synced: successCount, total: prices.length };
     }
 
-    return res.json({ success: true, synced: successCount, total: prices.length });
+    return res.json({ success: true, syncResults: results });
   } catch (err) {
     return next(err);
   }
@@ -497,8 +499,8 @@ async function createBulkPackagePrices(req, res, next) {
       results.push(record);
 
       try {
-        const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-        if (tshul) {
+        const billingClients = await ServiceFactory.getActiveBillingClients(ispId, req.prisma);
+        for (const { code, client } of billingClients) {
           const itemPayload = {
             Name: record.packageName,
             Code: `${cleanPlanCode}${cleanDuration}`,
@@ -510,7 +512,7 @@ async function createBulkPackagePrices(req, res, next) {
             IsServiceItem: true,
             SalesRate: record.price
           };
-          await tshul.item.create(itemPayload).catch(() => {});
+          await client.item.create(itemPayload).catch(() => {});
         }
       } catch (err) {}
     }

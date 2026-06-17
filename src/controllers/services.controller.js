@@ -251,6 +251,27 @@ class ServiceController {
         }
       }
 
+      // If service is a Billing service and is marked as default, unmark other Billing services
+      if ((serviceCode === SERVICE_CODES.TSHUL || serviceCode === SERVICE_CODES.NEPURIX) && config && config.isDefault === true) {
+        const otherCode = serviceCode === SERVICE_CODES.TSHUL ? SERVICE_CODES.NEPURIX : SERVICE_CODES.TSHUL;
+        const otherService = await this.prisma.service.findUnique({
+          where: { code: otherCode }
+        });
+        if (otherService) {
+          const otherIspService = await this.prisma.iSPService.findUnique({
+            where: { ispId_serviceId: { ispId, serviceId: otherService.id } }
+          });
+          if (otherIspService) {
+            const otherConfig = otherIspService.config && typeof otherIspService.config === 'object' ? otherIspService.config : {};
+            otherConfig.isDefault = false;
+            await this.prisma.iSPService.update({
+              where: { id: otherIspService.id },
+              data: { config: otherConfig }
+            });
+          }
+        }
+      }
+
       let result;
       if (existing) {
         result = await this.prisma.iSPService.update({
@@ -858,6 +879,121 @@ class ServiceController {
     } catch (error) {
       console.error('Error creating Tshul customer:', error);
       return res.status(500).json({ success: false, error: 'Failed to create customer', message: error.message });
+    }
+  }
+
+  async updateTshulCustomer(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { refrenceId } = req.params;
+      const customerData = req.body;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+      const result = await client.customer.update(refrenceId, customerData);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error updating Tshul customer:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update customer', message: error.message });
+    }
+  }
+
+  async deleteTshulCustomer(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { refrenceId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
+      const result = await client.customer.delete(refrenceId);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error deleting Tshul customer:', error);
+      return res.status(500).json({ success: false, error: 'Failed to delete customer', message: error.message });
+    }
+  }
+
+  // Nepurix Operations
+  async getNepurixCustomers(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { page = 1, limit = 20 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NEPURIX, ispId);
+      const customers = await client.customer.list();
+
+      const startIndex = (page - 1) * limit;
+      const endIndex = page * limit;
+      const paginatedCustomers = Array.isArray(customers) ?
+        customers.slice(startIndex, endIndex) : customers;
+
+      return res.json({
+        success: true,
+        data: {
+          customers: paginatedCustomers,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: Array.isArray(customers) ? customers.length : 0,
+            totalPages: Array.isArray(customers) ? Math.ceil(customers.length / limit) : 1
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error getting Nepurix customers:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NEPURIX', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get customers', message: error.message });
+    }
+  }
+
+  async getNepurixCustomerById(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { refrenceId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NEPURIX, ispId);
+      const customer = await client.customer.get(refrenceId);
+      return res.json({ success: true, data: customer });
+    } catch (error) {
+      console.error('Error getting Nepurix customer by id:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NEPURIX', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get customer', message: error.message });
+    }
+  }
+
+  async createNepurixCustomer(req, res) {
+    try {
+      const ispId = req.ispId;
+      const customerData = req.body;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NEPURIX, ispId);
+      const result = await client.customer.create(customerData);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error creating Nepurix customer:', error);
+      return res.status(500).json({ success: false, error: 'Failed to create customer', message: error.message });
+    }
+  }
+
+  async updateNepurixCustomer(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { refrenceId } = req.params;
+      const customerData = req.body;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NEPURIX, ispId);
+      const result = await client.customer.update(refrenceId, customerData);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error updating Nepurix customer:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update customer', message: error.message });
+    }
+  }
+
+  async deleteNepurixCustomer(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { refrenceId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NEPURIX, ispId);
+      const result = await client.customer.delete(refrenceId);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error deleting Nepurix customer:', error);
+      return res.status(500).json({ success: false, error: 'Failed to delete customer', message: error.message });
     }
   }
 

@@ -56,6 +56,15 @@ module.exports = (prisma) => {
     router.get('/tshul/customers', checkPermission('services_read'), serviceController.getTshulCustomers.bind(serviceController));
     router.post('/tshul/customers', checkPermission('services_manage'), serviceController.createTshulCustomer.bind(serviceController));
     router.get('/tshul/customers/:refrenceId', checkPermission('services_read'), serviceController.getTshulCustomersbyId.bind(serviceController));
+    router.put('/tshul/customers/:refrenceId', checkPermission('services_manage'), serviceController.updateTshulCustomer.bind(serviceController));
+    router.delete('/tshul/customers/:refrenceId', checkPermission('services_manage'), serviceController.deleteTshulCustomer.bind(serviceController));
+
+    // Nepurix Operations
+    router.get('/nepurix/customers', checkPermission('services_read'), serviceController.getNepurixCustomers.bind(serviceController));
+    router.post('/nepurix/customers', checkPermission('services_manage'), serviceController.createNepurixCustomer.bind(serviceController));
+    router.get('/nepurix/customers/:refrenceId', checkPermission('services_read'), serviceController.getNepurixCustomerById.bind(serviceController));
+    router.put('/nepurix/customers/:refrenceId', checkPermission('services_manage'), serviceController.updateNepurixCustomer.bind(serviceController));
+    router.delete('/nepurix/customers/:refrenceId', checkPermission('services_manage'), serviceController.deleteNepurixCustomer.bind(serviceController));
 
     // Radius Operations
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));

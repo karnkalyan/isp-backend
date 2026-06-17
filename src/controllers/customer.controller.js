@@ -1056,8 +1056,50 @@ async function provisionCustomer(req, res, next) {
 
           switch (service) {
             case SERVICE_CODES.TSHUL:
-              result = await client.customer.create(data);
+            case SERVICE_CODES.NEPURIX: {
+              const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
+              let clientsToProvision = activeBillingClients;
+              if (clientsToProvision.length === 0) {
+                clientsToProvision = [{ code: service, client }];
+              }
+
+              const results = [];
+              for (const billingClient of clientsToProvision) {
+                try {
+                  const resData = await billingClient.client.customer.create(data);
+                  const sId = await getServiceIdByCode(billingClient.code);
+                  await prisma.customerSubscribedService.upsert({
+                    where: { customerId_serviceId: { customerId, serviceId: sId } },
+                    update: { status: 'active', serviceData: resData },
+                    create: {
+                      customerId,
+                      serviceId: sId,
+                      status: 'active',
+                      serviceData: resData,
+                    },
+                  });
+                  results.push({ service: billingClient.code, success: true, data: resData });
+                } catch (err) {
+                  console.error(`${billingClient.code} provisioning error:`, err);
+                  results.push({ service: billingClient.code, success: false, message: err.message });
+                }
+              }
+
+              const mainResult = results.find(r => r.service === service) || results[0];
+              if (mainResult) {
+                if (mainResult.success) {
+                  result = mainResult.data;
+                } else {
+                  throw new Error(mainResult.message);
+                }
+              }
+              for (const r of results) {
+                if (r.service !== service) {
+                  serviceResults.push(r);
+                }
+              }
               break;
+            }
             case SERVICE_CODES.RADIUS:
               result = await client.createUser(
                 data.username,
@@ -1073,18 +1115,20 @@ async function provisionCustomer(req, res, next) {
               throw new Error(`Unsupported service: ${service}`);
           }
 
-          // Store successful result in database
-          const serviceId = await getServiceIdByCode(service);
-          await prisma.customerSubscribedService.upsert({
-            where: { customerId_serviceId: { customerId, serviceId } },
-            update: { status: 'active', serviceData: result },
-            create: {
-              customerId,
-              serviceId,
-              status: 'active',
-              serviceData: result,
-            },
-          });
+          // Store successful result in database (only if not already stored by the custom block)
+          if (service !== SERVICE_CODES.TSHUL && service !== SERVICE_CODES.NEPURIX) {
+            const serviceId = await getServiceIdByCode(service);
+            await prisma.customerSubscribedService.upsert({
+              where: { customerId_serviceId: { customerId, serviceId } },
+              update: { status: 'active', serviceData: result },
+              create: {
+                customerId,
+                serviceId,
+                status: 'active',
+                serviceData: result,
+              },
+            });
+          }
 
           serviceResults.push({ service, success: true, data: result });
         } catch (error) {
@@ -1112,6 +1156,7 @@ async function provisionCustomer(req, res, next) {
 
     // Extract results for convenience
     const tshulResult = serviceResults.find(r => r.service === SERVICE_CODES.TSHUL);
+    const nepurixResult = serviceResults.find(r => r.service === SERVICE_CODES.NEPURIX);
     const radiusResult = serviceResults.find(r => r.service === SERVICE_CODES.RADIUS);
     const nettvResult = serviceResults.find(r => r.service === SERVICE_CODES.NETTV);
 
@@ -1136,6 +1181,7 @@ async function provisionCustomer(req, res, next) {
       provisioning: {
         radius: customer.connectionUsers,
         tshul: tshulResult?.success ? tshulResult.data : null,
+        nepurix: nepurixResult?.success ? nepurixResult.data : null,
         radiusResult: radiusResult?.success ? radiusResult.data : null,
         nettvResult: nettvResult?.success ? nettvResult.data : null,
         connectionUsers: customer.connectionUsers.length,

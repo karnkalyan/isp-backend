@@ -1,4 +1,5 @@
 const { TshulClient } = require('../../services/tshulApi');
+const { NepurixClient } = require('../../services/nepurixApi');
 const { RadiusClient } = require('../../services/radiusClient');
 const YeastarService = require('../../services/yeaster.service');
 const AsteriskService = require('../../services/asterisk.service');
@@ -29,6 +30,9 @@ class ServiceFactory {
             switch (serviceCode) {
                 case SERVICE_CODES.TSHUL:
                     return await TshulClient.create(ispId);
+
+                case SERVICE_CODES.NEPURIX:
+                    return await NepurixClient.create(ispId);
 
                 case SERVICE_CODES.RADIUS:
                     return await RadiusClient.create(ispId);
@@ -83,6 +87,9 @@ class ServiceFactory {
             switch (serviceCode) {
                 case SERVICE_CODES.TSHUL:
                     return await TshulClient.getServiceStatus(ispId);
+
+                case SERVICE_CODES.NEPURIX:
+                    return await NepurixClient.getServiceStatus(ispId);
 
                 case SERVICE_CODES.RADIUS:
                     return await RadiusClient.getServiceStatus(ispId);
@@ -270,6 +277,11 @@ class ServiceFactory {
                                 Object.assign(status, tshulStatus);
                                 break;
 
+                            case SERVICE_CODES.NEPURIX:
+                                const nepurixStatus = await NepurixClient.getServiceStatus(ispId);
+                                Object.assign(status, nepurixStatus);
+                                break;
+
                             case SERVICE_CODES.AAKASHSMS:
                                 const aakashStatus = await AakashSmsClient.getServiceStatus(ispId);
                                 Object.assign(status, aakashStatus);
@@ -299,6 +311,63 @@ class ServiceFactory {
         }
     }
 
+    /**
+     * Get active or default billing service clients
+     * @returns {Promise<Array<{code: string, client: Object}>>} array of active clients
+     */
+    static async getActiveBillingClients(ispId, prismaClient = prisma) {
+        if (!ispId) {
+            throw new Error('ISP ID is required to fetch active billing clients.');
+        }
+
+        const billingServices = await prismaClient.iSPService.findMany({
+            where: {
+                ispId: ispId,
+                service: { code: { in: [SERVICE_CODES.TSHUL, SERVICE_CODES.NEPURIX] } },
+                isDeleted: false
+            },
+            include: {
+                service: true,
+                credentials: {
+                    where: { isActive: true, isDeleted: false }
+                }
+            }
+        });
+
+        const activeServices = billingServices.filter(s => s.isActive && s.isEnabled);
+        const clients = [];
+
+        if (activeServices.length > 0) {
+            // Instantiate all active ones
+            for (const service of activeServices) {
+                try {
+                    const client = await this.getClient(service.service.code, ispId, prismaClient);
+                    clients.push({ code: service.service.code, client });
+                } catch (err) {
+                    console.error(`[ServiceFactory] Failed to initialize active client for ${service.service.code}:`, err.message);
+                }
+            }
+        }
+
+        // If none is active, fall back to the one configured as default
+        if (clients.length === 0) {
+            const defaultService = billingServices.find(s => {
+                const config = s.config && typeof s.config === 'object' ? s.config : {};
+                return config.isDefault === true;
+            });
+
+            if (defaultService) {
+                try {
+                    const client = await this.getClient(defaultService.service.code, ispId, prismaClient);
+                    clients.push({ code: defaultService.service.code, client });
+                } catch (err) {
+                    console.error(`[ServiceFactory] Failed to initialize default client for ${defaultService.service.code}:`, err.message);
+                }
+            }
+        }
+
+        return clients;
+    }
 
     /**
      * Validate service configuration
@@ -326,6 +395,7 @@ class ServiceFactory {
     static getServiceOperations(serviceCode) {
         const operations = {
             TSHUL: ['list_customers', 'create_customer', 'create_invoice', 'get_transactions'],
+            NEPURIX: ['list_customers', 'create_customer', 'create_invoice', 'get_transactions'],
             RADIUS: ['list_users', 'create_user', 'update_user', 'delete_user', 'check_authentication'],
             NETTV: ['list_subscribers', 'get_subscriber', 'create_subscriber', 'add_stb', 'assign_package'],
             YEASTAR: ['list_extensions', 'get_active_calls', 'make_call', 'hangup_call', 'get_call_logs'],
@@ -365,6 +435,13 @@ class ServiceFactory {
                 description: 'Billing and invoicing system for ISPs',
                 icon: '💳',
                 documentation: 'https://docs.tshul.app'
+            },
+            NEPURIX: {
+                name: 'Nepurix Accounting',
+                category: 'BILLING',
+                description: 'Nepurix Cloud Accounting & Invoicing system',
+                icon: '📊',
+                documentation: 'https://docs.nepurix.app'
             },
             RADIUS: {
                 name: 'FreeRadius',

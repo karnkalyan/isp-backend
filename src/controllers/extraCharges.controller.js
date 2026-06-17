@@ -117,18 +117,22 @@ async function createOneTimeCharge(req, res, next) {
       IsBOM: false
     };
 
+    const syncResponses = {};
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul) {
-        console.log('[DEBUG] Item Payload:', itemPayload);
-        const itemResponse = await tshul.item.create(itemPayload);
-        console.log('[SUCCESS] Item created in Tshul:', itemResponse);
-        return res.status(201).json({ dbRecord: await attachApplicablePackages(req.prisma, record), tshulItem: itemResponse });
+      const billingClients = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
+      for (const { code, client } of billingClients) {
+        try {
+          const itemResponse = await client.item.create(itemPayload);
+          syncResponses[code] = itemResponse;
+        } catch (syncErr) {
+          console.warn(`[WARNING] ${code} sync failed or skipped:`, syncErr.message);
+          syncResponses[code] = { Error: syncErr.message };
+        }
       }
     } catch (err) {
-      console.warn('[WARNING] Tshul sync failed or skipped:', err.message);
+      console.warn('[WARNING] Failed to fetch active billing clients for one-time charge creation sync:', err.message);
     }
-    return res.status(201).json({ dbRecord: await attachApplicablePackages(req.prisma, record) });
+    return res.status(201).json({ dbRecord: await attachApplicablePackages(req.prisma, record), syncResponses });
   } catch (err) {
     next(err);
   }
@@ -210,14 +214,17 @@ async function updateOneTimeCharge(req, res, next) {
     };
 
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul) {
-        console.log('[DEBUG] Item Payload:', itemPayload);
-        const itemResponse = await tshul.item.update(getReferenceId.referenceId, itemPayload);
-        console.log('[SUCCESS] Item Updated in Tshul:', itemResponse);
+      const billingClients = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
+      for (const { code, client } of billingClients) {
+        try {
+          const itemResponse = await client.item.update(getReferenceId.referenceId, itemPayload);
+          console.log(`[SUCCESS] Item Updated in ${code}:`, itemResponse);
+        } catch (syncErr) {
+          console.warn(`[WARNING] ${code} sync failed or skipped:`, syncErr.message);
+        }
       }
     } catch (err) {
-      console.warn('[WARNING] Tshul sync failed or skipped:', err.message);
+      console.warn('[WARNING] Failed to fetch active billing clients for one-time charge update sync:', err.message);
     }
     return res.json(await attachApplicablePackages(req.prisma, updated));
   } catch (err) {
@@ -237,13 +244,19 @@ async function deleteOneTimeCharge(req, res, next) {
     await req.prisma.OneTimeCharge.update({ where: { id }, data: { isDeleted: true, updatedAt: new Date() } });
 
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul && getReferenceId?.referenceId) {
-        await tshul.item.delete(getReferenceId.referenceId);
-        console.log('[SUCCESS] Item deleted in Tshul:', getReferenceId.referenceId);
+      const billingClients = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
+      for (const { code, client } of billingClients) {
+        try {
+          if (getReferenceId?.referenceId) {
+            await client.item.delete(getReferenceId.referenceId);
+            console.log(`[SUCCESS] Item deleted in ${code}:`, getReferenceId.referenceId);
+          }
+        } catch (syncErr) {
+          console.warn(`[WARNING] ${code} sync failed or skipped:`, syncErr.message);
+        }
       }
     } catch (err) {
-      console.warn('[WARNING] Tshul sync failed or skipped:', err.message);
+      console.warn('[WARNING] Failed to fetch active billing clients for one-time charge delete sync:', err.message);
     }
     return res.json({ message: 'Charge soft-deleted', id });
   } catch (err) {
@@ -254,12 +267,14 @@ async function deleteOneTimeCharge(req, res, next) {
 async function syncOneTimeCharges(req, res, next) {
   try {
     const ispId = Number(req.ispId);
-    const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-    if (!tshul) return res.status(400).json({ error: 'T-Shul service not available' });
+    const billingClients = await ServiceFactory.getActiveBillingClients(ispId, req.prisma);
+    if (billingClients.length === 0) return res.status(400).json({ error: 'No active billing service available' });
 
-    const items = await tshul.item.list();
+    // Try list items from the first active billing client
+    const { code, client } = billingClients[0];
+    const items = await client.item.list();
     if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'Failed to retrieve items from T-Shul' });
+      return res.status(400).json({ error: `Failed to retrieve items from ${code}` });
     }
 
     let createdCount = 0;
