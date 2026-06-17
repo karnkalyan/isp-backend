@@ -345,6 +345,7 @@ model OneTimeCharge {
   code               String?
   referenceId        String?
   isTaxable          Boolean        @default(true)
+  isTscApplicable    Boolean        @default(false)
   iconUrl            String?
   description        String?
   amount             Float?

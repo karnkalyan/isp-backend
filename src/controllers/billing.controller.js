@@ -353,7 +353,7 @@ async function renewSubscription(req, res, next) {
                 isDeleted: false,
                 ...(req.branchId ? { branchId: req.branchId } : {})
             },
-            select: { id: true, branchId: true, isRechargeable: true }
+            select: { id: true, branchId: true, isRechargeable: true, isFree: true }
         });
 
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -444,7 +444,7 @@ async function renewSubscription(req, res, next) {
 
             // Create order for renewal
             const orderItems = [
-              { itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal', referenceId: pkgPrice.referenceId, itemPrice: expectedAmount }
+              { itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal', referenceId: pkgPrice.referenceId, itemPrice: customer.isFree ? 0 : pkgPrice.price }
             ];
 
             await tx.customerOrderManagement.create({
@@ -673,6 +673,7 @@ async function listInvoices(req, res, next) {
                 amount: order.totalAmount,
                 status: order.isPaid ? 'paid' : (new Date(order.packageEnd) < new Date() ? 'overdue' : 'pending'),
                 packageName: order.packagePrice?.packagePlanDetails?.planName || 'Package Renewal',
+                isTscApplicable: order.packagePrice?.isTscApplicable || false,
                 items: order.items
             };
         });

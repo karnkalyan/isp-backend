@@ -57,6 +57,7 @@ async function createOneTimeCharge(req, res, next) {
       description,
       amount,
       isTaxable,
+      isTscApplicable,
       forPackageCreation,
       applicablePackageIds = []
     } = req.body;
@@ -86,6 +87,7 @@ async function createOneTimeCharge(req, res, next) {
         forPackageCreation: Boolean(forPackageCreation),
         code: cleanCode,
         isTaxable: Boolean(isTaxable),
+        isTscApplicable: Boolean(isTscApplicable),
         referenceId,
         ispId: req.ispId,
         updatedAt: new Date()
@@ -169,13 +171,14 @@ async function updateOneTimeCharge(req, res, next) {
       select: { referenceId: true }
     });
 
-    const { name, description, amount, ispId, isTaxable, forPackageCreation, applicablePackageIds = [] } = req.body;
+    const { name, description, amount, ispId, isTaxable, isTscApplicable, forPackageCreation, applicablePackageIds = [] } = req.body;
     const updated = await req.prisma.OneTimeCharge.update({
       where: { id },
       data: {
         name,
         description,
         isTaxable: Boolean(isTaxable),
+        isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
         amount: amount !== undefined ? (amount !== null && amount !== '' ? parseFloat(amount) : null) : undefined,
         forPackageCreation: forPackageCreation !== undefined ? Boolean(forPackageCreation) : undefined,
         ispId: ispId !== undefined ? Number(ispId) : undefined,

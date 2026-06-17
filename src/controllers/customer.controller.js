@@ -1847,7 +1847,9 @@ const subscribePackage = async (req, res, next) => {
     }
 
     const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
-    const totalAmount = packagePrice + otcTotal;
+    const totalAmount = (!isRechargeable && pkg.initialTotalWithTax !== null && pkg.initialTotalWithTax !== undefined && !customer.isFree)
+      ? packagePrice
+      : (customer.isFree ? 0 : packagePrice + otcTotal);
 
     if (!createOrder) {
       return res.json({
@@ -1884,7 +1886,7 @@ const subscribePackage = async (req, res, next) => {
       {
         itemName: pkg.packageName || "Base Package",
         referenceId: pkg.referenceId || null,
-        itemPrice: packagePrice
+        itemPrice: customer.isFree ? 0 : (pkg.price || 0)
       },
       ...otcItems.map(it => ({
         itemName: it.name,
@@ -2062,7 +2064,11 @@ async function changePackage(req, res, next) {
       }
 
       // Create order for package change
-      const orderAmount = customer.isFree ? 0 : (newPackage.price || 0);
+      const renewalAmount = newPackage.renewAmountWithTax !== null && newPackage.renewAmountWithTax !== undefined
+        ? Number(newPackage.renewAmountWithTax)
+        : Number(newPackage.price || 0);
+      const orderAmount = customer.isFree ? 0 : renewalAmount;
+      const baseItemPrice = customer.isFree ? 0 : (newPackage.price || 0);
       await tx.customerOrderManagement.create({
         data: {
           customerId: customerId,
@@ -2080,7 +2086,7 @@ async function changePackage(req, res, next) {
               {
                 itemName: `${newPackage.packageName || 'Package'} - Package Change`,
                 referenceId: newPackage.referenceId || null,
-                itemPrice: orderAmount
+                itemPrice: baseItemPrice
               }
             ]
           }
