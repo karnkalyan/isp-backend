@@ -7,7 +7,20 @@ function convertToCSV(data, headers) {
     const headerKeys = Object.keys(headers);
     const headerRow = headerKeys.map(k => `"${headers[k].replace(/"/g, '""')}"`).join(',');
     
-    const rows = data.map(item => {
+    const firstKey = headerKeys[0];
+    const hasIspPrepend = data.length > 2 && data[0] && typeof data[0] === 'object' && Object.keys(data[0]).length === 1 && data[0][firstKey] && data[1] && data[1][firstKey] === '';
+    
+    let ispHeader = '';
+    let blankRow = '';
+    let dataToProcess = data;
+    
+    if (hasIspPrepend) {
+        ispHeader = `"${data[0][firstKey].replace(/"/g, '""')}"` + ','.repeat(headerKeys.length - 1);
+        blankRow = ','.repeat(headerKeys.length - 1);
+        dataToProcess = data.slice(2);
+    }
+    
+    const rows = dataToProcess.map(item => {
         return headerKeys.map(key => {
             let val = item[key];
             if (val === null || val === undefined) val = '';
@@ -16,6 +29,9 @@ function convertToCSV(data, headers) {
         }).join(',');
     });
 
+    if (hasIspPrepend) {
+        return [ispHeader, blankRow, headerRow, ...rows].join('\r\n');
+    }
     return [headerRow, ...rows].join('\r\n');
 }
 
@@ -82,10 +98,32 @@ async function buildXlsxBuffer(rows) {
 // Helper to send Excel response
 async function sendExcelResponse(res, filename, data, headers) {
     const headerKeys = Object.keys(headers);
-    const rows = [
-        headerKeys.map(key => headers[key]),
-        ...data.map(item => headerKeys.map(key => item[key]))
-    ];
+    const firstKey = headerKeys[0];
+    const hasIspPrepend = data.length > 2 && data[0] && typeof data[0] === 'object' && Object.keys(data[0]).length === 1 && data[0][firstKey] && data[1] && data[1][firstKey] === '';
+    
+    let rows = [];
+    let dataToProcess = data;
+    
+    if (hasIspPrepend) {
+        // Row 1: ISP Header
+        const firstRow = Array(headerKeys.length).fill('');
+        firstRow[0] = data[0][firstKey];
+        rows.push(firstRow);
+        
+        // Row 2: Blank Row
+        rows.push(Array(headerKeys.length).fill(''));
+        
+        dataToProcess = data.slice(2);
+    }
+    
+    // Table Headers Row
+    rows.push(headerKeys.map(key => headers[key]));
+    
+    // Data Rows
+    dataToProcess.forEach(item => {
+        rows.push(headerKeys.map(key => item[key]));
+    });
+    
     const buffer = await buildXlsxBuffer(rows);
     
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -170,6 +208,14 @@ function sendPDFResponse(res, title, data, headers, isp) {
     data.forEach((item, rowIndex) => {
         if (doc.y > 500) { // page break
             doc.addPage({ margin: 30, size: 'A4', layout: 'landscape' });
+            if (isp) {
+                doc.fontSize(11).font('Helvetica-Bold').text(isp.companyName || isp.name || 'ISP', { align: 'center' });
+                doc.fontSize(8).font('Helvetica').text(
+                    [isp.address, isp.phoneNumber ? `Tel: ${isp.phoneNumber}` : null, isp.masterEmail ? `Email: ${isp.masterEmail}` : null, isp.panNo ? `PAN: ${isp.panNo}` : null].filter(Boolean).join('  '),
+                    { align: 'center' }
+                );
+                doc.moveDown(0.4);
+            }
             startY = doc.y;
             // Redraw Header
             doc.fontSize(9).font('Helvetica-Bold');
