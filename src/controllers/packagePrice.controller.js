@@ -105,6 +105,7 @@ async function createPackagePrice(req, res, next) {
       isActive,
       initialTotalWithTax,
       renewAmountWithTax,
+      isTscApplicable,
       oneTimeCharges = [],
       oneTimeChargeIds = []
     } = req.body;
@@ -139,6 +140,7 @@ async function createPackagePrice(req, res, next) {
         price: parseFloat(price),
         initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
         renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+        isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
         packageName: packageName || `${plan.planName} - ${packageDuration}`,
         isActive: isActive !== false,
         ispId: ispId,
@@ -219,6 +221,7 @@ async function listPackagePrices(req, res, next) {
         price: true,
         initialTotalWithTax: true,
         renewAmountWithTax: true,
+        isTscApplicable: true,
         packageDuration: true,
         packageName: true,
         isActive: true,
@@ -263,6 +266,7 @@ async function getPackagePriceById(req, res, next) {
         price: true,
         initialTotalWithTax: true,
         renewAmountWithTax: true,
+        isTscApplicable: true,
         packageDuration: true,
         packageName: true,
         isActive: true,
@@ -305,6 +309,7 @@ async function updatePackagePrice(req, res, next) {
       isActive,
       initialTotalWithTax,
       renewAmountWithTax,
+      isTscApplicable,
       oneTimeCharges,
       oneTimeChargeIds
     } = req.body;
@@ -321,6 +326,7 @@ async function updatePackagePrice(req, res, next) {
         price: price !== undefined ? parseFloat(price) : undefined,
         initialTotalWithTax: initialTotalWithTax !== undefined ? (initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null) : undefined,
         renewAmountWithTax: renewAmountWithTax !== undefined ? (renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null) : undefined,
+        isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
         packageName: packageName !== undefined ? packageName : undefined,
         isActive: isActive !== undefined ? Boolean(isActive) : undefined,
         isTrial: isTrial !== undefined ? isTrial : undefined,
@@ -422,6 +428,7 @@ async function createBulkPackagePrices(req, res, next) {
         price,
         initialTotalWithTax,
         renewAmountWithTax,
+        isTscApplicable,
         oneTimeCharges = [],
         oneTimeChargeIds = []
       } = p;
@@ -443,6 +450,7 @@ async function createBulkPackagePrices(req, res, next) {
             price: parseFloat(price),
             initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
             renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+            isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
             packageName: `${plan.planName} - ${duration}`,
             isActive: true,
             isDeleted: false,
@@ -469,6 +477,7 @@ async function createBulkPackagePrices(req, res, next) {
           price: parseFloat(price),
           initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
           renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+          isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
           packageName: `${plan.planName} - ${duration}`,
           isActive: true,
           ispId: ispId,

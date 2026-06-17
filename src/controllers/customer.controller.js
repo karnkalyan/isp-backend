@@ -474,6 +474,8 @@ async function createCustomer(req, res, next) {
       customerLoginPassword,
       serviceConnection,
       subscribedServices,
+      isFree,
+      freeCustomerSecretKey,
     } = req.body;
 
     // Parse JSON fields (same as before)
@@ -498,6 +500,24 @@ async function createCustomer(req, res, next) {
     if (!customerTypeId) errors.push('customerTypeId is required');
     if (errors.length > 0) {
       return res.status(400).json({ success: false, error: 'Validation failed', details: errors });
+    }
+
+    // Validate Free Customer parameters if isFree is true
+    const parsedIsFree = isFree === true || isFree === 'true';
+    if (parsedIsFree) {
+      const role = String(req.user?.role || '').toLowerCase();
+      const isAdmin = role === 'admin' || role === 'isp_admin' || role === 'administrator' || role.startsWith('global ');
+      if (!isAdmin) {
+        return res.status(403).json({ success: false, error: 'Only administrators can create a Free customer.' });
+      }
+
+      const secretSetting = await prisma.iSPSettings.findFirst({
+        where: { key: 'freeCustomerSecretKey', ispId: req.ispId }
+      });
+      const systemSecret = secretSetting ? secretSetting.value : 'admin123';
+      if (freeCustomerSecretKey !== systemSecret) {
+        return res.status(400).json({ success: false, error: 'Invalid Free Customer Secret Key.' });
+      }
     }
 
     // Fetch lead
@@ -602,6 +622,7 @@ async function createCustomer(req, res, next) {
           subscribedPkg: { connect: { id: subscribedPackage.id } },
           status: 'draft',
           onboardStatus: 'pending',
+          isFree: parsedIsFree,
         }
       });
 
@@ -764,10 +785,15 @@ async function createCustomer(req, res, next) {
         }
       }
 
-      // 6. Free 3-day test subscription on the selected subscribed package.
+      // 6. Free test subscription based on trialDurationDays from settings (default 3).
+      const trialSetting = await tx.iSPSettings.findFirst({
+        where: { key: 'trialDurationDays', ispId: req.ispId }
+      });
+      const trialDays = trialSetting ? parseInt(trialSetting.value, 10) : 3;
+
       const testStart = new Date();
       const testEnd = new Date(testStart);
-      testEnd.setDate(testEnd.getDate() + 3);
+      testEnd.setDate(testEnd.getDate() + trialDays);
       subscription = await tx.customerSubscription.create({
         data: {
           customer: { connect: { id: createdCustomer.id } },
@@ -782,7 +808,7 @@ async function createCustomer(req, res, next) {
 
       // 7. Order
       const orderItems = [
-        { itemName: `${subscribedPackage.packageName || 'Package'} - 3 Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
+        { itemName: `${subscribedPackage.packageName || 'Package'} - ${trialDays} Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
       ];
 
       order = await tx.customerOrderManagement.create({
@@ -1803,9 +1829,12 @@ const subscribePackage = async (req, res, next) => {
     const renewalAmount = pkg.renewAmountWithTax !== null && pkg.renewAmountWithTax !== undefined
       ? Number(pkg.renewAmountWithTax)
       : Number(pkg.price || 0);
-    const packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
+    let packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
+    if (customer.isFree) {
+      packagePrice = 0;
+    }
 
-    const otcItems = isRechargeable
+    let otcItems = isRechargeable
       ? []
       : (pkg.oneTimeCharges || []).map(o => ({
         id: o.id,
@@ -1813,6 +1842,9 @@ const subscribePackage = async (req, res, next) => {
         referenceId: o.referenceId || null,
         amount: Number(o.amount || 0)
       }));
+    if (customer.isFree) {
+      otcItems = otcItems.map(it => ({ ...it, amount: 0 }));
+    }
 
     const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
     const totalAmount = packagePrice + otcTotal;
@@ -2030,6 +2062,7 @@ async function changePackage(req, res, next) {
       }
 
       // Create order for package change
+      const orderAmount = customer.isFree ? 0 : (newPackage.price || 0);
       await tx.customerOrderManagement.create({
         data: {
           customerId: customerId,
@@ -2038,10 +2071,19 @@ async function changePackage(req, res, next) {
           packageStart: updatedSubscription.planStart,
           packageEnd: updatedSubscription.planEnd,
           orderDate: now,
-          totalAmount: newPackage.price || 0,
+          totalAmount: orderAmount,
           isActive: true,
           isDeleted: false,
-          orderType: 'package_change'
+          orderType: 'package_change',
+          items: {
+            create: [
+              {
+                itemName: `${newPackage.packageName || 'Package'} - Package Change`,
+                referenceId: newPackage.referenceId || null,
+                itemPrice: orderAmount
+              }
+            ]
+          }
         }
       });
     });

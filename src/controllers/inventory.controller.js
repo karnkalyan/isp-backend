@@ -341,7 +341,7 @@ async function deleteInventoryItem(req, res, next) {
             })
             : [];
 
-        if (item.customerId || linkedCustomerDevices.length > 0) {
+        if (item.customerId || item.status === 'ASSIGNED_TO_CUSTOMER' || linkedCustomerDevices.length > 0) {
             return res.status(400).json({
                 success: false,
                 error: 'Device is linked with a customer and cannot be deleted. Return/unassign the hardware first.',

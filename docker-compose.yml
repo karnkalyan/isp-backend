@@ -60,7 +60,6 @@ services:
       LICENSE_GENERATOR_SECRET: "Kasvian@123Kalyan!@#"
       LICENSE_SECRET: "Kasvian@123Kalyan!@#"
 
-     
       GOOGLE_CLIENT_ID: "497249566156-jed3q4fsm8ndrip7sdopqtk9gp5rh0eh.apps.googleusercontent.com"
 
     networks:

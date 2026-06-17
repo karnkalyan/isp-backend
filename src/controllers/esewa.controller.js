@@ -632,9 +632,12 @@ const getCustomerContext = async (req, requestId) => {
   const renewalAmount = pkg.renewAmountWithTax !== null && pkg.renewAmountWithTax !== undefined
     ? Number(pkg.renewAmountWithTax)
     : Number(pkg.price || 0);
-  const packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
+  let packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
+  if (customer.isFree) {
+    packagePrice = 0;
+  }
 
-  const otcItems = isRechargeable
+  let otcItems = isRechargeable
     ? []
     : (pkg.oneTimeCharges || []).map(o => ({
       id: o.id,
@@ -642,6 +645,9 @@ const getCustomerContext = async (req, requestId) => {
       referenceId: o.referenceId || null,
       amount: Number(o.amount || 0)
     }));
+  if (customer.isFree) {
+    otcItems = otcItems.map(it => ({ ...it, amount: 0 }));
+  }
 
   const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
   const totalAmount = packagePrice + otcTotal;

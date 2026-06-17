@@ -10,7 +10,8 @@ async function extendSubscription(req, res, next) {
     const { customerId, days, extendToDate, type } = req.body; // type: 'grace' or 'compensation'
     
     try {
-        const isAdmin = req.user.role?.name?.toLowerCase() === 'admin' || req.user.role?.name?.toLowerCase() === 'isp_admin';
+        const role = String(req.user?.role || '').toLowerCase();
+        const isAdmin = role === 'admin' || role === 'isp_admin' || role === 'administrator' || role.startsWith('global ');
         const subscription = await prisma.customerSubscription.findFirst({
             where: { 
                 customerId: Number(customerId), 
@@ -21,6 +22,13 @@ async function extendSubscription(req, res, next) {
         });
 
         if (!subscription) return res.status(404).json({ error: 'Active subscription not found' });
+
+        if (type === 'grace') {
+            const now = new Date();
+            if (subscription.planEnd && new Date(subscription.planEnd) > now) {
+                return res.status(400).json({ error: 'Grace period is not valid. Customer already has a valid subscription.' });
+            }
+        }
 
         // Normal staff can only extend by 3 days once and only as 'grace'
         if (!isAdmin) {
@@ -152,6 +160,8 @@ async function addAdjustmentItem(req, res, next) {
 
         if (!order) return res.status(404).json({ error: 'Order not found' });
 
+        if (order.isPaid) return res.status(400).json({ error: 'Cannot add adjustment to a paid invoice.' });
+
         const updatedOrder = await prisma.$transaction(async (tx) => {
             const newItem = await tx.orderDetail.create({
                 data: {
@@ -187,6 +197,8 @@ async function removeAdjustmentItem(req, res, next) {
         });
 
         if (!detail) return res.status(404).json({ error: 'Item not found' });
+
+        if (detail.order.isPaid) return res.status(400).json({ error: 'Cannot remove adjustment from a paid invoice.' });
 
         const updatedOrder = await prisma.$transaction(async (tx) => {
             await tx.orderDetail.delete({ where: { id: detail.id } });
@@ -448,7 +460,14 @@ async function renewSubscription(req, res, next) {
                     isActive: true,
                     invoiceId: invoiceId ? String(invoiceId) : null,
                     paymentId: 'PENDING_APPROVAL',
-                    updatedAt: new Date()
+                    updatedAt: new Date(),
+                    items: {
+                        create: orderItems.map(i => ({
+                            itemName: i.itemName,
+                            referenceId: i.referenceId,
+                            itemPrice: i.itemPrice
+                        }))
+                    }
                 }
             });
 
