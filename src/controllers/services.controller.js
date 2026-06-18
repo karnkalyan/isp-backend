@@ -3806,7 +3806,17 @@ class ServiceController {
       const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
       const recipients = selectAll
         ? await this.getSmsCampaignRecipients(ispId, recipientType, filters)
-        : (Array.isArray(to) ? to : [to]).map((phone) => ({ recipientType, phone: normalizePhone(phone) })).filter((recipient) => recipient.phone);
+        : (Array.isArray(to) ? to : [to]).map((item) => {
+            const rawPhone = typeof item === 'object' && item !== null ? item.phone : item;
+            const recipientId = typeof item === 'object' && item !== null ? item.recipientId : null;
+            const name = typeof item === 'object' && item !== null ? item.name : null;
+            return {
+              recipientId: recipientId ? Number(recipientId) : null,
+              recipientType,
+              name: name || null,
+              phone: normalizePhone(rawPhone)
+            };
+          }).filter((recipient) => recipient.phone);
 
       const { unique, skipped } = this.dedupeSmsRecipients(recipients);
 
