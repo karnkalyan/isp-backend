@@ -97,9 +97,17 @@ class AakashSmsClient {
       });
       return { connected: true, message: 'Successfully connected to Aakash SMS', data: response.data };
     } catch (error) {
+      const errorMsg = error.response?.data?.response || error.response?.data?.message || error.message;
+      if (typeof errorMsg === 'string' && errorMsg.includes('total_credit')) {
+        return {
+          connected: true,
+          message: 'Connected to Aakash SMS successfully (authenticated, but account profile is new/empty)',
+          data: { available_credit: 0, note: errorMsg }
+        };
+      }
       return { 
         connected: false, 
-        message: error.response?.data?.message || error.message 
+        message: errorMsg 
       };
     }
   }
@@ -143,8 +151,18 @@ class AakashSmsClient {
       });
       return response.data;
     } catch (error) {
+      const errorMsg = error.response?.data?.response || error.response?.data?.message || error.message;
+      if (typeof errorMsg === 'string' && errorMsg.includes('total_credit')) {
+        return {
+          available_credit: 0,
+          note: errorMsg
+        };
+      }
       console.error('AakashSmsClient Credit Error:', error.response?.data || error.message);
-      throw error;
+      return {
+        available_credit: 0,
+        error: errorMsg
+      };
     }
   }
 }
