@@ -3639,16 +3639,61 @@ class ServiceController {
 
   async sendBulkSms(req, res) {
     try {
-      const ispId = req.ispId;
+      const ispId = Number(req.ispId);
       const { to, text, type = 'customer', provider } = req.body;
 
       if (!to || !text) {
         return res.status(400).json({ success: false, error: 'to and text are required' });
       }
 
+      const recipientType = type === 'lead' ? 'lead' : 'customer';
       const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
       const client = await ServiceFactory.getClient(resolvedProvider, ispId);
-      const result = await client.sendBulkSms(to, text);
+
+      const recipientPhones = (Array.isArray(to) ? to : [to]).map(p => normalizePhone(p)).filter(Boolean);
+
+      if (recipientPhones.length === 0) {
+        return res.status(400).json({ success: false, error: 'No valid phone numbers provided' });
+      }
+
+      let result;
+      let status = 'completed';
+      let errorMessage = null;
+
+      try {
+        result = await client.sendBulkSms(recipientPhones, text);
+      } catch (err) {
+        status = 'failed';
+        errorMessage = err.message || 'SMS provider failed';
+        throw err;
+      } finally {
+        await this.prisma.smsCampaign.create({
+          data: {
+            ispId,
+            createdById: req.user?.id || null,
+            recipientType,
+            provider: resolvedProvider,
+            message: String(text),
+            status,
+            errorMessage,
+            totalCount: recipientPhones.length,
+            sentCount: status === 'completed' ? recipientPhones.length : 0,
+            failedCount: status === 'failed' ? recipientPhones.length : 0,
+            startedAt: new Date(),
+            completedAt: new Date(),
+            logs: {
+              create: recipientPhones.map((phone) => ({
+                recipientType,
+                phone,
+                provider: resolvedProvider,
+                status: status === 'completed' ? 'sent' : 'failed',
+                errorMessage,
+                sentAt: new Date()
+              }))
+            }
+          }
+        });
+      }
 
       return res.json({ success: true, data: result });
     } catch (error) {
@@ -3992,7 +4037,11 @@ class ServiceController {
     try {
       const page = Math.max(1, Number(req.query.page) || 1);
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 100);
-      const where = { ispId: Number(req.ispId) };
+      const { provider } = req.query;
+      const where = { 
+        ispId: Number(req.ispId),
+        ...(provider ? { provider: String(provider).toUpperCase() } : {})
+      };
 
       const [rows, total] = await Promise.all([
         this.prisma.smsCampaign.findMany({
