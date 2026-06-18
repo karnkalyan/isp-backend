@@ -287,6 +287,8 @@ async function getLeadById(req, res, next) {
       },
       include: {
         membership: true,
+        branch: true,
+        subBranch: true,
         assignedUser: {
           select: {
             id: true,
@@ -299,6 +301,7 @@ async function getLeadById(req, res, next) {
           select: {
             id: true,
             packageName: true,
+            price: true
           }
         },
         followUps: {
