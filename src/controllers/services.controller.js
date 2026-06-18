@@ -3720,16 +3720,16 @@ class ServiceController {
       }
     }
     if (filters.area) {
-      const area = String(filters.area).trim();
-      if (area) {
+      const areas = String(filters.area).split(',').map(s => s.trim()).filter(Boolean);
+      if (areas.length > 0) {
         where.AND = where.AND || [];
         where.AND.push({
-          OR: [
-            { address: { contains: area } },
-            { street: { contains: area } },
-            { district: { contains: area } },
-            { province: { contains: area } }
-          ]
+          OR: areas.flatMap(a => [
+            { address: { contains: a } },
+            { street: { contains: a } },
+            { district: { contains: a } },
+            { province: { contains: a } }
+          ])
         });
       }
     }
@@ -3761,16 +3761,16 @@ class ServiceController {
       }
     }
     if (filters.area) {
-      const area = String(filters.area).trim();
-      if (area) {
+      const areas = String(filters.area).split(',').map(s => s.trim()).filter(Boolean);
+      if (areas.length > 0) {
         where.lead = {
           ...where.lead,
-          OR: [
-            { address: { contains: area } },
-            { street: { contains: area } },
-            { district: { contains: area } },
-            { province: { contains: area } }
-          ]
+          OR: areas.flatMap(a => [
+            { address: { contains: a } },
+            { street: { contains: a } },
+            { district: { contains: a } },
+            { province: { contains: a } }
+          ])
         };
       }
     }

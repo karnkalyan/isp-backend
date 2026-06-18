@@ -1291,14 +1291,18 @@ async function listCustomers(req, res, next) {
       where.serviceDetails = { some: { splitterId: parseInt(splitterId) } };
     }
     if (area) {
-      // Filter by city or district in lead
-      where.lead = {
-        OR: [
-          { city: { contains: area } },
-          { district: { contains: area } },
-          { street: { contains: area } }
-        ]
-      };
+      const areas = String(area).split(',').map(s => s.trim()).filter(Boolean);
+      if (areas.length > 0) {
+        where.lead = {
+          ...where.lead,
+          OR: areas.flatMap(a => [
+            { address: { contains: a } },
+            { street: { contains: a } },
+            { district: { contains: a } },
+            { province: { contains: a } }
+          ])
+        };
+      }
     }
 
     if (search) {

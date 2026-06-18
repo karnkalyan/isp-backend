@@ -152,6 +152,22 @@ const getAllLeads = async (req, res, next) => {
       where.source = source;
     }
 
+    // Area filter
+    if (req.query.area) {
+      const areas = String(req.query.area).split(',').map(s => s.trim()).filter(Boolean);
+      if (areas.length > 0) {
+        where.AND = where.AND || [];
+        where.AND.push({
+          OR: areas.flatMap(a => [
+            { address: { contains: a } },
+            { street: { contains: a } },
+            { district: { contains: a } },
+            { province: { contains: a } }
+          ])
+        });
+      }
+    }
+
     // Tab-based filters (qualified, unqualified, converted)
     if (qualified === 'true') {
       where.status = 'qualified';
