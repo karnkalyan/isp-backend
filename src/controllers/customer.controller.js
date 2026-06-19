@@ -2367,6 +2367,112 @@ async function getCustomerStatusSummary(req, res, next) {
   }
 }
 
+async function updateCustomerDevice(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  const deviceId = Number(req.params.deviceId);
+  if (isNaN(customerId) || isNaN(deviceId)) {
+    return res.status(400).json({ error: 'Invalid customer or device ID' });
+  }
+
+  const { brand, model, serialNumber, macAddress, ponSerial, provisioningStatus, notes } = req.body;
+
+  try {
+    const device = await prisma.customerDevice.findFirst({
+      where: { id: deviceId, customerId, customer: { ispId: req.ispId } }
+    });
+
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    const updated = await prisma.customerDevice.update({
+      where: { id: deviceId },
+      data: {
+        brand: brand !== undefined ? brand : device.brand,
+        model: model !== undefined ? model : device.model,
+        serialNumber: serialNumber !== undefined ? serialNumber : device.serialNumber,
+        macAddress: macAddress !== undefined ? macAddress : device.macAddress,
+        ponSerial: ponSerial !== undefined ? ponSerial : device.ponSerial,
+        provisioningStatus: provisioningStatus !== undefined ? provisioningStatus : device.provisioningStatus,
+        notes: notes !== undefined ? notes : device.notes,
+        updatedAt: new Date()
+      }
+    });
+
+    await logAudit(prisma, req.user.id, 'CUSTOMER_DEVICE_UPDATE', { customerId, deviceId, provisioningStatus }, req);
+
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error("updateCustomerDevice error:", err);
+    return next(err);
+  }
+}
+
+async function deleteCustomerDevice(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  const deviceId = Number(req.params.deviceId);
+  if (isNaN(customerId) || isNaN(deviceId)) {
+    return res.status(400).json({ error: 'Invalid customer or device ID' });
+  }
+
+  try {
+    const device = await prisma.customerDevice.findFirst({
+      where: { id: deviceId, customerId, customer: { ispId: req.ispId } }
+    });
+
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    // Perform database operations in transaction to guarantee consistency
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete CustomerDevice
+      await tx.customerDevice.delete({
+        where: { id: deviceId }
+      });
+
+      // 2. Unassign corresponding InventoryItem if it exists and is assigned to this customer
+      if (device.serialNumber) {
+        const invItem = await tx.InventoryItem.findFirst({
+          where: { serialNumber: device.serialNumber, customerId, ispId: req.ispId }
+        });
+        if (invItem) {
+          const targetStatus = invItem.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
+          await tx.InventoryItem.update({
+            where: { id: invItem.id },
+            data: {
+              status: targetStatus,
+              customerId: null,
+              updatedAt: new Date()
+            }
+          });
+          
+          await tx.InventoryLog.create({
+            data: {
+              inventoryItemId: invItem.id,
+              fromStatus: invItem.status,
+              toStatus: targetStatus,
+              toEntityId: invItem.branchId,
+              entityType: invItem.branchId ? 'BRANCH' : 'HEAD_OFFICE',
+              actionByUserId: req.user.id,
+              note: `Unassigned via customer device deletion of serial: ${device.serialNumber}`
+            }
+          });
+        }
+      }
+
+      await logAudit(tx, req.user.id, 'CUSTOMER_DEVICE_DELETE', { customerId, deviceId, serialNumber: device.serialNumber }, req);
+    });
+
+    return res.json({ success: true, message: 'Device deleted successfully' });
+  } catch (err) {
+    console.error("deleteCustomerDevice error:", err);
+    return next(err);
+  }
+}
+
 // ----------------------------------------------------------------------
 // Exports
 // ----------------------------------------------------------------------
@@ -2389,5 +2495,7 @@ module.exports = {
   downloadDocument,
   deleteDocument,
   uploadCustomerDocuments,
-  getCustomerStatusSummary
+  getCustomerStatusSummary,
+  updateCustomerDevice,
+  deleteCustomerDevice
 };

@@ -19,7 +19,9 @@ const {
   getCustomerByPhoneNumber,
   getCustomerStatusSummary,
   getCustomerProfile,
-  assertCustomerOwnsSerial
+  assertCustomerOwnsSerial,
+  updateCustomerDevice,
+  deleteCustomerDevice
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -93,6 +95,10 @@ module.exports = (prisma) => {
   router.put('/:id/username', checkPermission('customer_update'), changeUsername);
   router.put('/:id/package', checkPermission('customer_update'), changePackage);
   router.put('/:id/mac', checkPermission('customer_update'), resetMac);
+
+  // Device endpoints
+  router.put('/:id/devices/:deviceId', checkPermission('customer_update'), updateCustomerDevice);
+  router.delete('/:id/devices/:deviceId', checkPermission('customer_update'), deleteCustomerDevice);
 
   // Package subscription
   router.post('/subscribe', checkPermission('customer_create'), subscribePackage);
