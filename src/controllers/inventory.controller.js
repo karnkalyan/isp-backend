@@ -46,15 +46,19 @@ async function listInventoryItems(req, res, next) {
             where.branchId = branchFilter.branchId;
         }
 
-        if (branchId) {
+        if (branchId && branchId !== 'all') {
             const requestedBranchId = Number(branchId);
-            const allowedBranchIds = branchFilter?.branchId?.in;
+            if (!isNaN(requestedBranchId)) {
+                const allowedBranchIds = branchFilter?.branchId?.in;
 
-            if (Array.isArray(allowedBranchIds) && !allowedBranchIds.includes(requestedBranchId)) {
-                return res.status(403).json({ error: 'Access denied for selected branch' });
+                if (Array.isArray(allowedBranchIds) && !allowedBranchIds.includes(requestedBranchId)) {
+                    return res.status(403).json({ error: 'Access denied for selected branch' });
+                }
+
+                const { getAllSubBranchIds } = require('../utils/branchHelper');
+                const allSubBranchIds = await getAllSubBranchIds(req.prisma, requestedBranchId);
+                where.branchId = { in: allSubBranchIds };
             }
-
-            where.branchId = requestedBranchId;
         }
 
         let searchOrConditions = null;
@@ -118,9 +122,10 @@ async function listInventoryItems(req, res, next) {
         const branchIds = [...new Set(items.map(item => item.branchId).filter(Boolean))];
         const userIds = [...new Set(items.map(item => item.userId).filter(Boolean))];
         const customerIds = [...new Set(items.map(item => item.customerId).filter(Boolean))];
+        const vendorIds = [...new Set(items.map(item => item.vendorId).filter(Boolean))];
         const itemIds = items.map(item => item.id);
 
-        const [branches, users, customers, logs] = await Promise.all([
+        const [branches, users, customers, vendors, logs] = await Promise.all([
             branchIds.length
                 ? req.prisma.Branch.findMany({ where: { id: { in: branchIds } }, select: { id: true, name: true } })
                 : [],
@@ -137,6 +142,9 @@ async function listInventoryItems(req, res, next) {
                     }
                 })
                 : [],
+            vendorIds.length
+                ? req.prisma.vendor.findMany({ where: { id: { in: vendorIds } }, select: { id: true, name: true } })
+                : [],
             includeLogsFlag && itemIds.length
                 ? req.prisma.InventoryLog.findMany({
                     where: { inventoryItemId: { in: itemIds } },
@@ -148,6 +156,7 @@ async function listInventoryItems(req, res, next) {
         const branchById = new Map(branches.map(branch => [branch.id, branch]));
         const userById = new Map(users.map(user => [user.id, user]));
         const customerById = new Map(customers.map(customer => [customer.id, customer]));
+        const vendorById = new Map(vendors.map(vendor => [vendor.id, vendor]));
         const logsByItemId = new Map();
 
         logs.forEach(log => {
@@ -160,6 +169,7 @@ async function listInventoryItems(req, res, next) {
             branch: item.branchId ? branchById.get(item.branchId) || null : null,
             user: item.userId ? userById.get(item.userId) || null : null,
             customer: item.customerId ? customerById.get(item.customerId) || null : null,
+            vendor: item.vendorId ? vendorById.get(item.vendorId) || null : null,
             ...(includeLogsFlag && { logs: logsByItemId.get(item.id) || [] })
         }));
 
@@ -179,7 +189,7 @@ async function listInventoryItems(req, res, next) {
  */
 async function addInventoryItem(req, res, next) {
     try {
-        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty } = req.body;
+        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, vendorId } = req.body;
         const normalizedType = normalizeInventoryType(type) || 'ONT';
         const ispId = req.ispId;
 
@@ -211,6 +221,7 @@ async function addInventoryItem(req, res, next) {
                     macAddress: formatEponMacAddress(macAddress),
                     ispId,
                     branchId: targetBranchId,
+                    vendorId: vendorId && vendorId !== 'none' ? Number(vendorId) : null,
                     status: initialStatus,
                     qty: itemQty,
                     availableQty: itemQty,
@@ -247,7 +258,7 @@ async function addInventoryItem(req, res, next) {
 async function updateInventoryItem(req, res, next) {
     try {
         const { itemId } = req.params;
-        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, condition } = req.body;
+        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, condition, vendorId } = req.body;
         const item = await req.prisma.InventoryItem.findUnique({
             where: { id: Number(itemId) }
         });
@@ -264,6 +275,7 @@ async function updateInventoryItem(req, res, next) {
             ...(ponSerialNumber !== undefined && { ponSerialNumber: ponSerialNumber || null }),
             ...(macAddress !== undefined && { macAddress: macAddress ? formatEponMacAddress(macAddress) : null }),
             ...(condition !== undefined && { condition: condition || null }),
+            ...(vendorId !== undefined && { vendorId: vendorId === null || vendorId === '' || vendorId === 'none' ? null : Number(vendorId) }),
             updatedAt: new Date()
         };
 

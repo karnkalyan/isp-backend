@@ -41,8 +41,12 @@ const aliases = {
   ServiceBoard: 'serviceBoard',
   ServiceBoardPort: 'serviceBoardPort',
   ServiceCredential: 'serviceCredential',
+  Splitter: 'splitter',
+  splitter: 'splitter',
   TR069Device: 'tr069Device',
-  Ticket: 'ticket'
+  Ticket: 'ticket',
+  Vendor: 'vendor',
+  vendor: 'vendor'
 };
 
 for (const [alias, delegate] of Object.entries(aliases)) {

@@ -1541,6 +1541,8 @@ model InventoryItem {
   assignedRoleId  Int?
   qty             Int                  @default(1)
   availableQty    Int                  @default(1)
+  vendorId        Int?
+  vendor          Vendor?              @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@index([branchId], map: "InventoryItem_branchId_idx")
   @@index([customerId], map: "InventoryItem_customerId_idx")
@@ -2071,6 +2073,8 @@ model Drum {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   assignments     DrumAssignment[]
+  vendorId        Int?
+  vendor          Vendor?          @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@map("drums")
 }
@@ -2251,4 +2255,23 @@ model AsteriskSystemStatus {
 
   @@index([status])
   @@map("asterisk_system_status")
+}
+
+model Vendor {
+  id            Int             @id @default(autoincrement())
+  name          String
+  contactPerson String?
+  email         String?
+  phoneNumber   String?
+  address       String?
+  companyName   String?
+  panVatNumber  String?
+  ispId         Int
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  inventoryItems InventoryItem[]
+  drums          Drum[]
+
+  @@map("vendors")
 }

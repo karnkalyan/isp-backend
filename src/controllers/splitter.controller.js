@@ -2,6 +2,10 @@
 const splitterModel = require('../model/splitter.model');
 const { getBranchFilter } = require('../utils/branchHelper');
 
+function getSplitterDelegate(prisma) {
+  return prisma.splitter || prisma.Splitter;
+}
+
 /**
  * List splitters with pagination and search
  */
@@ -47,19 +51,24 @@ async function listSplitters(req, res, next) {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    const splitterDelegate = getSplitterDelegate(req.prisma);
+    if (!splitterDelegate) {
+      return res.status(500).json({ error: "Splitter model is not available in Prisma client" });
+    }
+
     const [splitters, total] = await Promise.all([
-      req.prisma.splitter.findMany({
+      splitterDelegate.findMany({
         where,
         orderBy: { [sortBy]: sortOrder },
         skip,
         take: parseInt(limit)
       }),
-      req.prisma.splitter.count({ where })
+      splitterDelegate.count({ where })
     ]);
 
     const oltIds = [...new Set(splitters.map(splitter => splitter.oltId).filter(Boolean))];
     const olts = oltIds.length
-      ? await req.prisma.olt.findMany({
+      ? await req.prisma.oLT.findMany({
           where: { id: { in: oltIds } },
           select: { id: true, name: true, ipAddress: true }
         })
@@ -71,7 +80,7 @@ async function listSplitters(req, res, next) {
       _count: true
     });
     const customerCountBySplitter = new Map(customerCounts.map(row => [row.splitterId, row._count]));
-    const slaveCounts = await req.prisma.splitter.groupBy({
+    const slaveCounts = await splitterDelegate.groupBy({
       by: ['masterSplitterId'],
       where: { masterSplitterId: { in: splitters.map(splitter => splitter.splitterId) }, isDeleted: false },
       _count: true

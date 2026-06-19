@@ -785,47 +785,55 @@ async function createCustomer(req, res, next) {
         }
       }
 
-      // 6. Free test subscription based on trialDurationDays from settings (default 3).
-      const trialSetting = await tx.iSPSettings.findFirst({
-        where: { key: 'trialDurationDays', ispId: req.ispId }
-      });
-      const trialDays = trialSetting ? parseInt(trialSetting.value, 10) : 3;
+      // 6. Optional free test subscription based on master settings.
+      const [pushTrialSetting, autoTrialSetting, trialSetting] = await Promise.all([
+        tx.iSPSettings.findFirst({ where: { key: 'pushTrialPackageToAccount', ispId: req.ispId } }),
+        tx.iSPSettings.findFirst({ where: { key: 'autoTrialEnabled', ispId: req.ispId } }),
+        tx.iSPSettings.findFirst({ where: { key: 'trialDurationDays', ispId: req.ispId } })
+      ]);
+      const autoTrialEnabled = pushTrialSetting
+        ? pushTrialSetting.value !== 'false'
+        : (autoTrialSetting ? autoTrialSetting.value !== 'false' : true);
 
-      const testStart = new Date();
-      const testEnd = new Date(testStart);
-      testEnd.setDate(testEnd.getDate() + trialDays);
-      subscription = await tx.customerSubscription.create({
-        data: {
-          customer: { connect: { id: createdCustomer.id } },
-          packagePrice: { connect: { id: subscribedPackage.id } },
-          planStart: testStart,
-          planEnd: testEnd,
-          isTrial: true,
-          isActive: true,
-          isInvoicing: false,
-        },
-      });
+      if (autoTrialEnabled) {
+        const parsedTrialDays = trialSetting ? parseInt(trialSetting.value, 10) : 3;
+        const trialDays = Number.isFinite(parsedTrialDays) && parsedTrialDays > 0 ? parsedTrialDays : 3;
+        const testStart = new Date();
+        const testEnd = new Date(testStart);
+        testEnd.setDate(testEnd.getDate() + trialDays);
 
-      // 7. Order
-      const orderItems = [
-        { itemName: `${subscribedPackage.packageName || 'Package'} - ${trialDays} Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
-      ];
+        subscription = await tx.customerSubscription.create({
+          data: {
+            customer: { connect: { id: createdCustomer.id } },
+            packagePrice: { connect: { id: subscribedPackage.id } },
+            planStart: testStart,
+            planEnd: testEnd,
+            isTrial: true,
+            isActive: true,
+            isInvoicing: false,
+          },
+        });
 
-      order = await tx.customerOrderManagement.create({
-        data: {
-          customer: { connect: { id: createdCustomer.id } },
-          subscription: { connect: { id: subscription.id } },
-          packagePrice: { connect: { id: subscribedPackage.id } },
-          packageStart: subscription.planStart,
-          packageEnd: subscription.planEnd,
-          orderDate: new Date(),
-          totalAmount: orderItems.reduce((sum, i) => sum + (i.itemPrice || 0), 0),
-          isPaid: false,
-          isActive: true,
-          isDeleted: false,
-          items: { create: orderItems },
-        },
-      });
+        const orderItems = [
+          { itemName: `${subscribedPackage.packageName || 'Package'} - ${trialDays} Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
+        ];
+
+        order = await tx.customerOrderManagement.create({
+          data: {
+            customer: { connect: { id: createdCustomer.id } },
+            subscription: { connect: { id: subscription.id } },
+            packagePrice: { connect: { id: subscribedPackage.id } },
+            packageStart: subscription.planStart,
+            packageEnd: subscription.planEnd,
+            orderDate: new Date(),
+            totalAmount: orderItems.reduce((sum, i) => sum + (i.itemPrice || 0), 0),
+            isPaid: false,
+            isActive: true,
+            isDeleted: false,
+            items: { create: orderItems },
+          },
+        });
+      }
 
       // 8. Update lead
       await tx.lead.update({
@@ -1048,84 +1056,107 @@ async function provisionCustomer(req, res, next) {
 
     // Process each service
     if (services && Array.isArray(services)) {
+      const pushTrialSetting = await prisma.iSPSettings.findFirst({
+        where: { key: 'pushTrialProvisionToAccount', ispId: req.ispId }
+      });
+      const pushTrialEnabled = pushTrialSetting ? pushTrialSetting.value === 'true' : false;
+
       for (const svc of services) {
         const { service, data } = svc;
         try {
-          let result;
-          const client = await ServiceFactory.getClient(service, req.ispId);
+          let result = {};
+          
+          const isTrial = testSubscription?.isTrial === true;
+          
+          if (!isTrial || pushTrialEnabled) {
+            const client = await ServiceFactory.getClient(service, req.ispId);
 
-          switch (service) {
-            case SERVICE_CODES.TSHUL:
-            case SERVICE_CODES.NEPURIX: {
-              const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
-              let clientsToProvision = activeBillingClients;
-              if (clientsToProvision.length === 0) {
-                clientsToProvision = [{ code: service, client }];
-              }
+            switch (service) {
+              case SERVICE_CODES.TSHUL:
+              case SERVICE_CODES.NEPURIX: {
+                const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
+                let clientsToProvision = activeBillingClients;
+                if (clientsToProvision.length === 0) {
+                  clientsToProvision = [{ code: service, client }];
+                }
 
-              const results = [];
-              for (const billingClient of clientsToProvision) {
-                try {
-                  const resData = await billingClient.client.customer.create(data);
-                  const sId = await getServiceIdByCode(billingClient.code);
-                  await prisma.customerSubscribedService.upsert({
-                    where: { customerId_serviceId: { customerId, serviceId: sId } },
-                    update: { status: 'active', serviceData: resData },
-                    create: {
-                      customerId,
-                      serviceId: sId,
-                      status: 'active',
-                      serviceData: resData,
-                    },
-                  });
-                  results.push({ service: billingClient.code, success: true, data: resData });
-                } catch (err) {
-                  console.error(`${billingClient.code} provisioning error:`, err);
-                  results.push({ service: billingClient.code, success: false, message: err.message });
+                const results = [];
+                for (const billingClient of clientsToProvision) {
+                  try {
+                    const resData = await billingClient.client.customer.create(data);
+                    const sId = await getServiceIdByCode(billingClient.code);
+                    await prisma.customerSubscribedService.upsert({
+                      where: { customerId_serviceId: { customerId, serviceId: sId } },
+                      update: { status: 'active', serviceData: resData },
+                      create: {
+                        customerId,
+                        serviceId: sId,
+                        status: 'active',
+                        serviceData: resData,
+                      },
+                    });
+                    results.push({ service: billingClient.code, success: true, data: resData });
+                  } catch (err) {
+                    console.error(`${billingClient.code} provisioning error:`, err);
+                    results.push({ service: billingClient.code, success: false, message: err.message });
+                  }
                 }
-              }
 
-              const mainResult = results.find(r => r.service === service) || results[0];
-              if (mainResult) {
-                if (mainResult.success) {
-                  result = mainResult.data;
-                } else {
-                  throw new Error(mainResult.message);
+                const mainResult = results.find(r => r.service === service) || results[0];
+                if (mainResult) {
+                  if (mainResult.success) {
+                    result = mainResult.data;
+                  } else {
+                    throw new Error(mainResult.message);
+                  }
                 }
-              }
-              for (const r of results) {
-                if (r.service !== service) {
-                  serviceResults.push(r);
+                for (const r of results) {
+                  if (r.service !== service) {
+                    serviceResults.push(r);
+                  }
                 }
+                break;
               }
-              break;
+              case SERVICE_CODES.RADIUS:
+                result = await client.createUser(
+                  data.username,
+                  data.password,
+                  data.attributes || {},
+                  data.groups || []
+                );
+                break;
+              case SERVICE_CODES.NETTV:
+                result = await client.createSubscriber(data);
+                break;
+              default:
+                throw new Error(`Unsupported service: ${service}`);
             }
-            case SERVICE_CODES.RADIUS:
-              result = await client.createUser(
-                data.username,
-                data.password,
-                data.attributes || {},
-                data.groups || []
-              );
-              break;
-            case SERVICE_CODES.NETTV:
-              result = await client.createSubscriber(data);
-              break;
-            default:
-              throw new Error(`Unsupported service: ${service}`);
-          }
 
-          // Store successful result in database (only if not already stored by the custom block)
-          if (service !== SERVICE_CODES.TSHUL && service !== SERVICE_CODES.NEPURIX) {
+            // Store successful result in database (only if not already stored by the custom block)
+            if (service !== SERVICE_CODES.TSHUL && service !== SERVICE_CODES.NEPURIX) {
+              const serviceId = await getServiceIdByCode(service);
+              await prisma.customerSubscribedService.upsert({
+                where: { customerId_serviceId: { customerId, serviceId } },
+                update: { status: 'active', serviceData: result },
+                create: {
+                  customerId,
+                  serviceId,
+                  status: 'active',
+                  serviceData: result,
+                },
+              });
+            }
+          } else {
+            console.log(`Bypassing external push for service ${service} since pushTrialProvisionToAccount is disabled.`);
             const serviceId = await getServiceIdByCode(service);
             await prisma.customerSubscribedService.upsert({
               where: { customerId_serviceId: { customerId, serviceId } },
-              update: { status: 'active', serviceData: result },
+              update: { status: 'active', serviceData: { bypassed: true } },
               create: {
                 customerId,
                 serviceId,
                 status: 'active',
-                serviceData: result,
+                serviceData: { bypassed: true },
               },
             });
           }
@@ -1264,6 +1295,7 @@ async function listCustomers(req, res, next) {
       sortOrder = 'desc',
       oltId,
       splitterId,
+      oltPort,
       subBranchId,
       branchId: queryBranchId,
       area
@@ -1285,9 +1317,14 @@ async function listCustomers(req, res, next) {
     }
     if (subBranchId && subBranchId !== 'all') where.subBranchId = parseInt(subBranchId);
     if (oltId && oltId !== 'all') {
-      where.serviceDetails = { some: { oltId: parseInt(oltId) } };
-    }
-    if (splitterId && splitterId !== 'all') {
+      where.serviceDetails = {
+        some: {
+          oltId: parseInt(oltId),
+          ...(oltPort && oltPort !== 'all' ? { oltPort: String(oltPort) } : {}),
+          ...(splitterId && splitterId !== 'all' ? { splitterId: parseInt(splitterId) } : {})
+        }
+      };
+    } else if (splitterId && splitterId !== 'all') {
       where.serviceDetails = { some: { splitterId: parseInt(splitterId) } };
     }
     if (area) {

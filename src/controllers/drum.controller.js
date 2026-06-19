@@ -20,6 +20,7 @@ async function getDrums(req, res, next) {
 
         const drums = await req.prisma.drum.findMany({
             where,
+            include: { vendor: { select: { id: true, name: true } } },
             orderBy: { createdAt: 'desc' }
         });
 
@@ -39,6 +40,7 @@ async function getDrumById(req, res, next) {
         const drum = await req.prisma.drum.findUnique({
             where: { id: parseInt(id) },
             include: {
+                vendor: { select: { id: true, name: true } },
                 assignments: {
                     include: {
                         branch: { select: { id: true, name: true } },
@@ -64,7 +66,7 @@ async function getDrumById(req, res, next) {
  */
 async function createDrum(req, res, next) {
     try {
-        const { serialNumber, drumType, fiberType, capacity, totalLength, manufacturer, purchaseDate } = req.body;
+        const { serialNumber, drumType, fiberType, capacity, totalLength, manufacturer, purchaseDate, vendorId } = req.body;
 
         if (!serialNumber || !drumType || !fiberType || totalLength === undefined || parseFloat(totalLength) <= 0) {
             return res.status(400).json({ error: 'SerialNumber, drumType, fiberType, and positive totalLength are required.' });
@@ -94,6 +96,7 @@ async function createDrum(req, res, next) {
                 remainingLength: len,
                 manufacturer,
                 purchaseDate: purchaseDate ? new Date(purchaseDate) : null,
+                vendorId: vendorId && vendorId !== 'none' ? Number(vendorId) : null,
                 status: 'IN_STOCK'
             }
         });
@@ -112,7 +115,7 @@ async function createDrum(req, res, next) {
 async function updateDrum(req, res, next) {
     try {
         const { id } = req.params;
-        const { drumType, fiberType, capacity, totalLength, manufacturer, purchaseDate, status } = req.body;
+        const { drumType, fiberType, capacity, totalLength, manufacturer, purchaseDate, status, vendorId } = req.body;
 
         const drum = await req.prisma.drum.findUnique({
             where: { id: parseInt(id) }
@@ -128,6 +131,7 @@ async function updateDrum(req, res, next) {
         if (manufacturer !== undefined) updateData.manufacturer = manufacturer;
         if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate ? new Date(purchaseDate) : null;
         if (status !== undefined) updateData.status = status;
+        if (vendorId !== undefined) updateData.vendorId = vendorId === null || vendorId === '' || vendorId === 'none' ? null : Number(vendorId);
 
         if (totalLength !== undefined) {
             const len = parseFloat(totalLength);

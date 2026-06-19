@@ -3746,9 +3746,14 @@ class ServiceController {
 
     if (filters.status && filters.status !== 'all') where.status = filters.status;
     if (filters.oltId && filters.oltId !== 'all') {
-      where.serviceDetails = { some: { oltId: Number(filters.oltId) } };
-    }
-    if (filters.splitterId && filters.splitterId !== 'all') {
+      where.serviceDetails = {
+        some: {
+          oltId: Number(filters.oltId),
+          ...(filters.oltPort && filters.oltPort !== 'all' ? { oltPort: String(filters.oltPort) } : {}),
+          ...(filters.splitterId && filters.splitterId !== 'all' ? { splitterId: Number(filters.splitterId) } : {})
+        }
+      };
+    } else if (filters.splitterId && filters.splitterId !== 'all') {
       where.serviceDetails = { some: { splitterId: Number(filters.splitterId) } };
     }
     if (Array.isArray(filters.branchIds) && filters.branchIds.length > 0) {
