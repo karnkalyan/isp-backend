@@ -615,7 +615,7 @@ async function updateSplitter(req, res, next) {
       });
     }
 
-    // 4. Build update data
+    // 4. Build update data and validate role changes (master <-> slave)
     const updateData = {};
 
     if (name !== undefined) updateData.name = name;
@@ -642,59 +642,227 @@ async function updateSplitter(req, res, next) {
       updateData.portCount = portCount;
       updateData.availablePorts = portCount - usedPorts;
     }
-    if (isMaster !== undefined) updateData.isMaster = isMaster;
-    if (masterSplitterId !== undefined) updateData.masterSplitterId = masterSplitterId || null;
+
+    // Role detection and validation
+    const targetIsMaster = isMaster !== undefined ? (isMaster === true || isMaster === 'true') : existing.isMaster;
+    
+    let oldParentId = null;
+    let newParentId = null;
+
+    if (!targetIsMaster) {
+      // SLAVE SPLITTER RULES:
+      // 1. Auto-remove OLT information
+      updateData.isMaster = false;
+      updateData.oltId = null;
+      updateData.connectedServiceBoard = null;
+      updateData.serviceBoardPortId = null;
+
+      // 2. Validate and set parent master splitter
+      const targetMasterSplitterId = masterSplitterId !== undefined ? masterSplitterId : existing.masterSplitterId;
+      if (!targetMasterSplitterId) {
+        return res.status(400).json({ error: "Slave splitters must have a master splitter chosen" });
+      }
+
+      // Check if the master splitter exists and has available ports (if changing parent)
+      if (targetMasterSplitterId !== existing.masterSplitterId) {
+        const newMaster = await req.prisma.splitter.findFirst({
+          where: {
+            splitterId: targetMasterSplitterId,
+            ispId: req.ispId,
+            isDeleted: false
+          }
+        });
+        if (!newMaster) {
+          return res.status(404).json({ error: "Selected master splitter not found" });
+        }
+        if (newMaster.availablePorts <= 0) {
+          return res.status(400).json({ error: "Selected master splitter has no available ports" });
+        }
+        newParentId = targetMasterSplitterId;
+      }
+
+      updateData.masterSplitterId = targetMasterSplitterId;
+
+      // 3. Upstream Fiber update
+      const currentUpstream = upstreamFiber || existing.upstreamFiber || {};
+      updateData.upstreamFiber = {
+        ...currentUpstream,
+        connectedTo: "splitter",
+        connectionId: targetMasterSplitterId,
+        port: currentUpstream.port || ""
+      };
+
+      // If transitioning or changing parent, track old parent to release its port
+      if (existing.masterSplitterId && targetMasterSplitterId !== existing.masterSplitterId) {
+        oldParentId = existing.masterSplitterId;
+      }
+    } else {
+      // MASTER SPLITTER RULES:
+      // 1. Auto-remove master splitter connection/information
+      updateData.isMaster = true;
+      updateData.masterSplitterId = null;
+
+      // 2. Choose OLT connection details (must choose OLT information)
+      const targetServiceBoard = connectedServiceBoard !== undefined ? connectedServiceBoard : existing.connectedServiceBoard;
+      if (!targetServiceBoard || !targetServiceBoard.oltId || !targetServiceBoard.boardPort) {
+        return res.status(400).json({ error: "Master splitters must be connected to an OLT service port" });
+      }
+
+      // Validate OLT and service port
+      const oltIdNum = parseInt(targetServiceBoard.oltId);
+      const olt = await req.prisma.oLT.findFirst({
+        where: {
+          id: oltIdNum,
+          ispId: req.ispId,
+          isDeleted: false
+        }
+      });
+      if (!olt) {
+        return res.status(404).json({ error: "Connected OLT not found" });
+      }
+      updateData.oltId = olt.id;
+      updateData.connectedServiceBoard = targetServiceBoard;
+
+      if (targetServiceBoard.boardPort) {
+        const [frame, slot, port] = targetServiceBoard.boardPort.split('/').map(Number);
+        const serviceBoard = await req.prisma.serviceBoard.findFirst({
+          where: {
+            oltId: olt.id,
+            slot: slot,
+            status: 'active'
+          }
+        });
+        if (!serviceBoard) {
+          return res.status(404).json({
+            error: `Service board in slot ${slot} not found or not active`
+          });
+        }
+        if (port < 0 || port >= serviceBoard.portCount) {
+          return res.status(400).json({
+            error: `Invalid port number. Slot ${slot} has only ${serviceBoard.portCount} ports`
+          });
+        }
+        const existingSplitter = await req.prisma.splitter.findFirst({
+          where: {
+            isDeleted: false,
+            oltId: olt.id,
+            connectedServiceBoard: {
+              path: 'boardPort',
+              equals: targetServiceBoard.boardPort
+            },
+            id: { not: id }
+          }
+        });
+        if (existingSplitter) {
+          return res.status(409).json({
+            error: `Port ${targetServiceBoard.boardPort} is already in use by splitter ${existingSplitter.name}`
+          });
+        }
+      }
+
+      // 3. Upstream Fiber update
+      const currentUpstream = upstreamFiber || existing.upstreamFiber || {};
+      updateData.upstreamFiber = {
+        ...currentUpstream,
+        connectedTo: "service-board",
+        connectionId: String(olt.id),
+        port: targetServiceBoard.boardPort
+      };
+
+      // If transitioning from slave, track old parent to release its port
+      if (existing.masterSplitterId) {
+        oldParentId = existing.masterSplitterId;
+      }
+    }
+
     if (location !== undefined) updateData.location = location;
-    if (upstreamFiber !== undefined) updateData.upstreamFiber = upstreamFiber;
-    if (connectedServiceBoard !== undefined) updateData.connectedServiceBoard = connectedServiceBoard;
     if (status !== undefined) updateData.status = status;
     if (notes !== undefined) updateData.notes = notes;
     if (serviceBoardPortId !== undefined) {
-      // Validate that the service board port exists and is available
-      const port = await req.prisma.serviceBoardPort.findFirst({
-        where: {
-          id: serviceBoardPortId,
-          status: 'available',
-          board: {
-            olt: {
-              ispId: req.ispId
+      if (!targetIsMaster) {
+        // Slave splitter cannot have serviceBoardPortId
+        updateData.serviceBoardPortId = null;
+      } else {
+        // Validate that the service board port exists and is available
+        const port = await req.prisma.serviceBoardPort.findFirst({
+          where: {
+            id: serviceBoardPortId,
+            status: 'available',
+            board: {
+              olt: {
+                ispId: req.ispId
+              }
             }
           }
+        });
+        if (!port) {
+          return res.status(400).json({ error: "Selected service board port is not available" });
         }
-      });
-      if (!port) {
-        return res.status(400).json({ error: "Selected service board port is not available" });
+        updateData.serviceBoardPortId = serviceBoardPortId;
       }
-      updateData.serviceBoardPortId = serviceBoardPortId;
     }
 
-    // 5. Perform the update
-    const updated = await req.prisma.splitter.update({
-      where: { id },
-      data: updateData,
-      include: {
-        customers: {
-          select: {
-            id: true,
-            customerUniqueId: true,
-            serviceDetails: {
-              where: { status: 'active' },
-              select: { splitterPort: true }
+    // 5. Perform the update in a transaction to safely handle parent port counts
+    const updated = await req.prisma.$transaction(async (tx) => {
+      // If old parent needs its ports updated
+      if (oldParentId) {
+        const oldParent = await tx.splitter.findFirst({
+          where: { splitterId: oldParentId, ispId: req.ispId, isDeleted: false }
+        });
+        if (oldParent) {
+          await tx.splitter.update({
+            where: { id: oldParent.id },
+            data: {
+              usedPorts: { decrement: 1 },
+              availablePorts: { increment: 1 }
             }
-          }
-        },
-        serviceBoardPort: {
-          include: {
-            board: {
-              include: {
-                olt: {
-                  select: { id: true, name: true }
+          });
+        }
+      }
+
+      // If new parent needs its ports updated
+      if (newParentId) {
+        const newParent = await tx.splitter.findFirst({
+          where: { splitterId: newParentId, ispId: req.ispId, isDeleted: false }
+        });
+        if (newParent) {
+          await tx.splitter.update({
+            where: { id: newParent.id },
+            data: {
+              usedPorts: { increment: 1 },
+              availablePorts: { decrement: 1 }
+            }
+          });
+        }
+      }
+
+      return await tx.splitter.update({
+        where: { id },
+        data: updateData,
+        include: {
+          customers: {
+            select: {
+              id: true,
+              customerUniqueId: true,
+              serviceDetails: {
+                where: { status: 'active' },
+                select: { splitterPort: true }
+              }
+            }
+          },
+          serviceBoardPort: {
+            include: {
+              board: {
+                include: {
+                  olt: {
+                    select: { id: true, name: true }
+                  }
                 }
               }
             }
           }
         }
-      }
+      });
     });
 
     // 6. Format response
