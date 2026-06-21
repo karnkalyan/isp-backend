@@ -298,10 +298,18 @@ async function getCustomerOwnedDeviceSerials(prisma, customer) {
     if (device.ponSerial) serials.add(device.ponSerial);
   });
 
+  const orConditions = [];
   if (customer?.leadId) {
+    orConditions.push({ leadId: customer.leadId });
+  }
+  if (serials.size > 0) {
+    orConditions.push({ serialNumber: { in: Array.from(serials) } });
+  }
+
+  if (orConditions.length > 0) {
     const tr069Devices = await prisma.tr069Device.findMany({
       where: {
-        leadId: customer.leadId,
+        OR: orConditions,
         ispId: customer.ispId,
         isDeleted: false,
       },
@@ -313,12 +321,24 @@ async function getCustomerOwnedDeviceSerials(prisma, customer) {
         ipAddress: true,
         status: true,
         lastContact: true,
+        leadId: true,
       },
     });
 
     tr069Devices.forEach((device) => {
       if (device.serialNumber) serials.add(device.serialNumber);
     });
+
+    // Proactively link leadId if missing on the device
+    if (customer.leadId) {
+      const unlinkedDevices = tr069Devices.filter((d) => d.leadId !== customer.leadId);
+      if (unlinkedDevices.length > 0) {
+        prisma.tr069Device.updateMany({
+          where: { serialNumber: { in: unlinkedDevices.map(d => d.serialNumber) } },
+          data: { leadId: customer.leadId }
+        }).catch(err => console.error("Error linking leadId on tr069Device:", err));
+      }
+    }
 
     return { serials: Array.from(serials), tr069Devices };
   }
