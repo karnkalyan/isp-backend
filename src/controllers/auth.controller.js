@@ -55,10 +55,11 @@ async function issueTokensAndSetCookies(req, res, user, rememberMe = true) {
   });
 
   // Set refresh token
-  res.cookie('refresh_token', refreshToken, {
-    ...commonOptions,
-    maxAge: rememberMe ? 1000 * 60 * 60 * 24 * 30 : undefined
-  });
+  const refreshTokenOptions = { ...commonOptions };
+  if (rememberMe) {
+    refreshTokenOptions.maxAge = 1000 * 60 * 60 * 24 * 30; // 30 days
+  }
+  res.cookie('refresh_token', refreshToken, refreshTokenOptions);
 
   const { passwordHash, ...safeUser } = user;
   res.json({
