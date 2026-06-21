@@ -23,7 +23,8 @@ const {
   updateCustomerDevice,
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
-  changePortalPassword
+  changePortalPassword,
+  changeConnectionUserPassword
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -97,6 +98,7 @@ module.exports = (prisma) => {
   // Action endpoints
   router.put('/:id/username', checkPermission('customer_update'), changeUsername);
   router.put('/:id/portal-password', checkPermission('customer_update'), changePortalPassword);
+  router.put('/:id/connection-users/:connectionUserId/password', checkPermission('customer_update'), changeConnectionUserPassword);
   router.put('/:id/package', checkPermission('customer_update'), changePackage);
   router.put('/:id/mac', checkPermission('customer_update'), resetMac);
 

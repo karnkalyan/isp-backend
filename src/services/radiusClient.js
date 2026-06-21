@@ -564,6 +564,10 @@ class RadiusClient {
     return this.#apiRequest('get', `/api/radacct?limit=${limit}`);
   }
 
+  async getNasreload(limit = 500) {
+    return this.#apiRequest('get', `/api/nasreload?limit=${limit}`);
+  }
+
   async getTable(table, limit = 500, offset = 0) {
     const allowedTables = {
       radcheck: () => this.getRadcheck(),
@@ -573,7 +577,8 @@ class RadiusClient {
       radgroupcheck: () => this.getRadgroupcheck(),
       radacct: () => this.getRadacctlimit(limit),
       radpostauth: () => this.getRadpostauthlimit(limit),
-      nas: () => this.getNas()
+      nas: () => this.getNas(),
+      nasreload: () => this.getNasreload(limit)
     };
 
     const loader = allowedTables[String(table || '').toLowerCase()];
@@ -776,19 +781,25 @@ class RadiusClient {
         radcheck,
         radreply,
         radusergroup,
-        radacct
+        radacct,
+        radpostauth
       ] = await Promise.all([
         this.getRadcheckByUsername(username),
         this.getRadreply().then(data =>
           Array.isArray(data) ? data.filter(entry => entry.username === username) : []
         ),
         this.getRadusergroupByUsername(username),
-        this.getRadacctByUsername(username, 50)
+        this.getRadacctByUsername(username, 50),
+        this.getRadpostauthByUsername(username, 50).catch(() => [])
       ]);
       const groupNames = [...new Set(radusergroup.map((entry) => entry.groupname).filter(Boolean))];
       const allGroupReplies = groupNames.length ? await this.getRadgroupreply() : [];
+      const allGroupChecks = groupNames.length ? await this.getRadgroupcheck() : [];
       const radgroupreply = Array.isArray(allGroupReplies)
         ? allGroupReplies.filter((entry) => groupNames.includes(entry.groupname))
+        : [];
+      const radgroupcheck = Array.isArray(allGroupChecks)
+        ? allGroupChecks.filter((entry) => groupNames.includes(entry.groupname))
         : [];
 
       return {
@@ -797,7 +808,9 @@ class RadiusClient {
         radreply,
         radusergroup,
         radgroupreply,
+        radgroupcheck,
         radacct,
+        radpostauth,
         hasActiveSession: radacct.some(entry =>
           !entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00'
         )

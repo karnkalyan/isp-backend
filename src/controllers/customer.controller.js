@@ -312,17 +312,79 @@ async function generateUniquePAN(prisma, panNo = null) {
 /**
  * Generate customer unique ID – uses lead names
  */
-function generateCustomerUniqueId(customerId, firstName = '', lastName = '', membershipCode = 'GEN') {
-  const paddedId = customerId.toString().padStart(5, '0');
-  let namePart = (firstName || '').substring(0, 5).toUpperCase();
-  if (namePart.length < 5 && lastName) {
-    const needed = 5 - namePart.length;
-    namePart += lastName.substring(0, needed).toUpperCase();
+async function generateCustomerUniqueId(tx, customerId, firstName = '', lastName = '', membershipCode = 'GEN', branchId = null, subBranchId = null, ispId = null) {
+  let settingsObj = {};
+  if (ispId) {
+    try {
+      const settings = await tx.ISPSettings.findMany({
+        where: { ispId }
+      });
+      settingsObj = settings.reduce((acc, s) => {
+        acc[s.key] = s.value;
+        return acc;
+      }, {});
+    } catch (e) {
+      console.warn("Failed to load ISP settings for customer ID generation:", e);
+    }
   }
-  if (namePart.length < 5) {
-    namePart = namePart.padEnd(5, 'X');
+
+  // Fetch branch and subBranch codes if needed
+  let branchCode = '';
+  if (branchId && settingsObj.customerIdIncludeBranch === 'true') {
+    try {
+      const br = await tx.branch.findUnique({ where: { id: Number(branchId) } });
+      if (br) branchCode = br.code || br.name.substring(0, 3).toUpperCase();
+    } catch (e) {
+      console.warn("Failed to fetch branch code:", e);
+    }
   }
-  return `CUS-${membershipCode}-${paddedId}${namePart}`;
+
+  let subBranchCode = '';
+  if (subBranchId && settingsObj.customerIdIncludeSubBranch === 'true') {
+    try {
+      const sb = await tx.branch.findUnique({ where: { id: Number(subBranchId) } });
+      if (sb) subBranchCode = sb.code || sb.name.substring(0, 3).toUpperCase();
+    } catch (e) {
+      console.warn("Failed to fetch sub-branch code:", e);
+    }
+  }
+
+  // Prefix
+  const prefix = settingsObj.hasOwnProperty('customerIdPrefix') ? settingsObj.customerIdPrefix : 'CUS';
+  
+  // Membership
+  const includeMembership = settingsObj.customerIdIncludeMembership !== 'false';
+  const memPart = includeMembership ? membershipCode : '';
+
+  // Padding length for ID
+  const paddingLen = parseInt(settingsObj.customerIdPaddingLength || '5', 10);
+  const paddedId = customerId.toString().padStart(paddingLen, '0');
+
+  // Name part
+  let namePart = '';
+  if (settingsObj.customerIdIncludeNamePart !== 'false') {
+    const nameLen = parseInt(settingsObj.customerIdNamePartLength || '5', 10);
+    let nameStr = (firstName || '').substring(0, nameLen).toUpperCase();
+    if (nameStr.length < nameLen && lastName) {
+      const needed = nameLen - nameStr.length;
+      nameStr += lastName.substring(0, needed).toUpperCase();
+    }
+    if (nameStr.length < nameLen) {
+      nameStr = nameStr.padEnd(nameLen, 'X');
+    }
+    namePart = nameStr;
+  }
+
+  // Combine components
+  const parts = [];
+  if (prefix) parts.push(prefix);
+  if (memPart) parts.push(memPart);
+  if (branchCode) parts.push(branchCode);
+  if (subBranchCode) parts.push(subBranchCode);
+  parts.push(paddedId);
+  if (namePart) parts.push(namePart);
+
+  return parts.join('-');
 }
 
 /**
@@ -627,7 +689,7 @@ async function createCustomer(req, res, next) {
       });
 
       // 2. Generate unique customer ID
-      const customerUniqueId = generateCustomerUniqueId(createdCustomer.id, lead.firstName, lead.lastName, membershipCode);
+      const customerUniqueId = await generateCustomerUniqueId(tx, createdCustomer.id, lead.firstName, lead.lastName, membershipCode, branchId, subBranchId, req.ispId);
       createdCustomer = await tx.customer.update({
         where: { id: createdCustomer.id },
         data: { customerUniqueId },
@@ -957,6 +1019,87 @@ function toCustomerLoginEmail(username) {
   const normalized = normalizeCustomerLoginUsername(username);
   if (!normalized) return null;
   return isValidEmail(normalized) ? normalized : `${normalized}@customer.local`;
+}
+
+function getCustomerPortalLoginEmail(customer) {
+  const leadEmail = normalizeCustomerLoginUsername(customer?.lead?.email);
+  if (leadEmail && isValidEmail(leadEmail)) return leadEmail;
+  const loginUsername = normalizeCustomerLoginUsername(customer?.customerUniqueId || `customer-${customer?.id}`);
+  return toCustomerLoginEmail(loginUsername);
+}
+
+async function getCustomerRole(prisma) {
+  return prisma.role.upsert({
+    where: { name: 'Customer' },
+    update: { isActive: true },
+    create: { name: 'Customer', isActive: true },
+  });
+}
+
+async function findPortalUserForCustomer(prisma, customer) {
+  const customerRole = await getCustomerRole(prisma);
+  const candidateEmails = [
+    getCustomerPortalLoginEmail(customer),
+    toCustomerLoginEmail(customer?.customerUniqueId),
+    customer?.lead?.email && normalizeCustomerLoginUsername(customer.lead.email)
+  ].filter(Boolean);
+
+  const exact = await prisma.user.findFirst({
+    where: {
+      ispId: customer.ispId,
+      isDeleted: false,
+      roleId: customerRole.id,
+      email: { in: [...new Set(candidateEmails)] }
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+  if (exact) return exact;
+
+  const fullName = `${customer?.lead?.firstName || ''} ${customer?.lead?.lastName || ''}`.trim();
+  if (!fullName) return null;
+
+  return prisma.user.findFirst({
+    where: {
+      ispId: customer.ispId,
+      isDeleted: false,
+      roleId: customerRole.id,
+      name: fullName
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+}
+
+async function upsertRadiusPassword(ispId, username, password) {
+  const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+  const entries = await client.getRadcheckByUsername(username);
+  const passwordEntry = Array.isArray(entries)
+    ? entries.find((entry) => ['Cleartext-Password', 'User-Password', 'Password'].includes(entry.attribute))
+    : null;
+
+  if (passwordEntry) {
+    return client.updateRadcheck(passwordEntry.id, { value: password, op: passwordEntry.op || ':=' });
+  }
+
+  return client.createRadcheck({
+    username,
+    attribute: 'Cleartext-Password',
+    op: ':=',
+    value: password
+  });
 }
 
 async function getCustomerProfile(req, res, next) {
@@ -1475,19 +1618,7 @@ async function getCustomerById(req, res, next) {
       orderBy: { updatedAt: 'desc' }
     });
 
-    const loginUsername = normalizeCustomerLoginUsername(customer.customerUniqueId);
-    const loginEmail = toCustomerLoginEmail(loginUsername);
-    const portalUser = await req.prisma.user.findFirst({
-      where: { email: loginEmail, isDeleted: false },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true
-      }
-    });
+    const portalUser = await findPortalUserForCustomer(req.prisma, customer);
 
     // Flatten lead fields
     const response = {
@@ -2149,31 +2280,112 @@ async function changePortalPassword(req, res, next) {
     }
 
     const customer = await req.prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: { lead: true }
+    });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const portalUser = await findPortalUserForCustomer(req.prisma, customer);
+    const customerRole = await getCustomerRole(req.prisma);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const name = `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || customer.customerUniqueId || `Customer ${customer.id}`;
+
+    let updatedUser;
+    if (portalUser) {
+      updatedUser = await req.prisma.user.update({
+        where: { id: portalUser.id },
+        data: { passwordHash, status: 'active', roleId: customerRole.id }
+      });
+    } else {
+      const email = getCustomerPortalLoginEmail(customer);
+      if (!email) return res.status(400).json({ error: "Unable to build portal login email" });
+      const existing = await req.prisma.user.findUnique({ where: { email } });
+      if (existing && existing.isDeleted === false) {
+        return res.status(409).json({ error: "Portal login email is already used by another user" });
+      }
+      updatedUser = await req.prisma.user.create({
+        data: {
+          email,
+          passwordHash,
+          name,
+          roleId: customerRole.id,
+          status: 'active',
+          ispId: req.ispId ? Number(req.ispId) : null,
+          branchId: customer.branchId || null
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: portalUser ? "Portal password updated successfully" : "Portal account created successfully",
+      data: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        status: updatedUser.status,
+        createdAt: updatedUser.createdAt,
+        updatedAt: updatedUser.updatedAt
+      }
+    });
+  } catch (err) {
+    console.error("changePortalPassword error:", err);
+    return next(err);
+  }
+}
+
+async function changeConnectionUserPassword(req, res, next) {
+  try {
+    const customerId = Number(req.params.id);
+    const connectionUserId = Number(req.params.connectionUserId);
+    if (isNaN(customerId) || isNaN(connectionUserId)) {
+      return res.status(400).json({ error: "Invalid customer or connection user ID" });
+    }
+
+    const { newPassword } = req.body;
+    if (!newPassword || String(newPassword).trim().length < 4) {
+      return res.status(400).json({ error: "Password must be at least 4 characters long" });
+    }
+
+    const customer = await req.prisma.customer.findFirst({
       where: { id: customerId, isDeleted: false, ispId: req.ispId }
     });
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
-    const loginUsername = normalizeCustomerLoginUsername(customer.customerUniqueId);
-    const loginEmail = toCustomerLoginEmail(loginUsername);
-
-    const portalUser = await req.prisma.user.findFirst({
-      where: { email: loginEmail, isDeleted: false }
+    const connectionUser = await req.prisma.connectionUser.findFirst({
+      where: { id: connectionUserId, customerId, isDeleted: false, ispId: req.ispId }
     });
-    if (!portalUser) return res.status(404).json({ error: "Portal user not found" });
+    if (!connectionUser) return res.status(404).json({ error: "Connection user not found" });
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-
-    await req.prisma.user.update({
-      where: { id: portalUser.id },
-      data: { passwordHash }
+    const password = String(newPassword).trim();
+    const updated = await req.prisma.connectionUser.update({
+      where: { id: connectionUser.id },
+      data: { password }
     });
+
+    let radiusUpdated = false;
+    let radiusMessage = null;
+    try {
+      await upsertRadiusPassword(req.ispId, connectionUser.username, password);
+      radiusUpdated = true;
+    } catch (radiusErr) {
+      radiusMessage = radiusErr.message || "Radius password update failed";
+    }
 
     return res.json({
       success: true,
-      message: "Portal password updated successfully"
+      message: radiusUpdated
+        ? "Connection and Radius password updated successfully"
+        : "Connection password updated locally. Radius update failed.",
+      data: {
+        id: updated.id,
+        username: updated.username,
+        radiusUpdated,
+        radiusMessage
+      }
     });
   } catch (err) {
-    console.error("changePortalPassword error:", err);
+    console.error("changeConnectionUserPassword error:", err);
     return next(err);
   }
 }
@@ -2587,17 +2799,27 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
       return res.status(404).json({ error: 'Customer not found' });
     }
 
-    if (customer.connectionUsers.length === 0) {
-      return res.json({ success: true, data: [] });
-    }
-
     let client;
     try {
       client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
     } catch (err) {
       return res.json({
         success: true,
-        data: [],
+        data: customer.connectionUsers.length > 0
+          ? customer.connectionUsers.map((user) => ({
+              id: `missing-${user.id}`,
+              date: null,
+              username: user.username,
+              password: 'N/A',
+              mac: 'N/A',
+              calledId: 'N/A',
+              framedIp: 'N/A',
+              nasIp: 'N/A',
+              nasPort: 'N/A',
+              reply: 'N/A',
+              reason: 'Radius service is not configured or enabled'
+            }))
+          : [],
         message: 'Radius service is not configured or enabled.'
       });
     }
@@ -2646,9 +2868,46 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
       });
 
       allLogs.push(...enriched);
+
+      if (enriched.length === 0 && Array.isArray(radAcct) && radAcct.length > 0) {
+        allLogs.push(...radAcct.map((session) => ({
+          id: session.radacctid || session.id || `acct-${username}-${session.acctsessionid || Math.random()}`,
+          date: session.acctstarttime || session.acctupdatetime || session.acctstoptime || null,
+          username,
+          password: 'N/A',
+          mac: findMacAddress(session.callingstationid),
+          calledId: session.calledstationid || 'N/A',
+          framedIp: session.framedipaddress || 'N/A',
+          nasIp: session.nasipaddress || 'N/A',
+          nasPort: session.nasportid || 'N/A',
+          reply: 'Accounting',
+          reason: session.acctterminatecause || (session.acctstoptime ? 'Session stopped' : 'Session active')
+        })));
+      }
+
+      if (enriched.length === 0 && (!Array.isArray(radAcct) || radAcct.length === 0)) {
+        allLogs.push({
+          id: `missing-${user.id}`,
+          date: null,
+          username,
+          password: 'N/A',
+          mac: 'N/A',
+          calledId: 'N/A',
+          framedIp: 'N/A',
+          nasIp: 'N/A',
+          nasPort: 'N/A',
+          reply: 'N/A',
+          reason: 'No Radius post-auth or accounting records found'
+        });
+      }
     }
 
-    allLogs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    allLogs.sort((a, b) => {
+      const aTime = a.date ? new Date(a.date).getTime() : 0;
+      const bTime = b.date ? new Date(b.date).getTime() : 0;
+      return bTime - aTime;
+    });
 
     return res.json({
       success: true,
@@ -2687,5 +2946,6 @@ module.exports = {
   updateCustomerDevice,
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
-  changePortalPassword
+  changePortalPassword,
+  changeConnectionUserPassword
 };
