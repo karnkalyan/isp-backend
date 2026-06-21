@@ -524,22 +524,24 @@ class YeastarController {
     try {
       const ispId = req.ispId;
       const userId = req.user.id;
+      const assignedExtension = String(req.user?.yeastarExt || req.user?.extId || req.extId || '').trim();
+
       const {
-        extension,
-        number,
-        caller = extension,
-        callee = number,
         dialpermission,
         autoanswer = 'no'
       } = req.body;
-      const callerNumber = String(caller || '').trim();
-      const calleeNumber = String(callee || '').trim();
-      const assignedExtension = String(req.user?.yeastarExt || req.user?.extId || req.extId || '').trim();
+
+      const extensionVal = String(req.body.extension || '').trim() || assignedExtension;
+      const callerVal = String(req.body.caller || '').trim() || extensionVal;
+      const calleeVal = String(req.body.callee || req.body.number || '').trim();
+
+      const callerNumber = callerVal;
+      const calleeNumber = calleeVal;
 
       if (!assignedExtension) {
         return res.status(403).json({
           success: false,
-          error: 'No Yeastar extension is assigned to your user account.',
+          error: 'User does not have permission or registered extension',
           message: 'Please ask an administrator to assign a VoIP extension before making calls.'
         });
       }
