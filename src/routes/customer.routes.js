@@ -21,7 +21,8 @@ const {
   getCustomerProfile,
   assertCustomerOwnsSerial,
   updateCustomerDevice,
-  deleteCustomerDevice
+  deleteCustomerDevice,
+  getCustomerRadiusAuthLogs
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -89,6 +90,7 @@ module.exports = (prisma) => {
     getCustomerByPhoneNumber
   );
   router.get('/:id', checkPermission('customer_read'), getCustomerById);
+  router.get('/:id/radius/auth-logs', checkPermission('customer_read'), getCustomerRadiusAuthLogs);
   router.put('/:id', checkPermission('customer_update'), updateCustomer);
   router.delete('/:id', checkPermission('customer_delete'), deleteCustomer);
   // Action endpoints

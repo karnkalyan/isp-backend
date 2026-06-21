@@ -572,6 +572,7 @@ class RadiusClient {
       radgroupreply: () => this.getRadgroupreply(),
       radgroupcheck: () => this.getRadgroupcheck(),
       radacct: () => this.getRadacctlimit(limit),
+      radpostauth: () => this.getRadpostauthlimit(limit),
       nas: () => this.getNas()
     };
 
@@ -613,6 +614,30 @@ class RadiusClient {
       return [];
     } catch (error) {
       throw new Error(`Failed to get radacct for username ${username}: ${error.message}`);
+    }
+  }
+
+  // Get all radpostauth entries
+  async getRadpostauth() {
+    return this.#apiRequest('get', '/api/radpostauth');
+  }
+
+  async getRadpostauthlimit(limit) {
+    return this.#apiRequest('get', `/api/radpostauth?limit=${limit}`);
+  }
+
+  // Get radpostauth by username
+  async getRadpostauthByUsername(username, limit = 10000) {
+    try {
+      const allPostAuth = await this.getRadpostauthlimit(limit);
+      if (Array.isArray(allPostAuth)) {
+        return allPostAuth
+          .filter(entry => entry.username === username)
+          .slice(0, limit);
+      }
+      return [];
+    } catch (error) {
+      throw new Error(`Failed to get radpostauth for username ${username}: ${error.message}`);
     }
   }
 

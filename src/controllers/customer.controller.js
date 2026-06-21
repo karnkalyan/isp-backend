@@ -2473,6 +2473,93 @@ async function deleteCustomerDevice(req, res, next) {
   }
 }
 
+async function getCustomerRadiusAuthLogs(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      include: {
+        connectionUsers: {
+          where: { isDeleted: false }
+        }
+      }
+    });
+
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    if (customer.connectionUsers.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    let client;
+    try {
+      client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    } catch (err) {
+      return res.json({
+        success: true,
+        data: [],
+        message: 'Radius service is not configured or enabled.'
+      });
+    }
+
+    const allLogs = [];
+    for (const user of customer.connectionUsers) {
+      const username = user.username;
+      
+      const [postAuth, radAcct] = await Promise.all([
+        client.getRadpostauthByUsername(username).catch(() => []),
+        client.getRadacctByUsername(username).catch(() => [])
+      ]);
+
+      const enriched = postAuth.map(log => {
+        const logTime = new Date(log.authdate).getTime();
+        
+        let matchedSession = null;
+        if (log.reply === 'Access-Accept') {
+          matchedSession = radAcct.find(session => {
+            if (!session.acctstarttime) return false;
+            const sessionTime = new Date(session.acctstarttime).getTime();
+            return Math.abs(sessionTime - logTime) <= 15000;
+          });
+        }
+
+        const mac = log.callingstationid || log.mac || matchedSession?.callingstationid || 'N/A';
+        const nas = log.nasipaddress || log.nas || matchedSession?.nasipaddress || 'N/A';
+        const reason = log.reply === 'Access-Accept' ? 'Login Success' : 'Incorrect credentials / access-reject';
+
+        return {
+          id: log.id,
+          date: log.authdate,
+          username: log.username,
+          password: log.reply === 'Access-Reject' ? (log.pass || 'N/A') : '••••••••',
+          mac,
+          nas,
+          reply: log.reply,
+          reason: log.class || reason
+        };
+      });
+
+      allLogs.push(...enriched);
+    }
+
+    allLogs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    return res.json({
+      success: true,
+      data: allLogs
+    });
+
+  } catch (error) {
+    console.error('Error fetching customer radius auth logs:', error);
+    return next(error);
+  }
+}
+
 // ----------------------------------------------------------------------
 // Exports
 // ----------------------------------------------------------------------
@@ -2497,5 +2584,6 @@ module.exports = {
   uploadCustomerDocuments,
   getCustomerStatusSummary,
   updateCustomerDevice,
-  deleteCustomerDevice
+  deleteCustomerDevice,
+  getCustomerRadiusAuthLogs
 };
