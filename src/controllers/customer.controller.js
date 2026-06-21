@@ -54,6 +54,58 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
   const email = req.user?.email;
   if (!email) return null;
 
+  // Direct lookup if customerId is present in req.user
+  if (req.user?.customerId) {
+    const customer = await prisma.customer.findFirst({
+      where: {
+        id: req.user.customerId,
+        ispId: req.ispId,
+        isDeleted: false
+      },
+      include: {
+        lead: true,
+        isp: { select: { id: true, companyName: true } },
+        branch: { select: { id: true, name: true } },
+        subBranch: { select: { id: true, name: true } },
+        subscribedPkg: { include: { packagePlanDetails: true } },
+        packagePrice: { include: { packagePlanDetails: true } },
+        connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+        devices: { orderBy: { createdAt: 'desc' } },
+        serviceDetails: true,
+        documents: {
+          where: { isDeleted: false },
+          orderBy: { uploadedAt: 'desc' },
+          select: {
+            id: true,
+            documentType: true,
+            fileName: true,
+            mimeType: true,
+            size: true,
+            uploadedAt: true,
+          },
+        },
+        customerSubscriptions: {
+          orderBy: { createdAt: 'desc' },
+          take: 3,
+          include: { packagePrice: { include: { packagePlanDetails: true } } },
+        },
+        orders: {
+          where: { isDeleted: false },
+          orderBy: { orderDate: 'desc' },
+          take: 10,
+          include: { items: true, packagePrice: { include: { packagePlanDetails: true } } },
+        },
+        tickets: {
+          where: { isDeleted: false },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        },
+        ...extraInclude,
+      }
+    });
+    if (customer) return customer;
+  }
+
   // First check if the user has a Customer role and match by portal user criteria
   if (req.user?.role === 'Customer' || req.user?.role === 'customer') {
     const dbUser = await prisma.user.findUnique({
@@ -115,7 +167,16 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
         }
       });
 
-      if (matchedCustomer) return matchedCustomer;
+      if (matchedCustomer) {
+        // Proactively link customerId to the user
+        if (dbUser.customerId !== matchedCustomer.id) {
+          await prisma.user.update({
+            where: { id: dbUser.id },
+            data: { customerId: matchedCustomer.id }
+          });
+        }
+        return matchedCustomer;
+      }
 
       // If not found by candidate emails, search all customers and match using findPortalUserForCustomer
       const customers = await prisma.customer.findMany({
@@ -165,6 +226,13 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
       for (const customer of customers) {
         const portalUser = await findPortalUserForCustomer(prisma, customer);
         if (portalUser && portalUser.id === dbUser.id) {
+          // Proactively link customerId to the user
+          if (dbUser.customerId !== customer.id) {
+            await prisma.user.update({
+              where: { id: dbUser.id },
+              data: { customerId: customer.id }
+            });
+          }
           return customer;
         }
       }
@@ -836,6 +904,7 @@ async function createCustomer(req, res, next) {
             status: 'active',
             ispId: req.ispId ? Number(req.ispId) : null,
             branchId: branchId ? Number(branchId) : null,
+            customerId: createdCustomer.id,
           },
         });
 
@@ -1154,6 +1223,25 @@ async function getCustomerRole(prisma) {
 }
 
 async function findPortalUserForCustomer(prisma, customer) {
+  // Try finding by explicit customerId field first
+  const explicit = await prisma.user.findFirst({
+    where: {
+      customerId: customer.id,
+      ispId: customer.ispId,
+      isDeleted: false
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+  if (explicit) return explicit;
+
+  // Fallback to matching candidate emails (to migrate old accounts)
   const customerRole = await getCustomerRole(prisma);
   const candidateEmails = [
     getCustomerPortalLoginEmail(customer),
@@ -1177,12 +1265,19 @@ async function findPortalUserForCustomer(prisma, customer) {
       updatedAt: true
     }
   });
-  if (exact) return exact;
+  if (exact) {
+    // Proactively link the customerId to migrate the account!
+    await prisma.user.update({
+      where: { id: exact.id },
+      data: { customerId: customer.id }
+    });
+    return exact;
+  }
 
   const fullName = `${customer?.lead?.firstName || ''} ${customer?.lead?.lastName || ''}`.trim();
   if (!fullName) return null;
 
-  return prisma.user.findFirst({
+  const byName = await prisma.user.findFirst({
     where: {
       ispId: customer.ispId,
       isDeleted: false,
@@ -1198,6 +1293,17 @@ async function findPortalUserForCustomer(prisma, customer) {
       updatedAt: true
     }
   });
+
+  if (byName) {
+    // Proactively link the customerId to migrate the account!
+    await prisma.user.update({
+      where: { id: byName.id },
+      data: { customerId: customer.id }
+    });
+    return byName;
+  }
+
+  return null;
 }
 
 async function upsertRadiusPassword(ispId, username, password) {
@@ -2433,7 +2539,10 @@ async function changePortalPassword(req, res, next) {
 
       updatedUser = await req.prisma.user.update({
         where: { id: portalUser.id },
-        data: updateData
+        data: {
+          ...updateData,
+          customerId: customer.id
+        }
       });
     } else {
       if (!newPassword) {
@@ -2457,7 +2566,8 @@ async function changePortalPassword(req, res, next) {
           roleId: customerRole.id,
           status: 'active',
           ispId: req.ispId ? Number(req.ispId) : null,
-          branchId: customer.branchId || null
+          branchId: customer.branchId || null,
+          customerId: customer.id
         }
       });
     }

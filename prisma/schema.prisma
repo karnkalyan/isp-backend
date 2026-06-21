@@ -161,6 +161,8 @@ model User {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
   yeastarExt     String?
+  customerId     Int?        @unique
+  customer       Customer?   @relation("CustomerPortalUser", fields: [customerId], references: [id], onDelete: SetNull, map: "user_customer_fkey")
 
   // Relations
   refreshTokens       RefreshToken[]
@@ -511,6 +513,7 @@ model Customer {
 
   connectionUsers       ConnectionUser[]
   customerSubscriptions CustomerSubscription[]
+  portalUser            User?                       @relation("CustomerPortalUser")
   orders                CustomerOrderManagement[]
   documents             CustomerDocument[]
   esewaPayments         ESewaTokenPayment[]

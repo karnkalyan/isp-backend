@@ -41,6 +41,7 @@ module.exports = (prisma) => {
         branchId: true,
         isDeleted: true,
         yeastarExt: true,
+        customerId: true,
         branch: {
           select: { id: true, parentId: true }
         },
@@ -112,7 +113,8 @@ module.exports = (prisma) => {
       ispId: user.ispId,
       branchId: user.branchId, // User's primary branch
       selectedBranchId: selectedBranchId, // Current context branch
-      extId: user.yeastarExt
+      extId: user.yeastarExt,
+      customerId: user.customerId
     };
 
     req.ispId = user.ispId;
