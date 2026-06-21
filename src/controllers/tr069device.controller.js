@@ -41,6 +41,23 @@ async function syncDevices(req, res, next) {
     const syncedSerialNumbers = [];
     const syncStartedAt = new Date();
 
+    const serialNumbersToSync = devices.map(d => d._deviceId?._SerialNumber).filter(Boolean);
+    const customerDevices = serialNumbersToSync.length
+      ? await req.prisma.customerDevice.findMany({
+          where: {
+            serialNumber: { in: serialNumbersToSync },
+            customer: { ispId }
+          },
+          include: { customer: { select: { leadId: true } } }
+        })
+      : [];
+
+    const leadIdBySerial = new Map(
+      customerDevices
+        .filter(cd => cd.serialNumber && cd.customer?.leadId)
+        .map(cd => [cd.serialNumber, cd.customer.leadId])
+    );
+
     for (const device of devices) {
       const serialNumber = device._deviceId?._SerialNumber;
       if (!serialNumber) continue;
@@ -50,6 +67,8 @@ async function syncDevices(req, res, next) {
       const ipAddress =
         extractFirstWanValue(device, 'WANIPConnection', 'ExternalIPAddress') ||
         extractFirstWanValue(device, 'WANPPPConnection', 'ExternalIPAddress');
+
+      const resolvedLeadId = leadIdBySerial.get(serialNumber) || null;
 
       const deviceData = {
         serialNumber,
@@ -65,7 +84,8 @@ async function syncDevices(req, res, next) {
         ispId: ispId,
         isActive: true,
         isDeleted: false,
-        updatedAt: now
+        updatedAt: now,
+        ...(resolvedLeadId ? { leadId: resolvedLeadId } : {})
       };
 
       const existing = await req.prisma.tr069Device.findUnique({
@@ -155,6 +175,40 @@ async function listDevices(req, res, next) {
       req.prisma.tr069Device.count({ where })
     ]);
 
+    // Auto-link devices assigned to customers in inventory
+    const serialsToCheck = devices.map(d => d.serialNumber).filter(Boolean);
+    if (serialsToCheck.length > 0) {
+      const customerDevices = await req.prisma.customerDevice.findMany({
+        where: {
+          serialNumber: { in: serialsToCheck },
+          customer: { ispId: req.ispId }
+        },
+        include: {
+          customer: {
+            select: { leadId: true }
+          }
+        }
+      });
+
+      const leadIdBySerial = new Map();
+      customerDevices.forEach(cd => {
+        if (cd.serialNumber && cd.customer?.leadId) {
+          leadIdBySerial.set(cd.serialNumber, cd.customer.leadId);
+        }
+      });
+
+      for (const d of devices) {
+        const matchingLeadId = leadIdBySerial.get(d.serialNumber);
+        if (matchingLeadId && d.leadId !== matchingLeadId) {
+          d.leadId = matchingLeadId;
+          await req.prisma.tr069Device.update({
+            where: { id: d.id },
+            data: { leadId: matchingLeadId }
+          }).catch(err => console.error(`Failed to auto-link TR-069 device ${d.serialNumber}:`, err));
+        }
+      }
+    }
+
     const leadIds = [...new Set(devices.map(device => device.leadId).filter(Boolean))];
     const leads = leadIds.length
       ? await req.prisma.Lead.findMany({
@@ -213,6 +267,21 @@ async function getDeviceBySerial(req, res, next) {
 
     if (!device) {
       return res.status(404).json({ error: 'Device not found' });
+    }
+
+    // Auto-link check on detail view
+    if (!device.leadId) {
+      const cd = await req.prisma.customerDevice.findFirst({
+        where: { serialNumber, customer: { ispId: req.ispId } },
+        include: { customer: { select: { leadId: true } } }
+      });
+      if (cd?.customer?.leadId) {
+        device.leadId = cd.customer.leadId;
+        await req.prisma.tr069Device.update({
+          where: { id: device.id },
+          data: { leadId: cd.customer.leadId }
+        }).catch(err => console.error("Failed to auto-link device on detail view:", err));
+      }
     }
 
     const lead = device.leadId
