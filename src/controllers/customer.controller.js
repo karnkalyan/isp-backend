@@ -3200,6 +3200,7 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
 // Exports
 // ----------------------------------------------------------------------
 module.exports = {
+  findCustomerForAuthenticatedUser,
   createCustomer,
   provisionCustomer,
   listCustomers,

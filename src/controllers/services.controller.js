@@ -1093,6 +1093,71 @@ class ServiceController {
     }
   }
 
+  async getCustomerRadiusUsage(req, res, next) {
+    try {
+      const { findCustomerForAuthenticatedUser } = require('./customer.controller');
+      const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+      if (!customer) {
+        return res.status(404).json({ success: false, error: 'Customer profile not found.' });
+      }
+
+      const connectionUsers = customer.connectionUsers || [];
+      if (connectionUsers.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, customer.ispId);
+      const usageMap = new Map();
+
+      for (const user of connectionUsers) {
+        const radAcct = await client.getRadacctByUsername(user.username).catch(() => []);
+        if (!Array.isArray(radAcct)) continue;
+
+        for (const session of radAcct) {
+          const startTime = session.acctstarttime;
+          if (!startTime) continue;
+
+          let dateStr;
+          try {
+            dateStr = new Date(startTime).toISOString().split('T')[0];
+          } catch (e) {
+            continue;
+          }
+
+          const upload = Number(session.acctinputoctets || 0) + Number(session.acctinputoctets64 || 0);
+          const download = Number(session.acctoutputoctets || 0) + Number(session.acctoutputoctets64 || 0);
+          const duration = Number(session.acctsessiontime || 0);
+
+          if (usageMap.has(dateStr)) {
+            const entry = usageMap.get(dateStr);
+            entry.upload += upload;
+            entry.download += download;
+            entry.duration += duration;
+            entry.count += 1;
+          } else {
+            usageMap.set(dateStr, {
+              date: dateStr,
+              upload,
+              download,
+              duration,
+              count: 1
+            });
+          }
+        }
+      }
+
+      const result = Array.from(usageMap.values()).map(entry => ({
+        ...entry,
+        total: entry.upload + entry.download
+      })).sort((a, b) => b.date.localeCompare(a.date));
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting customer radius usage:', error);
+      return res.status(500).json({ success: false, error: 'Failed to retrieve daily usage statistics.', message: error.message });
+    }
+  }
+
   async getRadiusTable(req, res) {
     try {
       const ispId = req.ispId;

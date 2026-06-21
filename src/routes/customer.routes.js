@@ -73,6 +73,10 @@ module.exports = (prisma) => {
   router.post('/profile/genieacs/:serialNumber/reboot', assertCustomerOwnsSerial, (req, res) => {
     return serviceController.rebootGenieACSDevice(req, res);
   });
+  router.get('/profile/radius/usage', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return serviceController.getCustomerRadiusUsage(req, res);
+  });
   router.post('/profile/tickets', ticketController.createTicket);
 
   // Customer CRUD endpoints
