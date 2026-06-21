@@ -54,6 +54,123 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
   const email = req.user?.email;
   if (!email) return null;
 
+  // First check if the user has a Customer role and match by portal user criteria
+  if (req.user?.role === 'Customer' || req.user?.role === 'customer') {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      include: { role: true }
+    });
+
+    if (dbUser) {
+      // Find by candidate emails first
+      const matchedCustomer = await prisma.customer.findFirst({
+        where: {
+          ispId: req.ispId,
+          isDeleted: false,
+          OR: [
+            { lead: { email: dbUser.email } },
+            { customerUniqueId: dbUser.email.split('@')[0] },
+            { connectionUsers: { some: { username: dbUser.email, isDeleted: false } } }
+          ]
+        },
+        include: {
+          lead: true,
+          isp: { select: { id: true, companyName: true } },
+          branch: { select: { id: true, name: true } },
+          subBranch: { select: { id: true, name: true } },
+          subscribedPkg: { include: { packagePlanDetails: true } },
+          packagePrice: { include: { packagePlanDetails: true } },
+          connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+          devices: { orderBy: { createdAt: 'desc' } },
+          serviceDetails: true,
+          documents: {
+            where: { isDeleted: false },
+            orderBy: { uploadedAt: 'desc' },
+            select: {
+              id: true,
+              documentType: true,
+              fileName: true,
+              mimeType: true,
+              size: true,
+              uploadedAt: true,
+            },
+          },
+          customerSubscriptions: {
+            orderBy: { createdAt: 'desc' },
+            take: 3,
+            include: { packagePrice: { include: { packagePlanDetails: true } } },
+          },
+          orders: {
+            where: { isDeleted: false },
+            orderBy: { orderDate: 'desc' },
+            take: 10,
+            include: { items: true, packagePrice: { include: { packagePlanDetails: true } } },
+          },
+          tickets: {
+            where: { isDeleted: false },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+          },
+          ...extraInclude,
+        }
+      });
+
+      if (matchedCustomer) return matchedCustomer;
+
+      // If not found by candidate emails, search all customers and match using findPortalUserForCustomer
+      const customers = await prisma.customer.findMany({
+        where: { ispId: req.ispId, isDeleted: false },
+        include: {
+          lead: true,
+          isp: { select: { id: true, companyName: true } },
+          branch: { select: { id: true, name: true } },
+          subBranch: { select: { id: true, name: true } },
+          subscribedPkg: { include: { packagePlanDetails: true } },
+          packagePrice: { include: { packagePlanDetails: true } },
+          connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+          devices: { orderBy: { createdAt: 'desc' } },
+          serviceDetails: true,
+          documents: {
+            where: { isDeleted: false },
+            orderBy: { uploadedAt: 'desc' },
+            select: {
+              id: true,
+              documentType: true,
+              fileName: true,
+              mimeType: true,
+              size: true,
+              uploadedAt: true,
+            },
+          },
+          customerSubscriptions: {
+            orderBy: { createdAt: 'desc' },
+            take: 3,
+            include: { packagePrice: { include: { packagePlanDetails: true } } },
+          },
+          orders: {
+            where: { isDeleted: false },
+            orderBy: { orderDate: 'desc' },
+            take: 10,
+            include: { items: true, packagePrice: { include: { packagePlanDetails: true } } },
+          },
+          tickets: {
+            where: { isDeleted: false },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+          },
+          ...extraInclude,
+        }
+      });
+
+      for (const customer of customers) {
+        const portalUser = await findPortalUserForCustomer(prisma, customer);
+        if (portalUser && portalUser.id === dbUser.id) {
+          return customer;
+        }
+      }
+    }
+  }
+
   return prisma.customer.findFirst({
     where: {
       ispId: req.ispId,
@@ -2274,8 +2391,9 @@ async function changePortalPassword(req, res, next) {
     const customerId = Number(req.params.id);
     if (isNaN(customerId)) return res.status(400).json({ error: "Invalid customer ID" });
 
-    const { newPassword } = req.body;
-    if (!newPassword || newPassword.trim().length < 4) {
+    const { email: requestedEmail, newPassword } = req.body;
+
+    if (newPassword && newPassword.trim().length < 4) {
       return res.status(400).json({ error: "Password must be at least 4 characters long" });
     }
 
@@ -2287,22 +2405,50 @@ async function changePortalPassword(req, res, next) {
 
     const portalUser = await findPortalUserForCustomer(req.prisma, customer);
     const customerRole = await getCustomerRole(req.prisma);
-    const passwordHash = await bcrypt.hash(newPassword, 10);
     const name = `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || customer.customerUniqueId || `Customer ${customer.id}`;
 
     let updatedUser;
     if (portalUser) {
+      const updateData = { status: 'active', roleId: customerRole.id };
+      if (newPassword) {
+        updateData.passwordHash = await bcrypt.hash(newPassword, 10);
+      }
+      if (requestedEmail) {
+        const normalizedEmail = normalizeCustomerLoginUsername(requestedEmail);
+        if (!isValidEmail(normalizedEmail)) {
+          return res.status(400).json({ error: "Invalid email format" });
+        }
+        const existing = await req.prisma.user.findFirst({
+          where: {
+            email: normalizedEmail,
+            isDeleted: false,
+            id: { not: portalUser.id }
+          }
+        });
+        if (existing) {
+          return res.status(409).json({ error: "Email/username is already used by another user" });
+        }
+        updateData.email = normalizedEmail;
+      }
+
       updatedUser = await req.prisma.user.update({
         where: { id: portalUser.id },
-        data: { passwordHash, status: 'active', roleId: customerRole.id }
+        data: updateData
       });
     } else {
-      const email = getCustomerPortalLoginEmail(customer);
+      if (!newPassword) {
+        return res.status(400).json({ error: "Password is required to create a new portal account" });
+      }
+      let email = requestedEmail ? normalizeCustomerLoginUsername(requestedEmail) : getCustomerPortalLoginEmail(customer);
       if (!email) return res.status(400).json({ error: "Unable to build portal login email" });
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ error: "Invalid email format" });
+      }
       const existing = await req.prisma.user.findUnique({ where: { email } });
       if (existing && existing.isDeleted === false) {
         return res.status(409).json({ error: "Portal login email is already used by another user" });
       }
+      const passwordHash = await bcrypt.hash(newPassword, 10);
       updatedUser = await req.prisma.user.create({
         data: {
           email,
@@ -2318,7 +2464,7 @@ async function changePortalPassword(req, res, next) {
 
     return res.json({
       success: true,
-      message: portalUser ? "Portal password updated successfully" : "Portal account created successfully",
+      message: portalUser ? "Portal credentials updated successfully" : "Portal account created successfully",
       data: {
         id: updatedUser.id,
         email: updatedUser.email,
