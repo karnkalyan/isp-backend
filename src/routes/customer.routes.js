@@ -70,6 +70,9 @@ module.exports = (prisma) => {
   router.post('/profile/genieacs/:serialNumber/update-wifi', assertCustomerOwnsSerial, (req, res) => {
     return serviceController.updateSpecificSSID(req, res);
   });
+  router.post('/profile/genieacs/:serialNumber/reboot', assertCustomerOwnsSerial, (req, res) => {
+    return serviceController.rebootGenieACSDevice(req, res);
+  });
   router.post('/profile/tickets', ticketController.createTicket);
 
   // Customer CRUD endpoints

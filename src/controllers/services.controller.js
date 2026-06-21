@@ -2949,6 +2949,12 @@ class ServiceController {
               bssid: this.extractParameterValue(wlan, 'BSSID'),
               keyPassphrase: this.extractParameterValue(wlan, 'KeyPassphrase'),
               associatedDeviceCount: this.extractParameterValue(wlan, 'AssociatedDeviceNumberOfEntries'),
+              stats: {
+                bytesSent: this.extractParameterValue(wlan, 'Stats.BytesSent'),
+                bytesReceived: this.extractParameterValue(wlan, 'Stats.BytesReceived'),
+                packetsSent: this.extractParameterValue(wlan, 'Stats.PacketsSent'),
+                packetsReceived: this.extractParameterValue(wlan, 'Stats.PacketsReceived'),
+              },
               // 🆕 Clean, simple key-value pairs for all parameters
               parameters: this.flattenParameters(allParams)
             });
@@ -2978,6 +2984,12 @@ class ServiceController {
             enable: this.extractParameterValue(ssidObj, 'Enable') === 'true' || this.extractParameterValue(ssidObj, 'Enable') === true,
             bssid: this.extractParameterValue(ssidObj, 'BSSID'),
             macAddress: this.extractParameterValue(ssidObj, 'MACAddress'),
+            stats: {
+              bytesSent: this.extractParameterValue(ssidObj, 'Stats.BytesSent'),
+              bytesReceived: this.extractParameterValue(ssidObj, 'Stats.BytesReceived'),
+              packetsSent: this.extractParameterValue(ssidObj, 'Stats.PacketsSent'),
+              packetsReceived: this.extractParameterValue(ssidObj, 'Stats.PacketsReceived'),
+            },
             parameters: this.flattenParameters(allParams)
           });
         }
