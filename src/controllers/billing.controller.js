@@ -301,6 +301,19 @@ async function payOrder(req, res, next) {
                 where: { id: subscription.id },
                 data: { isActive: true, updatedAt: new Date() }
             });
+
+            await prisma.customer.update({
+                where: { id: customer.id },
+                data: {
+                    status: 'active',
+                    onboardStatus: 'fully_onboarded'
+                }
+            });
+
+            await prisma.customerServiceConnection.updateMany({
+                where: { customerId: customer.id },
+                data: { status: 'active' }
+            });
         }
 
         const pppUsers = await prisma.connectionUser.findMany({
@@ -471,15 +484,39 @@ async function renewSubscription(req, res, next) {
                 }
             });
 
-            if (!customer.isRechargeable) {
-                await tx.customer.update({
-                    where: { id: customer.id },
-                    data: { isRechargeable: true }
-                });
-            }
+            await tx.customer.update({
+                where: { id: customer.id },
+                data: { 
+                    isRechargeable: true,
+                    status: 'active',
+                    onboardStatus: 'fully_onboarded'
+                }
+            });
+
+            await tx.customerServiceConnection.updateMany({
+                where: { customerId: customer.id },
+                data: { status: 'active' }
+            });
 
             return created;
         });
+
+        // Sync with FreeRADIUS immediately after successful renewal
+        const pppUsers = await prisma.connectionUser.findMany({
+            where: { customerId: Number(customerId), isDeleted: false, isActive: true },
+            select: { username: true }
+        }).catch(() => []);
+
+        if (pppUsers.length > 0) {
+            for (const connection of pppUsers) {
+                try {
+                    const radius = await RadiusClient.create(req.ispId);
+                    await radius.updateExpiration(connection.username, planEnd);
+                } catch (e) {
+                    console.error('Radius sync failed during renewal:', e.message);
+                }
+            }
+        }
 
         res.json({ success: true, subscription: newSub });
     } catch (err) {

@@ -1475,9 +1475,24 @@ async function getCustomerById(req, res, next) {
       orderBy: { updatedAt: 'desc' }
     });
 
+    const loginUsername = normalizeCustomerLoginUsername(customer.customerUniqueId);
+    const loginEmail = toCustomerLoginEmail(loginUsername);
+    const portalUser = await req.prisma.user.findFirst({
+      where: { email: loginEmail, isDeleted: false },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
     // Flatten lead fields
     const response = {
       ...customer,
+      portalUser,
       inventoryItems,
       firstName: customer.lead?.firstName,
       lastName: customer.lead?.lastName,
@@ -1744,6 +1759,36 @@ async function updateCustomer(req, res, next) {
     const updated = await req.prisma.$transaction(async (tx) => {
       if (Object.keys(customerUpdate).length > 0) {
         await tx.customer.update({ where: { id }, data: customerUpdate });
+
+        if (status !== undefined) {
+          await tx.customerServiceConnection.updateMany({
+            where: { customerId: id },
+            data: { status: status === 'active' ? 'active' : 'inactive' }
+          });
+
+          // Sync with Radius if status is updated
+          const pppUsers = await tx.connectionUser.findMany({
+            where: { customerId: id, isDeleted: false },
+            select: { username: true }
+          });
+
+          if (pppUsers.length > 0) {
+            const subscription = await tx.customerSubscription.findFirst({
+              where: { customerId: id, isActive: true }
+            });
+            const expiryDate = (status === 'active' && subscription) ? subscription.planEnd : new Date();
+            
+            const RadiusClient = require('../services/radiusClient');
+            try {
+              const radius = await RadiusClient.create(req.ispId);
+              for (const cu of pppUsers) {
+                await radius.updateExpiration(cu.username, expiryDate);
+              }
+            } catch (e) {
+              console.error('Radius sync failed during manual status update:', e.message);
+            }
+          }
+        }
       }
       if (Object.keys(leadUpdate).length > 0) {
         await tx.lead.update({ where: { id: existing.leadId }, data: leadUpdate });
@@ -2089,6 +2134,46 @@ async function changeUsername(req, res, next) {
     });
   } catch (err) {
     console.error("changeUsername error:", err);
+    return next(err);
+  }
+}
+
+async function changePortalPassword(req, res, next) {
+  try {
+    const customerId = Number(req.params.id);
+    if (isNaN(customerId)) return res.status(400).json({ error: "Invalid customer ID" });
+
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.trim().length < 4) {
+      return res.status(400).json({ error: "Password must be at least 4 characters long" });
+    }
+
+    const customer = await req.prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId }
+    });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const loginUsername = normalizeCustomerLoginUsername(customer.customerUniqueId);
+    const loginEmail = toCustomerLoginEmail(loginUsername);
+
+    const portalUser = await req.prisma.user.findFirst({
+      where: { email: loginEmail, isDeleted: false }
+    });
+    if (!portalUser) return res.status(404).json({ error: "Portal user not found" });
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    await req.prisma.user.update({
+      where: { id: portalUser.id },
+      data: { passwordHash }
+    });
+
+    return res.json({
+      success: true,
+      message: "Portal password updated successfully"
+    });
+  } catch (err) {
+    console.error("changePortalPassword error:", err);
     return next(err);
   }
 }
@@ -2473,6 +2558,16 @@ async function deleteCustomerDevice(req, res, next) {
   }
 }
 
+function findMacAddress(...values) {
+  const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+  for (const val of values) {
+    if (val && typeof val === 'string' && macRegex.test(val)) {
+      return val;
+    }
+  }
+  return values.find(val => val && val !== 'N/A' && val !== 'NULL') || 'N/A';
+}
+
 async function getCustomerRadiusAuthLogs(req, res, next) {
   const prisma = req.prisma;
   const customerId = Number(req.params.id);
@@ -2528,8 +2623,11 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           });
         }
 
-        const mac = log.callingstationid || log.mac || matchedSession?.callingstationid || 'N/A';
-        const nas = log.nasipaddress || log.nas || matchedSession?.nasipaddress || 'N/A';
+        const mac = findMacAddress(matchedSession?.callingstationid, log.callingstationid, log.mac);
+        const calledId = log.calledstationid || matchedSession?.calledstationid || 'N/A';
+        const framedIp = log.framedipaddress || matchedSession?.framedipaddress || 'N/A';
+        const nasIp = log.nasipaddress || log.nas || matchedSession?.nasipaddress || 'N/A';
+        const nasPort = log.nasportid || matchedSession?.nasportid || 'N/A';
         const reason = log.reply === 'Access-Accept' ? 'Login Success' : 'Incorrect credentials / access-reject';
 
         return {
@@ -2538,7 +2636,10 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           username: log.username,
           password: log.reply === 'Access-Reject' ? (log.pass || 'N/A') : '••••••••',
           mac,
-          nas,
+          calledId,
+          framedIp,
+          nasIp,
+          nasPort,
           reply: log.reply,
           reason: log.class || reason
         };
@@ -2585,5 +2686,6 @@ module.exports = {
   getCustomerStatusSummary,
   updateCustomerDevice,
   deleteCustomerDevice,
-  getCustomerRadiusAuthLogs
+  getCustomerRadiusAuthLogs,
+  changePortalPassword
 };

@@ -1,17 +1,31 @@
-const { RadiusClient } = require('../../services/radiusClient');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 
 async function testPostAuth() {
   try {
-    console.log('Creating Radius client for ISP 1...');
-    const client = await RadiusClient.create(1);
-    
-    console.log('Fetching radacct for user bipin...');
-    const acctData = await client.getRadacctByUsername('bipin', 5);
-    console.log('radacct data sample:', JSON.stringify(acctData, null, 2));
-
+    const services = await prisma.iSPService.findMany({
+      where: { service: { code: 'RADIUS' } },
+      include: {
+        credentials: true
+      }
+    });
+    for (const s of services) {
+      console.log(`Service ID: ${s.id}, ISP ID: ${s.ispId}, BaseURL: ${s.baseUrl}`);
+      console.log(`Credentials:`, s.credentials.map(c => ({ key: c.key, value: c.value })));
+    }
   } catch (error) {
-    console.error('Error during test:', error.message);
+    console.error('Error:', error.message);
   }
 }
 
 testPostAuth();
+
+
+
+
+
+
+
+
+
+
