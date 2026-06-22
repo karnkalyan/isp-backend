@@ -1364,6 +1364,20 @@ async function getRealtimeNetworkStatus(prisma, customer) {
           const lastInform = acsDevice._lastInform;
           const isOnline = lastInform && (Date.now() - new Date(lastInform).getTime() < 5 * 60 * 1000);
           ontRealtimeStatus = isOnline ? 'online' : 'offline';
+
+          // Auto-sync back to the database
+          await prisma.tr069Device.updateMany({
+            where: {
+              serialNumber: primaryDevice.serialNumber,
+              ispId: customer.ispId,
+              isDeleted: false
+            },
+            data: {
+              status: ontRealtimeStatus,
+              lastContact: lastInform ? new Date(lastInform) : null,
+              updatedAt: new Date()
+            }
+          }).catch((err) => console.error("Error auto-syncing TR-069 device status:", err.message));
         }
       } else {
         ontRealtimeStatus = primaryDevice.status || 'offline';
