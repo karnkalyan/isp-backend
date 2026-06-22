@@ -91,11 +91,20 @@ async function createTicket(req, res, next) {
         const createdById = req.user?.id;
 
         // If user is a customer, auto-assign their info and branch
-        if (req.user && req.user.role === 'Customer') {
-            const customer = await req.prisma.customer.findFirst({
-                where: { lead: { email: req.user.email } },
-                select: { id: true, branchId: true }
-            });
+        if (req.user && (req.user.role === 'Customer' || req.user.role === 'customer' || req.user.customerId)) {
+            let customer = null;
+            if (req.user.customerId) {
+                customer = await req.prisma.customer.findUnique({
+                    where: { id: parseInt(req.user.customerId) },
+                    select: { id: true, branchId: true }
+                });
+            }
+            if (!customer && req.user.email) {
+                customer = await req.prisma.customer.findFirst({
+                    where: { lead: { email: req.user.email } },
+                    select: { id: true, branchId: true }
+                });
+            }
             if (customer) {
                 customerId = customer.id;
                 // Auto assign to their branch if not specifically targeted
