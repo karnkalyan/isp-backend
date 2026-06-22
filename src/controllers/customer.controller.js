@@ -1345,6 +1345,79 @@ async function upsertRadiusPassword(ispId, username, password) {
   });
 }
 
+async function getRealtimeNetworkStatus(prisma, customer) {
+  let ontRealtimeStatus = 'offline';
+  let radiusRealtimeStatus = 'offline';
+  let radiusAccounting = null;
+
+  try {
+    const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(prisma, customer);
+    const primaryDevice = tr069Devices.find((device) => device.serialNumber) || null;
+    
+    if (primaryDevice && primaryDevice.serialNumber) {
+      const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, customer.ispId).catch(() => null);
+      if (genieClient) {
+        const acsDevice = await genieClient.getDeviceBySerial(primaryDevice.serialNumber, {
+          projection: '_id,_deviceId,_lastInform'
+        }).catch(() => null);
+        if (acsDevice) {
+          const lastInform = acsDevice._lastInform;
+          const isOnline = lastInform && (Date.now() - new Date(lastInform).getTime() < 5 * 60 * 1000);
+          ontRealtimeStatus = isOnline ? 'online' : 'offline';
+        }
+      } else {
+        ontRealtimeStatus = primaryDevice.status || 'offline';
+      }
+    } else {
+      ontRealtimeStatus = 'N/A';
+    }
+  } catch (err) {
+    console.error('Error fetching realtime ONT status from ACS:', err.message);
+    ontRealtimeStatus = 'N/A';
+  }
+
+  try {
+    const username = customer.connectionUsers?.[0]?.username;
+    if (username) {
+      const radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, customer.ispId).catch(() => null);
+      if (radiusClient) {
+        const sessions = await radiusClient.getRadacctByUsername(username).catch(() => []);
+        if (Array.isArray(sessions)) {
+          const activeSession = sessions.find(session => !session.acctstoptime || session.acctstoptime === '0000-00-00 00:00:00' || session.acctstoptime === null);
+          const sortedSessions = [...sessions].sort((a, b) => {
+            const timeA = a.acctstarttime ? new Date(a.acctstarttime).getTime() : 0;
+            const timeB = b.acctstarttime ? new Date(b.acctstarttime).getTime() : 0;
+            return timeB - timeA;
+          });
+          const latestSession = sortedSessions[0] || null;
+          const targetSession = activeSession || latestSession;
+
+          radiusRealtimeStatus = activeSession ? 'online' : 'offline';
+          radiusAccounting = {
+            status: activeSession ? 'online' : 'offline',
+            sessionDownload: targetSession ? (Number(targetSession.acctoutputoctets || 0) + Number(targetSession.acctoutputoctets64 || 0)) : 0,
+            sessionUpload: targetSession ? (Number(targetSession.acctinputoctets || 0) + Number(targetSession.acctinputoctets64 || 0)) : 0,
+            nasIp: targetSession ? (targetSession.nasipaddress || 'N/A') : 'N/A',
+            framedIp: targetSession ? (targetSession.framedipaddress || 'N/A') : 'N/A',
+            onlineDuration: targetSession ? (Number(targetSession.acctsessiontime || 0)) : 0
+          };
+        }
+      }
+    } else {
+      radiusRealtimeStatus = 'N/A';
+    }
+  } catch (err) {
+    console.error('Error fetching realtime Radius status:', err.message);
+    radiusRealtimeStatus = 'N/A';
+  }
+
+  return {
+    ontRealtimeStatus,
+    radiusRealtimeStatus,
+    radiusAccounting
+  };
+}
+
 async function getCustomerProfile(req, res, next) {
   try {
     const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
@@ -1362,13 +1435,27 @@ async function getCustomerProfile(req, res, next) {
     const unpaidOrders = customer.orders.filter((order) => !order.isPaid);
     const outstandingAmount = unpaidOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
 
+    // Fetch realtime ONT and Radius statuses
+    const realtimeNet = await getRealtimeNetworkStatus(req.prisma, customer);
+
+    // Let's enrich tr069Devices in the response with realtime status
+    const enrichedTr069Devices = tr069Devices.map(d => {
+      if (d.serialNumber && primaryTr069Device && d.serialNumber === primaryTr069Device.serialNumber) {
+        return {
+          ...d,
+          status: realtimeNet.ontRealtimeStatus !== 'N/A' ? realtimeNet.ontRealtimeStatus : d.status
+        };
+      }
+      return d;
+    });
+
     return res.json({
       success: true,
       data: {
         ...customer,
         primaryDeviceSerial,
         deviceSerials: serials,
-        tr069Devices,
+        tr069Devices: enrichedTr069Devices,
         activeSubscription,
         billingSummary: {
           outstandingAmount,
@@ -1376,6 +1463,9 @@ async function getCustomerProfile(req, res, next) {
           lastOrder: customer.orders[0] || null,
           recentOrders: customer.orders,
         },
+        ontRealtimeStatus: realtimeNet.ontRealtimeStatus,
+        radiusRealtimeStatus: realtimeNet.radiusRealtimeStatus,
+        radiusAccounting: realtimeNet.radiusAccounting
       },
     });
   } catch (err) {
@@ -1863,9 +1953,24 @@ async function getCustomerById(req, res, next) {
 
     const portalUser = await findPortalUserForCustomer(req.prisma, customer);
 
+    // Fetch realtime ONT and Radius statuses
+    const realtimeNet = await getRealtimeNetworkStatus(req.prisma, customer);
+
+    // Let's enrich tr069Devices in response with realtime status if available
+    const enrichedDevices = (customer.devices || []).map(d => {
+      if (d.serialNumber && realtimeNet.ontRealtimeStatus !== 'N/A') {
+        return {
+          ...d,
+          status: realtimeNet.ontRealtimeStatus
+        };
+      }
+      return d;
+    });
+
     // Flatten lead fields
     const response = {
       ...customer,
+      devices: enrichedDevices,
       portalUser,
       inventoryItems,
       firstName: customer.lead?.firstName,
@@ -1880,7 +1985,10 @@ async function getCustomerById(req, res, next) {
       district: customer.lead?.district,
       state: customer.lead?.province,
       zipCode: customer.lead?.zipCode,
-      lead: undefined
+      lead: undefined,
+      ontRealtimeStatus: realtimeNet.ontRealtimeStatus,
+      radiusRealtimeStatus: realtimeNet.radiusRealtimeStatus,
+      radiusAccounting: realtimeNet.radiusAccounting
     };
 
     return res.json(response);
