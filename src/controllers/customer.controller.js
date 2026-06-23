@@ -1869,6 +1869,7 @@ async function listCustomers(req, res, next) {
             include: { service: true }
           },
           customerType: true,
+          branch: { select: { id: true, name: true } },
           subBranch: { select: { id: true, name: true } }
         },
         orderBy: { [sortBy]: sortOrder },
@@ -1894,6 +1895,8 @@ async function listCustomers(req, res, next) {
       district: c.lead?.district,
       state: c.lead?.province,
       zipCode: c.lead?.zipCode,
+      address: c.lead?.address,
+      convertedAt: c.lead?.convertedAt,
       lead: undefined
     }));
 

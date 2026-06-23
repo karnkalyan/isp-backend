@@ -3819,6 +3819,35 @@ class ServiceController {
       }
     }
 
+    if (Array.isArray(filters.dynamicFilters) && filters.dynamicFilters.length > 0) {
+      const filtersByType = {};
+      filters.dynamicFilters.forEach(f => {
+        const parts = f.split(":");
+        const type = parts[0];
+        const val = parts.slice(1).join(":");
+        if (type && val) {
+          if (!filtersByType[type]) filtersByType[type] = [];
+          filtersByType[type].push(val.trim());
+        }
+      });
+
+      Object.entries(filtersByType).forEach(([type, values]) => {
+        if (type === 'address') {
+          where.address = { in: values };
+        } else if (type === 'street') {
+          where.street = { in: values };
+        } else if (type === 'district') {
+          where.district = { in: values };
+        } else if (type === 'gender') {
+          where.gender = { in: values };
+        } else if (type === 'package') {
+          where.interestedPackage = { packageName: { in: values } };
+        } else if (type === 'membership') {
+          where.membership = { name: { in: values } };
+        }
+      });
+    }
+
     return where;
   }
 
@@ -3863,6 +3892,35 @@ class ServiceController {
           ])
         };
       }
+    }
+
+    if (Array.isArray(filters.dynamicFilters) && filters.dynamicFilters.length > 0) {
+      const filtersByType = {};
+      filters.dynamicFilters.forEach(f => {
+        const parts = f.split(":");
+        const type = parts[0];
+        const val = parts.slice(1).join(":");
+        if (type && val) {
+          if (!filtersByType[type]) filtersByType[type] = [];
+          filtersByType[type].push(val.trim());
+        }
+      });
+
+      Object.entries(filtersByType).forEach(([type, values]) => {
+        if (type === 'address') {
+          where.lead = { ...where.lead, address: { in: values } };
+        } else if (type === 'street') {
+          where.lead = { ...where.lead, street: { in: values } };
+        } else if (type === 'district') {
+          where.lead = { ...where.lead, district: { in: values } };
+        } else if (type === 'gender') {
+          where.lead = { ...where.lead, gender: { in: values } };
+        } else if (type === 'package') {
+          where.subscribedPkg = { packageName: { in: values } };
+        } else if (type === 'membership') {
+          where.membership = { name: { in: values } };
+        }
+      });
     }
 
     return where;
