@@ -3854,10 +3854,10 @@ class ServiceController {
           where.AND = where.AND || [];
           where.AND.push({
             OR: values.flatMap(val => [
-              { address: { contains: val, mode: 'insensitive' } },
-              { street: { contains: val, mode: 'insensitive' } },
-              { district: { contains: val, mode: 'insensitive' } },
-              { province: { contains: val, mode: 'insensitive' } }
+              { address: { contains: val } },
+              { street: { contains: val } },
+              { district: { contains: val } },
+              { province: { contains: val } }
             ])
           });
         }
@@ -3941,10 +3941,10 @@ class ServiceController {
           where.lead.AND = where.lead.AND || [];
           where.lead.AND.push({
             OR: values.flatMap(val => [
-              { address: { contains: val, mode: 'insensitive' } },
-              { street: { contains: val, mode: 'insensitive' } },
-              { district: { contains: val, mode: 'insensitive' } },
-              { province: { contains: val, mode: 'insensitive' } }
+              { address: { contains: val } },
+              { street: { contains: val } },
+              { district: { contains: val } },
+              { province: { contains: val } }
             ])
           });
         }
@@ -3958,33 +3958,43 @@ class ServiceController {
     if (recipientType === 'lead') {
       const leads = await this.prisma.lead.findMany({
         where: this.buildSmsLeadWhere(ispId, filters),
-        select: { id: true, firstName: true, lastName: true, phoneNumber: true },
+        select: { id: true, firstName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true },
         orderBy: { createdAt: 'desc' }
       });
 
-      return leads.map((lead) => ({
-        recipientId: lead.id,
-        recipientType: 'lead',
-        name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || null,
-        phone: normalizePhone(lead.phoneNumber)
-      })).filter((recipient) => recipient.phone);
+      return leads.map((lead) => {
+        const primary = normalizePhone(lead.phoneNumber);
+        const secondary = normalizePhone(lead.secondaryContactNumber);
+        const finalPhone = primary || secondary;
+        return {
+          recipientId: lead.id,
+          recipientType: 'lead',
+          name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || null,
+          phone: finalPhone
+        };
+      }).filter((recipient) => recipient.phone);
     }
 
     const customers = await this.prisma.customer.findMany({
       where: this.buildSmsCustomerWhere(ispId, filters),
       select: {
         id: true,
-        lead: { select: { firstName: true, lastName: true, phoneNumber: true } }
+        lead: { select: { firstName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true } }
       },
       orderBy: { createdAt: 'desc' }
     });
 
-    return customers.map((customer) => ({
-      recipientId: customer.id,
-      recipientType: 'customer',
-      name: `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || null,
-      phone: normalizePhone(customer.lead?.phoneNumber)
-    })).filter((recipient) => recipient.phone);
+    return customers.map((customer) => {
+      const primary = normalizePhone(customer.lead?.phoneNumber);
+      const secondary = normalizePhone(customer.lead?.secondaryContactNumber);
+      const finalPhone = primary || secondary;
+      return {
+        recipientId: customer.id,
+        recipientType: 'customer',
+        name: `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || null,
+        phone: finalPhone
+      };
+    }).filter((recipient) => recipient.phone);
   }
 
   dedupeSmsRecipients(recipients) {
@@ -4025,7 +4035,7 @@ class ServiceController {
 
       const recipientType = type === 'lead' ? 'lead' : 'customer';
       const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
-      const recipients = selectAll
+      let recipients = selectAll
         ? await this.getSmsCampaignRecipients(ispId, recipientType, filters)
         : (Array.isArray(to) ? to : [to]).map((item) => {
           const rawPhone = typeof item === 'object' && item !== null ? item.phone : item;
@@ -4038,6 +4048,21 @@ class ServiceController {
             phone: normalizePhone(rawPhone)
           };
         }).filter((recipient) => recipient.phone);
+
+      // Merge manual numbers from `to` when selectAll is true
+      if (selectAll && Array.isArray(to) && to.length > 0) {
+        const manualRecipients = to.map((item) => {
+          const rawPhone = typeof item === 'object' && item !== null ? item.phone : item;
+          const name = typeof item === 'object' && item !== null ? item.name : null;
+          return {
+            recipientId: null,
+            recipientType,
+            name: name || 'Manual',
+            phone: normalizePhone(rawPhone)
+          };
+        }).filter((r) => r.phone);
+        recipients = [...recipients, ...manualRecipients];
+      }
 
       const { unique, skipped } = this.dedupeSmsRecipients(recipients);
 
