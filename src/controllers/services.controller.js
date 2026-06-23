@@ -3844,6 +3844,16 @@ class ServiceController {
           where.interestedPackage = { packageName: { in: values } };
         } else if (type === 'membership') {
           where.membership = { name: { in: values } };
+        } else if (type === 'fullAddress') {
+          where.AND = where.AND || [];
+          where.AND.push({
+            OR: values.flatMap(val => [
+              { address: { contains: val, mode: 'insensitive' } },
+              { street: { contains: val, mode: 'insensitive' } },
+              { district: { contains: val, mode: 'insensitive' } },
+              { province: { contains: val, mode: 'insensitive' } }
+            ])
+          });
         }
       });
     }
@@ -3882,15 +3892,16 @@ class ServiceController {
     if (filters.area) {
       const areas = String(filters.area).split(',').map(s => s.trim()).filter(Boolean);
       if (areas.length > 0) {
-        where.lead = {
-          ...where.lead,
+        where.lead = where.lead || {};
+        where.lead.AND = where.lead.AND || [];
+        where.lead.AND.push({
           OR: areas.flatMap(a => [
             { address: { contains: a } },
             { street: { contains: a } },
             { district: { contains: a } },
             { province: { contains: a } }
           ])
-        };
+        });
       }
     }
 
@@ -3919,6 +3930,17 @@ class ServiceController {
           where.subscribedPkg = { packageName: { in: values } };
         } else if (type === 'membership') {
           where.membership = { name: { in: values } };
+        } else if (type === 'fullAddress') {
+          where.lead = where.lead || {};
+          where.lead.AND = where.lead.AND || [];
+          where.lead.AND.push({
+            OR: values.flatMap(val => [
+              { address: { contains: val, mode: 'insensitive' } },
+              { street: { contains: val, mode: 'insensitive' } },
+              { district: { contains: val, mode: 'insensitive' } },
+              { province: { contains: val, mode: 'insensitive' } }
+            ])
+          });
         }
       });
     }

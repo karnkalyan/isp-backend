@@ -3381,6 +3381,282 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
   }
 }
 
+async function reprovisionRadius(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: {
+        connectionUsers: { where: { isDeleted: false } },
+        lead: true
+      }
+    });
+
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const connectionUser = customer.connectionUsers[0];
+    if (!connectionUser) {
+      return res.status(400).json({ error: 'No active connection user found for this customer' });
+    }
+
+    const subscription = await prisma.customerSubscription.findFirst({
+      where: { customerId, isActive: true },
+      include: { packagePrice: true }
+    });
+
+    const expiryDate = subscription?.planEnd
+      ? new Date(subscription.planEnd).toLocaleDateString('en-GB', {
+          day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }).replace(/,/g, '').replace(/ /g, ' ')
+      : null;
+
+    const packageName = subscription?.packagePrice?.packageName || '';
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+
+    // 1. Delete user first to clear out any stale credentials/attributes
+    try {
+      await client.deleteUser(connectionUser.username);
+    } catch (err) {
+      console.warn(`[RADIUS REPROVISION] Delete user failed (might not exist): ${err.message}`);
+    }
+
+    // 2. Re-create user in Radius
+    const attributes = {};
+    if (expiryDate) attributes.Expiration = expiryDate;
+    const groups = packageName ? [packageName] : [];
+
+    const result = await client.createUser(
+      connectionUser.username,
+      connectionUser.password,
+      attributes,
+      groups
+    );
+
+    // 3. Try to disconnect existing session to force reconnect with new credentials
+    try {
+      await client.sendCoA(connectionUser.username, { action: 'disconnect' });
+    } catch (err) {
+      console.warn(`[RADIUS REPROVISION] sendCoA disconnect failed: ${err.message}`);
+    }
+
+    // 4. Update/Upsert customerSubscribedService table
+    const getServiceIdByCode = async (code) => {
+      const ispService = await prisma.iSPService.findFirst({
+        where: {
+          ispId: req.ispId,
+          isActive: true,
+          isDeleted: false,
+          service: {
+            code: code,
+            isActive: true,
+            isDeleted: false,
+          },
+        },
+        include: { service: true },
+      });
+      return ispService?.service?.id;
+    };
+
+    const serviceId = await getServiceIdByCode(SERVICE_CODES.RADIUS);
+    if (serviceId) {
+      await prisma.customerSubscribedService.upsert({
+        where: { customerId_serviceId: { customerId, serviceId } },
+        update: { status: 'active', serviceData: result },
+        create: { customerId, serviceId, status: 'active', serviceData: result }
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Radius reprovisioned successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error reprovisioning Radius:', error);
+    return res.status(500).json({ error: 'Radius reprovisioning failed', details: error.message });
+  }
+}
+
+async function reprovisionNettv(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: { lead: true }
+    });
+
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const getServiceIdByCode = async (code) => {
+      const ispService = await prisma.iSPService.findFirst({
+        where: {
+          ispId: req.ispId,
+          isActive: true,
+          isDeleted: false,
+          service: {
+            code: code,
+            isActive: true,
+            isDeleted: false,
+          },
+        },
+        include: { service: true },
+      });
+      return ispService?.service?.id;
+    };
+
+    const serviceId = await getServiceIdByCode(SERVICE_CODES.NETTV);
+    if (!serviceId) {
+      return res.status(400).json({ error: 'NetTV service not available for this ISP' });
+    }
+
+    const subscribedService = await prisma.customerSubscribedService.findUnique({
+      where: { customerId_serviceId: { customerId, serviceId } }
+    });
+
+    const nettvData = subscribedService?.serviceData || {
+      username: customer.customerUniqueId || `cust_${customer.id}`,
+      firstName: customer.lead.firstName || 'Unknown',
+      lastName: customer.lead.lastName || 'Unknown',
+      email: customer.email || customer.lead.email || `${customer.id}@unknown.com`,
+      phoneNumber: customer.phoneNumber || customer.lead.phoneNumber || '0000000000',
+      address: customer.address || customer.lead.address || 'Unknown'
+    };
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
+    
+    // Reprovision is equivalent to calling createSubscriber to upsert/update configuration on NetTV
+    const result = await client.createSubscriber(nettvData);
+
+    await prisma.customerSubscribedService.upsert({
+      where: { customerId_serviceId: { customerId, serviceId } },
+      update: { status: 'active', serviceData: nettvData },
+      create: { customerId, serviceId, status: 'active', serviceData: nettvData }
+    });
+
+    return res.json({
+      success: true,
+      message: 'NetTV reprovisioned successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error reprovisioning NetTV:', error);
+    return res.status(500).json({ error: 'NetTV reprovisioning failed', details: error.message });
+  }
+}
+
+async function disconnectRadiusSession(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: {
+        connectionUsers: { where: { isDeleted: false } }
+      }
+    });
+
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const connectionUser = customer.connectionUsers[0];
+    if (!connectionUser) {
+      return res.status(400).json({ error: 'No active connection user found for this customer' });
+    }
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.sendCoA(connectionUser.username, { action: 'disconnect' });
+
+    return res.json({
+      success: true,
+      message: `Radius session for ${connectionUser.username} disconnected successfully`,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error disconnecting Radius session:', error);
+    return res.status(500).json({ error: 'Failed to disconnect user session', message: error.message });
+  }
+}
+
+async function listNasDevices(req, res, next) {
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.listNasDevices();
+    return res.json(result);
+  } catch (error) {
+    console.error('Error listing NAS devices:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function listActiveSessions(req, res, next) {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.listActiveSessions(limit, offset);
+    return res.json(result);
+  } catch (error) {
+    console.error('Error listing active sessions:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function getSessionInfoForUser(req, res, next) {
+  const username = req.params.username;
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.getSessionInfo(username);
+    return res.json(result);
+  } catch (error) {
+    console.error(`Error getting session info for user ${username}:`, error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function disconnectLatestSession(req, res, next) {
+  const username = req.params.username;
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.disconnectUser(username);
+    return res.json(result);
+  } catch (error) {
+    console.error(`Error disconnecting latest session for user ${username}:`, error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function disconnectAllSessions(req, res, next) {
+  const username = req.params.username;
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.disconnectAllSessions(username);
+    return res.json(result);
+  } catch (error) {
+    console.error(`Error disconnecting all sessions for user ${username}:`, error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function disconnectBySessionId(req, res, next) {
+  const sessionId = req.params.sessionId;
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const result = await client.disconnectBySessionId(sessionId);
+    return res.json(result);
+  } catch (error) {
+    console.error(`Error disconnecting session ${sessionId}:`, error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
 // ----------------------------------------------------------------------
 // Exports
 // ----------------------------------------------------------------------
@@ -3409,5 +3685,14 @@ module.exports = {
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
   changePortalPassword,
-  changeConnectionUserPassword
+  changeConnectionUserPassword,
+  reprovisionRadius,
+  reprovisionNettv,
+  disconnectRadiusSession,
+  listNasDevices,
+  listActiveSessions,
+  getSessionInfoForUser,
+  disconnectLatestSession,
+  disconnectAllSessions,
+  disconnectBySessionId
 };

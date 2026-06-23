@@ -326,7 +326,36 @@ async function getLeadById(req, res, next) {
       return res.status(404).json({ error: "Lead not found." });
     }
 
-    return res.status(200).json(lead);
+    // Fetch SMS logs sent to this lead
+    const smsLogs = await req.prisma.smsCampaignLog.findMany({
+      where: {
+        recipientId: id,
+        recipientType: 'lead'
+      },
+      include: {
+        campaign: {
+          select: {
+            message: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    const leadWithSms = {
+      ...lead,
+      smsLogs: smsLogs.map(log => ({
+        id: log.id,
+        status: log.status,
+        errorMessage: log.errorMessage,
+        sentAt: log.sentAt || log.createdAt,
+        message: log.campaign?.message || ''
+      }))
+    };
+
+    return res.status(200).json(leadWithSms);
   } catch (err) {
     console.error("Get Lead By ID Error:", err.message);
     if (err.code && err.code.startsWith('P')) {

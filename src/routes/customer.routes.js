@@ -24,7 +24,10 @@ const {
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
   changePortalPassword,
-  changeConnectionUserPassword
+  changeConnectionUserPassword,
+  reprovisionRadius,
+  reprovisionNettv,
+  disconnectRadiusSession
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -108,6 +111,9 @@ module.exports = (prisma) => {
   router.put('/:id/connection-users/:connectionUserId/password', checkPermission('customer_update'), changeConnectionUserPassword);
   router.put('/:id/package', checkPermission('customer_update'), changePackage);
   router.put('/:id/mac', checkPermission('customer_update'), resetMac);
+  router.post('/:id/reprovision/radius', checkPermission('customer_update'), reprovisionRadius);
+  router.post('/:id/reprovision/nettv', checkPermission('customer_update'), reprovisionNettv);
+  router.post('/:id/disconnect-session', checkPermission('customer_update'), disconnectRadiusSession);
 
   // Device endpoints
   router.put('/:id/devices/:deviceId', checkPermission('customer_update'), updateCustomerDevice);

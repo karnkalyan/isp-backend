@@ -937,6 +937,31 @@ class RadiusClient {
     }
   }
 
+  // --- New Disconnect & Sessions API Endpoints ---
+  async listNasDevices() {
+    return this.#apiRequest('get', '/api/nas-devices');
+  }
+
+  async listActiveSessions(limit = 100, offset = 0) {
+    return this.#apiRequest('get', '/api/sessions', { limit, offset });
+  }
+
+  async getSessionInfo(username) {
+    return this.#apiRequest('get', `/api/sessions/${username}`);
+  }
+
+  async disconnectUser(username) {
+    return this.#apiRequest('post', `/api/disconnect/${username}`);
+  }
+
+  async disconnectAllSessions(username) {
+    return this.#apiRequest('post', `/api/disconnect/${username}/all`);
+  }
+
+  async disconnectBySessionId(sessionId) {
+    return this.#apiRequest('post', `/api/disconnect/session/${sessionId}`);
+  }
+
 
 
 
