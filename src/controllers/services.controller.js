@@ -11,8 +11,14 @@ const SMS_CAMPAIGN_BATCH_DELAY_MS = Number(process.env.SMS_CAMPAIGN_BATCH_DELAY_
 
 function normalizePhone(phone) {
   if (!phone) return null;
-  const cleaned = String(phone).replace(/[^\d+]/g, '').trim();
-  return cleaned.length >= 7 ? cleaned : null;
+  let cleaned = String(phone).replace(/\D/g, '').trim();
+  if (cleaned.length === 13 && cleaned.startsWith('977')) {
+    cleaned = cleaned.slice(3);
+  }
+  if (cleaned.length === 10 && cleaned.startsWith('9')) {
+    return cleaned;
+  }
+  return null;
 }
 
 class ServiceController {
