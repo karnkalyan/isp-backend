@@ -2974,6 +2974,17 @@ class ServiceController {
   async getSSIDDetails(device, serialNumber, client) {
     const ssids = [];
 
+    const getWlanStat = (wlanObj, standardPath, fallbackPath) => {
+      const val = this.extractParameterValue(wlanObj, standardPath);
+      if (val === 'N/A' || val === null || val === undefined || val === '') {
+        const fallbackVal = this.extractParameterValue(wlanObj, fallbackPath);
+        if (fallbackVal !== 'N/A' && fallbackVal !== null && fallbackVal !== undefined && fallbackVal !== '') {
+          return fallbackVal;
+        }
+      }
+      return val;
+    };
+
     // ----- TR-098: InternetGatewayDevice.LANDevice.*.WLANConfiguration.* -----
     if (device?.InternetGatewayDevice?.LANDevice) {
       for (const lanKey of Object.keys(device.InternetGatewayDevice.LANDevice)) {
@@ -3015,10 +3026,10 @@ class ServiceController {
               keyPassphrase: this.extractParameterValue(wlan, 'KeyPassphrase'),
               associatedDeviceCount: this.extractParameterValue(wlan, 'AssociatedDeviceNumberOfEntries'),
               stats: {
-                bytesSent: this.extractParameterValue(wlan, 'Stats.BytesSent'),
-                bytesReceived: this.extractParameterValue(wlan, 'Stats.BytesReceived'),
-                packetsSent: this.extractParameterValue(wlan, 'Stats.PacketsSent'),
-                packetsReceived: this.extractParameterValue(wlan, 'Stats.PacketsReceived'),
+                bytesSent: getWlanStat(wlan, 'Stats.BytesSent', 'TotalBytesSent'),
+                bytesReceived: getWlanStat(wlan, 'Stats.BytesReceived', 'TotalBytesReceived'),
+                packetsSent: getWlanStat(wlan, 'Stats.PacketsSent', 'TotalPacketsSent'),
+                packetsReceived: getWlanStat(wlan, 'Stats.PacketsReceived', 'TotalPacketsReceived'),
               },
               // 🆕 Clean, simple key-value pairs for all parameters
               parameters: this.flattenParameters(allParams)
@@ -3050,10 +3061,10 @@ class ServiceController {
             bssid: this.extractParameterValue(ssidObj, 'BSSID'),
             macAddress: this.extractParameterValue(ssidObj, 'MACAddress'),
             stats: {
-              bytesSent: this.extractParameterValue(ssidObj, 'Stats.BytesSent'),
-              bytesReceived: this.extractParameterValue(ssidObj, 'Stats.BytesReceived'),
-              packetsSent: this.extractParameterValue(ssidObj, 'Stats.PacketsSent'),
-              packetsReceived: this.extractParameterValue(ssidObj, 'Stats.PacketsReceived'),
+              bytesSent: getWlanStat(ssidObj, 'Stats.BytesSent', 'TotalBytesSent'),
+              bytesReceived: getWlanStat(ssidObj, 'Stats.BytesReceived', 'TotalBytesReceived'),
+              packetsSent: getWlanStat(ssidObj, 'Stats.PacketsSent', 'TotalPacketsSent'),
+              packetsReceived: getWlanStat(ssidObj, 'Stats.PacketsReceived', 'TotalPacketsReceived'),
             },
             parameters: this.flattenParameters(allParams)
           });
