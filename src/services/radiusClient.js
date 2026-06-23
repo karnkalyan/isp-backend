@@ -666,6 +666,16 @@ class RadiusClient {
       throw new Error('Username is required for Radius COA');
     }
 
+    const action = options.action || 'disconnect';
+    if (action === 'disconnect') {
+      const sessionId = options.sessionId || options.acctSessionId;
+      if (sessionId) {
+        return this.#apiRequest('post', `/api/disconnect/session/${sessionId}`);
+      } else {
+        return this.#apiRequest('post', `/api/disconnect/${username}`);
+      }
+    }
+
     let activeSession = null;
     if (!options.sessionId && !options.acctSessionId) {
       try {
@@ -680,7 +690,7 @@ class RadiusClient {
 
     const payload = {
       username,
-      action: options.action || 'disconnect',
+      action,
       nasIpAddress: options.nasIpAddress || options.nas || activeSession?.nasipaddress || activeSession?.nasIpAddress || undefined,
       framedIpAddress: options.framedIpAddress || options.framedIp || activeSession?.framedipaddress || activeSession?.framedIpAddress || undefined,
       sessionId: options.sessionId || options.acctSessionId || activeSession?.acctsessionid || activeSession?.acctSessionId || undefined,

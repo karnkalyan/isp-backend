@@ -27,7 +27,13 @@ const {
   changeConnectionUserPassword,
   reprovisionRadius,
   reprovisionNettv,
-  disconnectRadiusSession
+  disconnectRadiusSession,
+  listNasDevices,
+  listActiveSessions,
+  getSessionInfoForUser,
+  disconnectLatestSession,
+  disconnectAllSessions,
+  disconnectBySessionId
 } = require('../controllers/customer.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -114,6 +120,14 @@ module.exports = (prisma) => {
   router.post('/:id/reprovision/radius', checkPermission('customer_update'), reprovisionRadius);
   router.post('/:id/reprovision/nettv', checkPermission('customer_update'), reprovisionNettv);
   router.post('/:id/disconnect-session', checkPermission('customer_update'), disconnectRadiusSession);
+
+  // New Disconnect & Sessions Features (forwarding to FreeRADIUS API server)
+  router.get('/nas-devices', checkPermission('nas_read'), listNasDevices);
+  router.get('/sessions', checkPermission('customer_read'), listActiveSessions);
+  router.get('/sessions/:username', checkPermission('customer_read'), getSessionInfoForUser);
+  router.post('/disconnect/:username', checkPermission('customer_update'), disconnectLatestSession);
+  router.post('/disconnect/:username/all', checkPermission('customer_update'), disconnectAllSessions);
+  router.post('/disconnect/session/:sessionId', checkPermission('customer_update'), disconnectBySessionId);
 
   // Device endpoints
   router.put('/:id/devices/:deviceId', checkPermission('customer_update'), updateCustomerDevice);
