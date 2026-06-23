@@ -3168,14 +3168,44 @@ async function deleteCustomerDevice(req, res, next) {
   }
 }
 
+function eui64ToMac(eui) {
+  if (!eui || typeof eui !== 'string') return null;
+  const hex = eui.replace(/[:-]/g, '').toLowerCase();
+  if (hex.length !== 16) return null;
+  
+  const b0 = parseInt(hex.substring(0, 2), 16);
+  const b1 = hex.substring(2, 4);
+  const b2 = hex.substring(4, 6);
+  const b3 = hex.substring(6, 8);
+  const b4 = hex.substring(8, 10);
+  const b5 = hex.substring(10, 12);
+  const b6 = hex.substring(12, 14);
+  const b7 = hex.substring(14, 16);
+  
+  if (b3 === 'ff' && b4 === 'fe') {
+    const newB0 = (b0 ^ 2).toString(16).padStart(2, '0');
+    return `${newB0}:${b1}:${b2}:${b5}:${b6}:${b7}`;
+  }
+  return null;
+}
+
 function findMacAddress(...values) {
   const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
   for (const val of values) {
     if (val && typeof val === 'string' && macRegex.test(val)) {
-      return val;
+      return val.toUpperCase();
     }
   }
-  return values.find(val => val && val !== 'N/A' && val !== 'NULL') || 'N/A';
+  // Try to find any value that contains a mac-like substring
+  for (const val of values) {
+    if (val && typeof val === 'string') {
+      const cleaned = val.replace(/[:-]/g, '');
+      if (cleaned.length === 12 && /^[0-9A-Fa-f]{12}$/.test(cleaned)) {
+        return cleaned.match(/.{1,2}/g).join(':').toUpperCase();
+      }
+    }
+  }
+  return 'N/A';
 }
 
 async function getCustomerRadiusAuthLogs(req, res, next) {
@@ -3188,6 +3218,9 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
       where: { id: customerId },
       include: {
         connectionUsers: {
+          where: { isDeleted: false }
+        },
+        devices: {
           where: { isDeleted: false }
         }
       }
@@ -3222,6 +3255,9 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
       });
     }
 
+    const ontDevice = customer.devices?.find(d => d.deviceType === 'ONT') || customer.devices?.[0] || null;
+    const deviceMac = ontDevice?.macAddress || ontDevice?.mac || null;
+
     const allLogs = [];
     for (const user of customer.connectionUsers) {
       const username = user.username;
@@ -3231,7 +3267,15 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
         client.getRadacctByUsername(username).catch(() => [])
       ]);
 
-      const enriched = postAuth.map(log => {
+      // Sort and take only the latest Access-Accept and latest Access-Reject
+      const sortedPostAuth = [...postAuth].sort((a, b) => new Date(b.authdate).getTime() - new Date(a.authdate).getTime());
+      const filteredPostAuth = [];
+      const latestAccept = sortedPostAuth.find(log => log.reply === 'Access-Accept');
+      const latestReject = sortedPostAuth.find(log => log.reply === 'Access-Reject');
+      if (latestAccept) filteredPostAuth.push(latestAccept);
+      if (latestReject) filteredPostAuth.push(latestReject);
+
+      const enriched = filteredPostAuth.map(log => {
         const logTime = new Date(log.authdate).getTime();
         
         let matchedSession = null;
@@ -3239,11 +3283,20 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           matchedSession = radAcct.find(session => {
             if (!session.acctstarttime) return false;
             const sessionTime = new Date(session.acctstarttime).getTime();
-            return Math.abs(sessionTime - logTime) <= 15000;
+            const diff = Math.abs(sessionTime - logTime);
+            // Timezone-independent check (modulo 15 minutes)
+            const mod = diff % 900000;
+            return mod <= 30000 || (900000 - mod) <= 30000;
           });
         }
 
-        const mac = findMacAddress(matchedSession?.callingstationid, log.callingstationid, log.mac);
+        const mac = findMacAddress(
+          eui64ToMac(matchedSession?.framedinterfaceid),
+          matchedSession?.callingstationid,
+          log.callingstationid,
+          log.mac,
+          deviceMac
+        );
         const calledId = log.calledstationid || matchedSession?.calledstationid || 'N/A';
         const framedIp = log.framedipaddress || matchedSession?.framedipaddress || 'N/A';
         const nasIp = log.nasipaddress || log.nas || matchedSession?.nasipaddress || 'N/A';
