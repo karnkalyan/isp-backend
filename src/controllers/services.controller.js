@@ -2919,6 +2919,10 @@ class ServiceController {
               mtu: this.extractParameterValue(ipConn, 'MaxMTUSize') || this.extractParameterValue(ipConn, 'InterfaceMtu'),
               name: this.extractParameterValue(ipConn, 'Name'),
               uptime: this.extractParameterValue(ipConn, 'Uptime'),
+              // IPv6 fields
+              ipv6Address: this.extractParameterValue(ipConn, 'X_CT-COM_IPv6IPAddress') || this.extractParameterValue(ipConn, 'X_CMS_IPv6IPAddress') || this.extractParameterValue(ipConn, 'IPv6Address'),
+              ipv6Gateway: this.extractParameterValue(ipConn, 'X_CT-COM_DefaultIPv6Gateway') || this.extractParameterValue(ipConn, 'X_CMS_DefaultIPv6Gateway') || this.extractParameterValue(ipConn, 'IPv6Gateway'),
+              ipv6Prefix: this.extractParameterValue(ipConn, 'X_CT-COM_IPv6Prefix') || this.extractParameterValue(ipConn, 'X_CMS_IPv6Prefix') || this.extractParameterValue(ipConn, 'IPv6Prefix'),
               // Full parameter map
               parameters: allParams
             };
@@ -2956,6 +2960,10 @@ class ServiceController {
               remoteIPAddress: this.extractParameterValue(pppConn, 'RemoteIPAddress'),
               uptime: this.extractParameterValue(pppConn, 'Uptime'),
               transportType: this.extractParameterValue(pppConn, 'TransportType'),
+              // IPv6 fields
+              ipv6Address: this.extractParameterValue(pppConn, 'X_CT-COM_IPv6IPAddress') || this.extractParameterValue(pppConn, 'X_CMS_IPv6IPAddress') || this.extractParameterValue(pppConn, 'IPv6Address'),
+              ipv6Gateway: this.extractParameterValue(pppConn, 'X_CT-COM_DefaultIPv6Gateway') || this.extractParameterValue(pppConn, 'X_CMS_DefaultIPv6Gateway') || this.extractParameterValue(pppConn, 'X_CMS_IPv6DefaultGateway') || this.extractParameterValue(pppConn, 'IPv6Gateway') || this.extractParameterValue(pppConn, 'X_CT-COM_DefaultIPv6Gateway'),
+              ipv6Prefix: this.extractParameterValue(pppConn, 'X_CT-COM_IPv6Prefix') || this.extractParameterValue(pppConn, 'X_CMS_IPv6Prefix') || this.extractParameterValue(pppConn, 'IPv6Prefix'),
               // Full parameter map
               parameters: allParams
             };
