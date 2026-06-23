@@ -1882,23 +1882,32 @@ async function listCustomers(req, res, next) {
     await enrichServiceDetailsWithVlans(req.prisma, customers);
 
     // Flatten lead fields for API consistency
-    const transformed = customers.map(c => ({
-      ...c,
-      firstName: c.lead?.firstName,
-      lastName: c.lead?.lastName,
-      email: c.lead?.email,
-      phoneNumber: c.lead?.phoneNumber,
-      secondaryPhone: c.lead?.secondaryContactNumber,
-      gender: c.lead?.gender,
-      street: c.lead?.street,
-      city: c.lead?.city,
-      district: c.lead?.district,
-      state: c.lead?.province,
-      zipCode: c.lead?.zipCode,
-      address: c.lead?.address,
-      convertedAt: c.lead?.convertedAt,
-      lead: undefined
-    }));
+    const transformed = customers.map(c => {
+      const meta = c.lead?.metadata ? (typeof c.lead.metadata === 'string' ? JSON.parse(c.lead.metadata) : c.lead.metadata) : null;
+      return {
+        ...c,
+        firstName: c.lead?.firstName,
+        middleName: c.lead?.middleName || null,
+        lastName: c.lead?.lastName,
+        email: c.lead?.email,
+        phoneNumber: c.lead?.phoneNumber,
+        secondaryPhone: c.lead?.secondaryContactNumber,
+        secondaryContactNumber: c.lead?.secondaryContactNumber || null,
+        gender: c.lead?.gender,
+        street: c.lead?.street,
+        city: c.lead?.city,
+        district: c.lead?.district,
+        state: c.lead?.province,
+        zipCode: c.lead?.zipCode,
+        address: c.lead?.address,
+        convertedAt: c.lead?.convertedAt,
+        source: c.lead?.source || null,
+        notes: c.lead?.notes || null,
+        age: meta?.age || null,
+        fullAddress: meta?.fullAddress || c.lead?.address || null,
+        lead: undefined
+      };
+    });
 
     return res.json({
       data: transformed,
