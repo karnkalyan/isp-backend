@@ -3220,9 +3220,7 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
         connectionUsers: {
           where: { isDeleted: false }
         },
-        devices: {
-          where: { isDeleted: false }
-        }
+        devices: true
       }
     });
 

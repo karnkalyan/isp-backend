@@ -2974,17 +2974,6 @@ class ServiceController {
   async getSSIDDetails(device, serialNumber, client) {
     const ssids = [];
 
-    const getWlanStat = (wlanObj, standardPath, fallbackPath) => {
-      const val = this.extractParameterValue(wlanObj, standardPath);
-      if (val === 'N/A' || val === null || val === undefined || val === '') {
-        const fallbackVal = this.extractParameterValue(wlanObj, fallbackPath);
-        if (fallbackVal !== 'N/A' && fallbackVal !== null && fallbackVal !== undefined && fallbackVal !== '') {
-          return fallbackVal;
-        }
-      }
-      return val;
-    };
-
     // ----- TR-098: InternetGatewayDevice.LANDevice.*.WLANConfiguration.* -----
     if (device?.InternetGatewayDevice?.LANDevice) {
       for (const lanKey of Object.keys(device.InternetGatewayDevice.LANDevice)) {
@@ -3026,10 +3015,10 @@ class ServiceController {
               keyPassphrase: this.extractParameterValue(wlan, 'KeyPassphrase'),
               associatedDeviceCount: this.extractParameterValue(wlan, 'AssociatedDeviceNumberOfEntries'),
               stats: {
-                bytesSent: getWlanStat(wlan, 'Stats.BytesSent', 'TotalBytesSent'),
-                bytesReceived: getWlanStat(wlan, 'Stats.BytesReceived', 'TotalBytesReceived'),
-                packetsSent: getWlanStat(wlan, 'Stats.PacketsSent', 'TotalPacketsSent'),
-                packetsReceived: getWlanStat(wlan, 'Stats.PacketsReceived', 'TotalPacketsReceived'),
+                bytesSent: this.extractParameterValue(wlan, 'Stats.BytesSent'),
+                bytesReceived: this.extractParameterValue(wlan, 'Stats.BytesReceived'),
+                packetsSent: this.extractParameterValue(wlan, 'Stats.PacketsSent'),
+                packetsReceived: this.extractParameterValue(wlan, 'Stats.PacketsReceived'),
               },
               // 🆕 Clean, simple key-value pairs for all parameters
               parameters: this.flattenParameters(allParams)
@@ -3061,10 +3050,10 @@ class ServiceController {
             bssid: this.extractParameterValue(ssidObj, 'BSSID'),
             macAddress: this.extractParameterValue(ssidObj, 'MACAddress'),
             stats: {
-              bytesSent: getWlanStat(ssidObj, 'Stats.BytesSent', 'TotalBytesSent'),
-              bytesReceived: getWlanStat(ssidObj, 'Stats.BytesReceived', 'TotalBytesReceived'),
-              packetsSent: getWlanStat(ssidObj, 'Stats.PacketsSent', 'TotalPacketsSent'),
-              packetsReceived: getWlanStat(ssidObj, 'Stats.PacketsReceived', 'TotalPacketsReceived'),
+              bytesSent: this.extractParameterValue(ssidObj, 'Stats.BytesSent'),
+              bytesReceived: this.extractParameterValue(ssidObj, 'Stats.BytesReceived'),
+              packetsSent: this.extractParameterValue(ssidObj, 'Stats.PacketsSent'),
+              packetsReceived: this.extractParameterValue(ssidObj, 'Stats.PacketsReceived'),
             },
             parameters: this.flattenParameters(allParams)
           });
@@ -3945,16 +3934,16 @@ class ServiceController {
       const recipients = selectAll
         ? await this.getSmsCampaignRecipients(ispId, recipientType, filters)
         : (Array.isArray(to) ? to : [to]).map((item) => {
-            const rawPhone = typeof item === 'object' && item !== null ? item.phone : item;
-            const recipientId = typeof item === 'object' && item !== null ? item.recipientId : null;
-            const name = typeof item === 'object' && item !== null ? item.name : null;
-            return {
-              recipientId: recipientId ? Number(recipientId) : null,
-              recipientType,
-              name: name || null,
-              phone: normalizePhone(rawPhone)
-            };
-          }).filter((recipient) => recipient.phone);
+          const rawPhone = typeof item === 'object' && item !== null ? item.phone : item;
+          const recipientId = typeof item === 'object' && item !== null ? item.recipientId : null;
+          const name = typeof item === 'object' && item !== null ? item.name : null;
+          return {
+            recipientId: recipientId ? Number(recipientId) : null,
+            recipientType,
+            name: name || null,
+            phone: normalizePhone(rawPhone)
+          };
+        }).filter((recipient) => recipient.phone);
 
       const { unique, skipped } = this.dedupeSmsRecipients(recipients);
 
@@ -4131,7 +4120,7 @@ class ServiceController {
       const page = Math.max(1, Number(req.query.page) || 1);
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 100);
       const { provider } = req.query;
-      const where = { 
+      const where = {
         ispId: Number(req.ispId),
         ...(provider ? { provider: String(provider).toUpperCase() } : {})
       };
