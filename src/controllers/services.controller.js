@@ -1,5 +1,6 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES, SERVICE_CATEGORIES, DEFAULT_CREDENTIALS } = require('../lib/serviceConstants');
+const QRCode = require('qrcode');
 
 const smsCampaignQueue = {
   processing: false,
@@ -21,10 +22,136 @@ function normalizePhone(phone) {
   return null;
 }
 
+function getSsidIndexFromInstance(instance, fallback = 1) {
+  const match = String(instance || '').match(/WLANConfiguration\.(\d+)|WiFi\.SSID\.(\d+)|WiFi\.AccessPoint\.(\d+)/);
+  return Number(match?.[1] || match?.[2] || match?.[3] || fallback || 1);
+}
+
+function firstMeaningful(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '' && value !== 'N/A');
+}
+
+function extractWifiPassword(ssid) {
+  const params = ssid?.parameters || {};
+  const security = ssid?.security || {};
+  return firstMeaningful(
+    ssid?.keyPassphrase,
+    ssid?.KeyPassphrase,
+    ssid?.preSharedKey,
+    ssid?.PreSharedKey,
+    security?.keyPassphrase,
+    security?.KeyPassphrase,
+    security?.preSharedKey,
+    security?.PreSharedKey,
+    params.X_CMS_KeyPassphrase,
+    params.KeyPassphrase,
+    params['PreSharedKey.1.KeyPassphrase'],
+    params['InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.PreSharedKey.1.KeyPassphrase'],
+    params['Device.WiFi.AccessPoint.1.Security.KeyPassphrase'],
+    params['Security.KeyPassphrase']
+  ) || '';
+}
+
+function escapeWifiQrValue(value) {
+  return String(value || '').replace(/([\\;,:"])/g, '\\$1');
+}
+
+function buildWifiQrPayload(ssidName, password) {
+  return `WIFI:T:WPA;S:${escapeWifiQrValue(ssidName)};P:${escapeWifiQrValue(password)};;`;
+}
+
 class ServiceController {
   constructor(prisma) {
     this.prisma = prisma;
     this.scheduleSmsCampaignProcessing(2000);
+  }
+
+  async findCustomerForSerial(serialNumber, req) {
+    if (req?.customerProfile) return req.customerProfile;
+    if (!this.prisma || !serialNumber) return null;
+    return this.prisma.customer.findFirst({
+      where: {
+        ispId: req?.ispId,
+        isDeleted: false,
+        OR: [
+          { devices: { some: { serialNumber } } },
+          { devices: { some: { ponSerial: serialNumber } } }
+        ]
+      },
+      include: {
+        wifiCredentials: true
+      }
+    });
+  }
+
+  async syncWifiCredentialsForCustomer(customer, serialNumber, ssidList) {
+    if (!this.prisma || !customer || !Array.isArray(ssidList)) return [];
+    const synced = [];
+
+    for (const ssid of ssidList) {
+      const ssidIndex = getSsidIndexFromInstance(ssid.instance, ssid.index);
+      const ssidName = ssid.ssid || ssid.SSID || ssid.parameters?.SSID || null;
+      const password = extractWifiPassword(ssid);
+      if (!ssidName && !password) continue;
+
+      const credential = await this.prisma.customerWiFiCredential.upsert({
+        where: {
+          customerId_serialNumber_ssidIndex: {
+            customerId: customer.id,
+            serialNumber,
+            ssidIndex
+          }
+        },
+        update: {
+          instance: ssid.instance || null,
+          ssidName,
+          ...(password ? { password } : {}),
+          source: 'genieacs',
+          ispId: customer.ispId,
+          lastSyncedAt: new Date()
+        },
+        create: {
+          customerId: customer.id,
+          ispId: customer.ispId,
+          serialNumber,
+          ssidIndex,
+          instance: ssid.instance || null,
+          ssidName,
+          password: password || null,
+          source: 'genieacs',
+          lastSyncedAt: new Date()
+        }
+      });
+      synced.push(credential);
+    }
+
+    return synced;
+  }
+
+  async attachStoredWifiCredentials(customer, serialNumber, ssidList) {
+    if (!this.prisma || !customer || !Array.isArray(ssidList)) return ssidList;
+    const credentials = await this.prisma.customerWiFiCredential.findMany({
+      where: { customerId: customer.id, serialNumber },
+    });
+    const byIndex = new Map(credentials.map((item) => [item.ssidIndex, item]));
+
+    return Promise.all(ssidList.map(async (ssid) => {
+      const ssidIndex = getSsidIndexFromInstance(ssid.instance, ssid.index);
+      const stored = byIndex.get(ssidIndex);
+      const password = stored?.password || '';
+      const ssidName = stored?.ssidName || ssid.ssid || ssid.SSID || '';
+      const qrPayload = password ? buildWifiQrPayload(ssidName, password) : '';
+      const qrCodeDataUrl = qrPayload ? await QRCode.toDataURL(qrPayload, { margin: 1, width: 220 }) : null;
+      return {
+        ...ssid,
+        ssidIndex,
+        ssid: ssidName || ssid.ssid,
+        keyPassphrase: password,
+        passwordSource: stored ? 'database' : 'none',
+        qrPayload,
+        qrCodeDataUrl
+      };
+    }));
   }
 
   sendGenieACSError(res, error, fallbackError = 'GenieACS request failed') {
@@ -1965,6 +2092,15 @@ class ServiceController {
       };
 
       // ----- 8. Build the complete response -----
+      const rawSsidList = await this.getSSIDDetails(device, serialNumber, client);
+      const customer = await this.findCustomerForSerial(serialNumber, req);
+      if (customer && Array.isArray(rawSsidList)) {
+        await this.syncWifiCredentialsForCustomer(customer, serialNumber, rawSsidList);
+      }
+      const ssidList = customer && Array.isArray(rawSsidList)
+        ? await this.attachStoredWifiCredentials(customer, serialNumber, rawSsidList)
+        : rawSsidList;
+
       const formattedDevice = {
         id: device._id,
         serialNumber: this.extractParameterValue(device, '_deviceId._SerialNumber'),
@@ -1991,7 +2127,7 @@ class ServiceController {
         lanInterfaces: this.getLANInterfaces(device),
 
         // 📶 WiFi SSID configurations (with clean parameters + refresh)
-        ssidList: await this.getSSIDDetails(device, serialNumber, client),
+        ssidList,
 
         // 🧪 Raw device data only in development
         rawData: process.env.NODE_ENV === "development" ? device : undefined
@@ -3526,10 +3662,59 @@ class ServiceController {
     try {
       const ispId = req.ispId;
       const { serialNumber } = req.params;
-      const { ssidIndex, password, ssidName } = req.body;
+      const { ssidIndex, password, ssidName, instance } = req.body;
+      const resolvedSsidIndex = getSsidIndexFromInstance(instance, ssidIndex);
+      if (!resolvedSsidIndex || Number.isNaN(Number(resolvedSsidIndex))) {
+        return res.status(400).json({ success: false, error: 'Valid SSID index is required.' });
+      }
+      if (!ssidName && !password) {
+        return res.status(400).json({ success: false, error: 'SSID name or password is required.' });
+      }
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
-      const result = await client.updateSpecificSSID(serialNumber, ssidIndex, password, ssidName);
+      const result = await client.updateSpecificSSID(serialNumber, Number(resolvedSsidIndex), password, ssidName);
+
+      const customer = await this.findCustomerForSerial(serialNumber, req);
+      if (customer) {
+        const existing = await this.prisma.customerWiFiCredential.findUnique({
+          where: {
+            customerId_serialNumber_ssidIndex: {
+              customerId: customer.id,
+              serialNumber,
+              ssidIndex: Number(resolvedSsidIndex)
+            }
+          }
+        }).catch(() => null);
+
+        await this.prisma.customerWiFiCredential.upsert({
+          where: {
+            customerId_serialNumber_ssidIndex: {
+              customerId: customer.id,
+              serialNumber,
+              ssidIndex: Number(resolvedSsidIndex)
+            }
+          },
+          update: {
+            ...(ssidName ? { ssidName } : {}),
+            ...(password ? { password } : {}),
+            instance: instance || existing?.instance || null,
+            ispId: customer.ispId,
+            source: 'mobile',
+            lastSyncedAt: new Date()
+          },
+          create: {
+            customerId: customer.id,
+            ispId: customer.ispId,
+            serialNumber,
+            ssidIndex: Number(resolvedSsidIndex),
+            instance: instance || null,
+            ssidName: ssidName || existing?.ssidName || null,
+            password: password || existing?.password || null,
+            source: 'mobile',
+            lastSyncedAt: new Date()
+          }
+        });
+      }
 
       return res.json({ success: true, data: result });
     } catch (error) {

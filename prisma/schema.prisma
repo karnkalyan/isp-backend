@@ -516,6 +516,8 @@ model Customer {
   portalUser            User?                       @relation("CustomerPortalUser")
   orders                CustomerOrderManagement[]
   documents             CustomerDocument[]
+  wifiCredentials       CustomerWiFiCredential[]
+  referrals             CustomerReferral[]
   esewaPayments         ESewaTokenPayment[]
   tickets               Ticket[]
   tasks                 Task[]
@@ -627,6 +629,46 @@ model ConnectionUser {
   updatedAt  DateTime @updatedAt
 
   @@index([branchId])
+}
+
+model CustomerWiFiCredential {
+  id            Int      @id @default(autoincrement())
+  customerId    Int
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ispId         Int?
+  serialNumber  String
+  ssidIndex     Int
+  instance      String?
+  ssidName      String?
+  password      String?
+  source        String?  @default("genieacs")
+  lastSyncedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([customerId, serialNumber, ssidIndex])
+  @@index([serialNumber])
+  @@index([ispId])
+}
+
+model CustomerReferral {
+  id             Int      @id @default(autoincrement())
+  customerId     Int
+  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ispId          Int?
+  friendName     String
+  friendPhone    String
+  friendEmail    String?
+  friendAddress  String?
+  status         String   @default("pending")
+  offerNote      String?  @default("Once approved, both the referrer and friend receive the active referral offer.")
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([ispId])
+  @@index([status])
 }
 
 // ==================== OLT & RELATED MODELS ====================

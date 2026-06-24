@@ -71,11 +71,33 @@ module.exports = (prisma) => {
     }
   }
 
+  async function getPublicIsp(status) {
+    const installedIspId = status?.dbLicense?.installedIspId || Number(process.env.DEFAULT_ISP_ID || 1);
+    const isp = await prisma.iSP.findFirst({
+      where: {
+        ...(installedIspId ? { id: Number(installedIspId) } : {}),
+        isDeleted: false
+      },
+      select: {
+        companyName: true
+      }
+    });
+
+    if (isp) return isp;
+
+    return prisma.iSP.findFirst({
+      where: { isDeleted: false },
+      orderBy: { id: 'asc' },
+      select: { companyName: true }
+    });
+  }
+
   router.get('/status', async (req, res, next) => {
     try {
       const status = await getStatus(prisma);
       const isp = await getRequestIsp(req);
-      res.json({ ...status, isp });
+      const publicIsp = isp || await getPublicIsp(status);
+      res.json({ ...status, isp, publicIsp });
     } catch (error) {
       next(error);
     }

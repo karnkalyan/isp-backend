@@ -42,6 +42,7 @@
     "node-ssh": "^13.2.1",
     "nodemailer": "^8.0.9",
     "pdfkit": "^0.18.0",
+    "qrcode": "^1.5.4",
     "telnet-client": "^2.2.9",
     "uuid": "^11.1.0",
     "ws": "^8.19.0"

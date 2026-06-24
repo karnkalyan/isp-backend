@@ -19,6 +19,10 @@ const {
   getCustomerByPhoneNumber,
   getCustomerStatusSummary,
   getCustomerProfile,
+  uploadCustomerProfilePhoto,
+  changeOwnPortalPassword,
+  listOwnReferrals,
+  createOwnReferral,
   assertCustomerOwnsSerial,
   updateCustomerDevice,
   deleteCustomerDevice,
@@ -55,6 +59,10 @@ module.exports = (prisma) => {
   router.use(isAuthenticated(prisma));
 
   router.get('/profile', getCustomerProfile);
+  router.post('/profile/photo', handleFileUpload, uploadCustomerProfilePhoto);
+  router.put('/profile/password', changeOwnPortalPassword);
+  router.get('/profile/referrals', listOwnReferrals);
+  router.post('/profile/referrals', createOwnReferral);
 
   router.get('/profile/genieacs/:serialNumber/deviceinfo', assertCustomerOwnsSerial, (req, res) => {
     res.set('Cache-Control', 'no-store');

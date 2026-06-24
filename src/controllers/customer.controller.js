@@ -70,6 +70,7 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
         subscribedPkg: { include: { packagePlanDetails: true } },
         packagePrice: { include: { packagePlanDetails: true } },
         connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+        portalUser: { select: { id: true, email: true, name: true, profilePicture: true } },
         devices: { orderBy: { createdAt: 'desc' } },
         serviceDetails: true,
         documents: {
@@ -99,6 +100,13 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
           where: { isDeleted: false },
           orderBy: { createdAt: 'desc' },
           take: 10,
+        },
+        wifiCredentials: {
+          orderBy: { ssidIndex: 'asc' },
+        },
+        referrals: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
         },
         ...extraInclude,
       }
@@ -133,6 +141,7 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
           subscribedPkg: { include: { packagePlanDetails: true } },
           packagePrice: { include: { packagePlanDetails: true } },
           connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+          portalUser: { select: { id: true, email: true, name: true, profilePicture: true } },
           devices: { orderBy: { createdAt: 'desc' } },
           serviceDetails: true,
           documents: {
@@ -162,6 +171,13 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
             where: { isDeleted: false },
             orderBy: { createdAt: 'desc' },
             take: 10,
+          },
+          wifiCredentials: {
+            orderBy: { ssidIndex: 'asc' },
+          },
+          referrals: {
+            orderBy: { createdAt: 'desc' },
+            take: 20,
           },
           ...extraInclude,
         }
@@ -189,6 +205,7 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
           subscribedPkg: { include: { packagePlanDetails: true } },
           packagePrice: { include: { packagePlanDetails: true } },
           connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+          portalUser: { select: { id: true, email: true, name: true, profilePicture: true } },
           devices: { orderBy: { createdAt: 'desc' } },
           serviceDetails: true,
           documents: {
@@ -218,6 +235,13 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
             where: { isDeleted: false },
             orderBy: { createdAt: 'desc' },
             take: 10,
+          },
+          wifiCredentials: {
+            orderBy: { ssidIndex: 'asc' },
+          },
+          referrals: {
+            orderBy: { createdAt: 'desc' },
+            take: 20,
           },
           ...extraInclude,
         }
@@ -256,6 +280,7 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
       subscribedPkg: { include: { packagePlanDetails: true } },
       packagePrice: { include: { packagePlanDetails: true } },
       connectionUsers: { where: { isDeleted: false }, orderBy: { createdAt: 'desc' } },
+      portalUser: { select: { id: true, email: true, name: true, profilePicture: true } },
       devices: { orderBy: { createdAt: 'desc' } },
       serviceDetails: true,
       documents: {
@@ -285,6 +310,13 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
         where: { isDeleted: false },
         orderBy: { createdAt: 'desc' },
         take: 10,
+      },
+      wifiCredentials: {
+        orderBy: { ssidIndex: 'asc' },
+      },
+      referrals: {
+        orderBy: { createdAt: 'desc' },
+        take: 20,
       },
       ...extraInclude,
     },
@@ -3046,6 +3078,167 @@ async function uploadCustomerDocuments(req, res, next) {
   }
 }
 
+async function uploadCustomerProfilePhoto(req, res, next) {
+  try {
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer profile not found" });
+    }
+
+    const photo = req.files?.photo?.[0];
+    if (!photo) {
+      return res.status(400).json({ success: false, error: "Photo file is required" });
+    }
+
+    const profilePicture = `/uploads/customers/documents/${path.basename(photo.path)}`;
+    const portalUserId = req.user?.id || customer.portalUser?.id;
+    if (portalUserId) {
+      await req.prisma.user.update({
+        where: { id: portalUserId },
+        data: { profilePicture }
+      });
+    }
+
+    await req.prisma.customerDocument.upsert({
+      where: {
+        customerId_documentType: {
+          customerId: customer.id,
+          documentType: 'profilePhoto'
+        }
+      },
+      update: {
+        fileName: photo.originalname,
+        filePath: photo.path,
+        mimeType: photo.mimetype,
+        size: photo.size,
+        uploadedAt: new Date(),
+        isDeleted: false,
+        ispId: customer.ispId,
+        branchId: customer.branchId
+      },
+      create: {
+        customerId: customer.id,
+        documentType: 'profilePhoto',
+        fileName: photo.originalname,
+        filePath: photo.path,
+        mimeType: photo.mimetype,
+        size: photo.size,
+        ispId: customer.ispId,
+        branchId: customer.branchId
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: "Profile image uploaded successfully",
+      data: { profilePicture }
+    });
+  } catch (err) {
+    console.error("uploadCustomerProfilePhoto error:", err);
+    return next(err);
+  }
+}
+
+async function changeOwnPortalPassword(req, res, next) {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ success: false, error: "Current password, new password and confirm password are required." });
+    }
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, error: "New password must be at least 8 characters." });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, error: "New password and confirm password do not match." });
+    }
+
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer profile not found" });
+    }
+
+    const user = await req.prisma.user.findFirst({
+      where: {
+        id: req.user?.id,
+        customerId: customer.id,
+        ispId: req.ispId,
+        isDeleted: false
+      }
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, error: "Portal user not found." });
+    }
+
+    const isCurrentValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isCurrentValid) {
+      return res.status(400).json({ success: false, error: "Current password is incorrect." });
+    }
+
+    await req.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(newPassword, 10) }
+    });
+
+    return res.json({ success: true, message: "Login password changed successfully." });
+  } catch (err) {
+    console.error("changeOwnPortalPassword error:", err);
+    return next(err);
+  }
+}
+
+async function listOwnReferrals(req, res, next) {
+  try {
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer profile not found" });
+    }
+    const referrals = await req.prisma.customerReferral.findMany({
+      where: { customerId: customer.id, ispId: req.ispId },
+      orderBy: { createdAt: 'desc' }
+    });
+    return res.json({ success: true, data: referrals });
+  } catch (err) {
+    console.error("listOwnReferrals error:", err);
+    return next(err);
+  }
+}
+
+async function createOwnReferral(req, res, next) {
+  try {
+    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer profile not found" });
+    }
+
+    const friendName = String(req.body.friendName || req.body.name || '').trim();
+    const friendPhone = String(req.body.friendPhone || req.body.phone || '').trim();
+    const friendEmail = String(req.body.friendEmail || req.body.email || '').trim();
+    const friendAddress = String(req.body.friendAddress || req.body.address || '').trim();
+
+    if (!friendName || !friendPhone) {
+      return res.status(400).json({ success: false, error: "Friend name and phone are required." });
+    }
+
+    const referral = await req.prisma.customerReferral.create({
+      data: {
+        customerId: customer.id,
+        ispId: req.ispId,
+        friendName,
+        friendPhone,
+        friendEmail: friendEmail || null,
+        friendAddress: friendAddress || null,
+        status: 'pending',
+        offerNote: 'Once approved, both the referrer and friend receive the active referral offer.'
+      }
+    });
+
+    return res.status(201).json({ success: true, message: "Referral submitted for approval.", data: referral });
+  } catch (err) {
+    console.error("createOwnReferral error:", err);
+    return next(err);
+  }
+}
+
 /**
  * Get customer status summary
  */
@@ -3711,6 +3904,10 @@ module.exports = {
   downloadDocument,
   deleteDocument,
   uploadCustomerDocuments,
+  uploadCustomerProfilePhoto,
+  changeOwnPortalPassword,
+  listOwnReferrals,
+  createOwnReferral,
   getCustomerStatusSummary,
   updateCustomerDevice,
   deleteCustomerDevice,
