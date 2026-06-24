@@ -860,28 +860,51 @@ async function getAsteriskLogsReport(req, res, next) {
 
 async function getSmsLogsReport(req, res, next) {
     try {
+        const { status, startDate, endDate } = req.query;
+
+        const where = {
+            campaign: { ispId: req.ispId }
+        };
+
+        if (status && status !== 'ALL') {
+            where.status = status;
+        }
+
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate) {
+                where.createdAt.gte = new Date(startDate);
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                where.createdAt.lte = end;
+            }
+        }
+
         const logs = await req.prisma.smsCampaignLog.findMany({
-            where: { campaign: { ispId: req.ispId } },
+            where,
             include: { campaign: { select: { provider: true, recipientType: true, status: true } } },
-            orderBy: { createdAt: 'desc' },
-            take: 1000
+            orderBy: { createdAt: 'desc' }
         });
         const data = logs.map(log => ({
             id: log.id,
-            provider: log.campaign?.provider || '',
+            provider: log.provider || log.campaign?.provider || '',
             recipient: log.phone || '',
+            name: log.name || '',
             status: log.status,
-            message: log.campaign?.recipientType || log.recipientType || '',
+            message: log.recipientType || log.campaign?.recipientType || '',
             error: log.errorMessage || '',
             createdAt: log.createdAt?.toLocaleString()
         }));
         return exportRows(req, res, 'SMS Logs Report', 'sms_logs_report', data, {
             id: 'ID',
             provider: 'Provider',
-            recipient: 'Recipient',
+            recipient: 'Recipient Phone',
+            name: 'Recipient Name',
             status: 'Status',
-            message: 'Message',
-            error: 'Error',
+            message: 'Recipient Type',
+            error: 'Error Message',
             createdAt: 'Created At'
         });
     } catch (err) {
