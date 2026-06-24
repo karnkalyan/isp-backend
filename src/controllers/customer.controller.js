@@ -3626,10 +3626,20 @@ async function disconnectLatestSession(req, res, next) {
   try {
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
     const result = await client.disconnectUser(username);
-    return res.json(result);
+    return res.json({ success: true, ...result });
   } catch (error) {
     console.error(`Error disconnecting latest session for user ${username}:`, error);
-    return res.status(500).json({ success: false, error: error.message });
+    const message = error.message || 'Disconnect failed';
+    const radiusData = error.responseData || null;
+    const isUpstreamError = message.includes('Disconnect failed') || message.includes('ERROR');
+    return res.status(isUpstreamError ? 502 : 500).json({ 
+      success: false, 
+      error: message,
+      detail: isUpstreamError ? 'The NAS/BRAS did not respond to the disconnect request. The session may have already ended or the NAS is unreachable.' : undefined,
+      nas: radiusData?.nas || undefined,
+      nasIp: radiusData?.nas_ip || undefined,
+      username: radiusData?.username || username
+    });
   }
 }
 
@@ -3638,10 +3648,20 @@ async function disconnectAllSessions(req, res, next) {
   try {
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
     const result = await client.disconnectAllSessions(username);
-    return res.json(result);
+    return res.json({ success: true, ...result });
   } catch (error) {
     console.error(`Error disconnecting all sessions for user ${username}:`, error);
-    return res.status(500).json({ success: false, error: error.message });
+    const message = error.message || 'Disconnect failed';
+    const radiusData = error.responseData || null;
+    const isUpstreamError = message.includes('Disconnect failed') || message.includes('ERROR');
+    return res.status(isUpstreamError ? 502 : 500).json({ 
+      success: false, 
+      error: message,
+      detail: isUpstreamError ? 'The NAS/BRAS did not respond to the disconnect request.' : undefined,
+      nas: radiusData?.nas || undefined,
+      nasIp: radiusData?.nas_ip || undefined,
+      username: radiusData?.username || username
+    });
   }
 }
 
@@ -3650,10 +3670,21 @@ async function disconnectBySessionId(req, res, next) {
   try {
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
     const result = await client.disconnectBySessionId(sessionId);
-    return res.json(result);
+    return res.json({ success: true, ...result });
   } catch (error) {
     console.error(`Error disconnecting session ${sessionId}:`, error);
-    return res.status(500).json({ success: false, error: error.message });
+    const message = error.message || 'Disconnect failed';
+    const radiusData = error.responseData || null;
+    const isUpstreamError = message.includes('Disconnect failed') || message.includes('ERROR');
+    return res.status(isUpstreamError ? 502 : 500).json({ 
+      success: false, 
+      error: message,
+      detail: isUpstreamError ? 'The NAS/BRAS did not respond to the disconnect request. The session may have already ended or the NAS is unreachable.' : undefined,
+      nas: radiusData?.nas || undefined,
+      nasIp: radiusData?.nas_ip || undefined,
+      username: radiusData?.username || undefined,
+      sessionId: radiusData?.session_id || sessionId
+    });
   }
 }
 

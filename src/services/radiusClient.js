@@ -243,7 +243,10 @@ class RadiusClient {
         return this.#apiRequest(method, endpoint, data, false);
       }
 
-      throw new Error(error.response?.data?.message || error.message);
+      const err = new Error(error.response?.data?.message || error.message);
+      err.responseData = error.response?.data || null;
+      err.responseStatus = error.response?.status || null;
+      throw err;
     }
   }
 
