@@ -4279,19 +4279,68 @@ class ServiceController {
         ...(status && status !== 'all' ? { status: String(status) } : {})
       };
 
-      const [rows, total] = await Promise.all([
+      const [rows, total, sentCount, failedCount, skippedCount, queuedCount, errorCount] = await Promise.all([
         this.prisma.smsCampaignLog.findMany({
           where,
           orderBy: { id: 'asc' },
           skip: (page - 1) * limit,
           take: limit
         }),
-        this.prisma.smsCampaignLog.count({ where })
+        this.prisma.smsCampaignLog.count({ where }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId, status: 'sent' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId, status: 'failed' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId, status: 'skipped' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId, status: 'queued' } }),
+        this.prisma.smsCampaignLog.count({ where: { campaignId, status: 'error' } })
       ]);
 
-      return res.json({ success: true, data: rows, campaign, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+      const statusCounts = { sent: sentCount, failed: failedCount, skipped: skippedCount, queued: queuedCount, error: errorCount, total: sentCount + failedCount + skippedCount + queuedCount + errorCount };
+
+      return res.json({ success: true, data: rows, campaign, statusCounts, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Failed to load SMS campaign logs', message: error.message });
+    }
+  }
+
+  async exportSmsCampaignLogs(req, res) {
+    try {
+      const campaignId = Number(req.params.id);
+      const status = req.query.status;
+
+      const campaign = await this.prisma.smsCampaign.findFirst({
+        where: { id: campaignId, ispId: Number(req.ispId) }
+      });
+      if (!campaign) {
+        return res.status(404).json({ success: false, error: 'SMS campaign not found' });
+      }
+
+      const where = {
+        campaignId,
+        ...(status && status !== 'all' ? { status: String(status) } : {})
+      };
+
+      const rows = await this.prisma.smsCampaignLog.findMany({
+        where,
+        orderBy: { id: 'asc' }
+      });
+
+      const csvHeader = 'Phone,Name,Status,Error,Sent At';
+      const csvRows = rows.map(row => {
+        const phone = row.phone || '';
+        const name = (row.name || '').replace(/"/g, '""');
+        const logStatus = row.status || '';
+        const error = (row.errorMessage || '').replace(/"/g, '""');
+        const sentAt = row.sentAt ? new Date(row.sentAt).toLocaleString() : '';
+        return `${phone},"${name}",${logStatus},"${error}","${sentAt}"`;
+      });
+
+      const csv = [csvHeader, ...csvRows].join('\n');
+      const statusLabel = status && status !== 'all' ? `_${status}` : '';
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="campaign_${campaignId}${statusLabel}_logs.csv"`);
+      return res.send(csv);
+    } catch (error) {
+      return res.status(500).json({ success: false, error: 'Failed to export SMS campaign logs', message: error.message });
     }
   }
 
