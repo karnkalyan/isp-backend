@@ -248,9 +248,34 @@ const getAllLeads = async (req, res, next) => {
       })
     ]);
 
+    const leadIds = rows.map(r => r.id);
+    const sentSmsLeadIds = new Set();
+    if (leadIds.length > 0) {
+      const sentSmsLogs = await req.prisma.smsCampaignLog.findMany({
+        where: {
+          recipientType: 'lead',
+          recipientId: { in: leadIds },
+          status: 'sent'
+        },
+        select: {
+          recipientId: true
+        }
+      });
+      sentSmsLogs.forEach(log => {
+        if (log.recipientId) {
+          sentSmsLeadIds.add(log.recipientId);
+        }
+      });
+    }
+
+    const rowsWithSmsStatus = rows.map(row => ({
+      ...row,
+      smsSent: sentSmsLeadIds.has(row.id)
+    }));
+
     return res.status(200).json({
       success: true,
-      data: rows,
+      data: rowsWithSmsStatus,
       pagination: {
         currentPage: fetchAll ? 1 : parsedPage,
         totalPages: fetchAll ? 1 : Math.ceil(count / parsedLimit),
