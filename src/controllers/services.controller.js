@@ -3958,7 +3958,7 @@ class ServiceController {
     if (recipientType === 'lead') {
       const leads = await this.prisma.lead.findMany({
         where: this.buildSmsLeadWhere(ispId, filters),
-        select: { id: true, firstName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true },
+        select: { id: true, firstName: true, middleName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true },
         orderBy: { createdAt: 'desc' }
       });
 
@@ -3969,7 +3969,7 @@ class ServiceController {
         return {
           recipientId: lead.id,
           recipientType: 'lead',
-          name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || null,
+          name: [lead.firstName, lead.middleName, lead.lastName].filter(Boolean).join(' ').trim() || null,
           phone: finalPhone
         };
       }).filter((recipient) => recipient.phone);
@@ -3979,7 +3979,7 @@ class ServiceController {
       where: this.buildSmsCustomerWhere(ispId, filters),
       select: {
         id: true,
-        lead: { select: { firstName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true } }
+        lead: { select: { firstName: true, middleName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true } }
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -3991,7 +3991,7 @@ class ServiceController {
       return {
         recipientId: customer.id,
         recipientType: 'customer',
-        name: `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || null,
+        name: customer.lead ? [customer.lead.firstName, customer.lead.middleName, customer.lead.lastName].filter(Boolean).join(' ').trim() : null,
         phone: finalPhone
       };
     }).filter((recipient) => recipient.phone);

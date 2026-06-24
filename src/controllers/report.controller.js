@@ -734,6 +734,9 @@ async function getLeadsReport(req, res, next) {
         });
         const data = leads.map(lead => ({
             id: lead.id,
+            firstName: lead.firstName || '',
+            middleName: lead.middleName || '',
+            lastName: lead.lastName || '',
             name: [lead.firstName, lead.middleName, lead.lastName].filter(Boolean).join(' '),
             phone: lead.phoneNumber || '',
             email: lead.email || '',
@@ -745,6 +748,9 @@ async function getLeadsReport(req, res, next) {
         }));
         return exportRows(req, res, 'Leads Report', 'leads_report', data, {
             id: 'Lead ID',
+            firstName: 'First Name',
+            middleName: 'Middle Name',
+            lastName: 'Last Name',
             name: 'Name',
             phone: 'Phone',
             email: 'Email',
@@ -770,12 +776,15 @@ async function getCustomersReport(req, res, next) {
         };
         const customers = await req.prisma.customer.findMany({
             where,
-            include: { branch: { select: { name: true } }, lead: { select: { firstName: true, lastName: true, email: true, phoneNumber: true } }, connectionUsers: { where: { isDeleted: false } } },
+            include: { branch: { select: { name: true } }, lead: { select: { firstName: true, middleName: true, lastName: true, email: true, phoneNumber: true } }, connectionUsers: { where: { isDeleted: false } } },
             orderBy: { createdAt: 'desc' }
         });
         const data = customers.map(customer => ({
             id: customer.customerUniqueId || customer.id,
-            name: customer.lead ? [customer.lead.firstName, customer.lead.lastName].filter(Boolean).join(' ') : `Customer ${customer.id}`,
+            firstName: customer.lead?.firstName || '',
+            middleName: customer.lead?.middleName || '',
+            lastName: customer.lead?.lastName || '',
+            name: customer.lead ? [customer.lead.firstName, customer.lead.middleName, customer.lead.lastName].filter(Boolean).join(' ') : `Customer ${customer.id}`,
             username: customer.connectionUsers?.map(user => user.username).join(', ') || '',
             phone: customer.lead?.phoneNumber || '',
             email: customer.lead?.email || '',
@@ -785,6 +794,9 @@ async function getCustomersReport(req, res, next) {
         }));
         return exportRows(req, res, 'Customers Report', 'customers_report', data, {
             id: 'Customer ID',
+            firstName: 'First Name',
+            middleName: 'Middle Name',
+            lastName: 'Last Name',
             name: 'Name',
             username: 'Radius Username',
             phone: 'Phone',
@@ -860,7 +872,7 @@ async function getAsteriskLogsReport(req, res, next) {
 
 async function getSmsLogsReport(req, res, next) {
     try {
-        const { status, startDate, endDate } = req.query;
+        const { status, startDate, endDate, userId } = req.query;
 
         const where = {
             campaign: { ispId: req.ispId }
@@ -882,26 +894,130 @@ async function getSmsLogsReport(req, res, next) {
             }
         }
 
+        if (userId && userId !== 'ALL') {
+            const parsedUserId = parseInt(userId);
+            // Fetch all lead IDs assigned to this user
+            const userLeads = await req.prisma.lead.findMany({
+                where: { assignedUserId: parsedUserId, isDeleted: false, ispId: req.ispId },
+                select: { id: true }
+            });
+            const leadIds = userLeads.map(l => l.id);
+
+            // Fetch all customer IDs whose leads are assigned to this user
+            const userCustomers = await req.prisma.customer.findMany({
+                where: { lead: { assignedUserId: parsedUserId }, isDeleted: false, ispId: req.ispId },
+                select: { id: true }
+            });
+            const customerIds = userCustomers.map(c => c.id);
+
+            where.OR = [
+                { recipientType: 'lead', recipientId: { in: leadIds } },
+                { recipientType: 'customer', recipientId: { in: customerIds } }
+            ];
+        }
+
         const logs = await req.prisma.smsCampaignLog.findMany({
             where,
             include: { campaign: { select: { provider: true, recipientType: true, status: true } } },
             orderBy: { createdAt: 'desc' }
         });
-        const data = logs.map(log => ({
-            id: log.id,
-            provider: log.provider || log.campaign?.provider || '',
-            recipient: log.phone || '',
-            name: log.name || '',
-            status: log.status,
-            message: log.recipientType || log.campaign?.recipientType || '',
-            error: log.errorMessage || '',
-            createdAt: log.createdAt?.toLocaleString()
-        }));
-        return exportRows(req, res, 'SMS Logs Report', 'sms_logs_report', data, {
+
+        // Fetch lead and customer details to find middle names and assigned users
+        const leadIds = logs.filter(l => l.recipientType === 'lead' && l.recipientId).map(l => l.recipientId);
+        const customerIds = logs.filter(l => l.recipientType === 'customer' && l.recipientId).map(l => l.recipientId);
+
+        const [leads, customers] = await Promise.all([
+            req.prisma.lead.findMany({
+                where: { id: { in: leadIds } },
+                select: {
+                    id: true,
+                    firstName: true,
+                    middleName: true,
+                    lastName: true,
+                    assignedUser: { select: { name: true } }
+                }
+            }),
+            req.prisma.customer.findMany({
+                where: { id: { in: customerIds } },
+                select: {
+                    id: true,
+                    lead: {
+                        select: {
+                            firstName: true,
+                            middleName: true,
+                            lastName: true,
+                            assignedUser: { select: { name: true } }
+                        }
+                    }
+                }
+            })
+        ]);
+
+        const leadMap = new Map(leads.map(l => [l.id, l]));
+        const customerMap = new Map(customers.map(c => [c.id, c]));
+
+        const data = logs.map(log => {
+            let firstName = '';
+            let middleName = '';
+            let lastName = '';
+            let assignedUser = 'Unassigned';
+
+            if (log.recipientType === 'lead') {
+                const lead = leadMap.get(log.recipientId);
+                if (lead) {
+                    firstName = lead.firstName || '';
+                    middleName = lead.middleName || '';
+                    lastName = lead.lastName || '';
+                    assignedUser = lead.assignedUser?.name || 'Unassigned';
+                }
+            } else if (log.recipientType === 'customer') {
+                const customer = customerMap.get(log.recipientId);
+                if (customer && customer.lead) {
+                    firstName = customer.lead.firstName || '';
+                    middleName = customer.lead.middleName || '';
+                    lastName = customer.lead.lastName || '';
+                    assignedUser = customer.lead.assignedUser?.name || 'Unassigned';
+                }
+            }
+
+            const constructedName = [firstName, middleName, lastName].filter(Boolean).join(' ') || log.name || '';
+
+            return {
+                id: log.id,
+                provider: log.provider || log.campaign?.provider || '',
+                recipient: log.phone || '',
+                firstName: firstName || log.name?.split(' ')[0] || '',
+                middleName: middleName,
+                lastName: lastName || log.name?.split(' ').slice(1).join(' ') || '',
+                name: constructedName,
+                assignedTo: assignedUser,
+                status: log.status,
+                message: log.recipientType || log.campaign?.recipientType || '',
+                error: log.errorMessage || '',
+                createdAt: log.createdAt?.toLocaleString()
+            };
+        });
+
+        let reportTitle = 'SMS Logs Report';
+        if (userId && userId !== 'ALL') {
+            const user = await req.prisma.user.findUnique({
+                where: { id: parseInt(userId) },
+                select: { name: true }
+            });
+            if (user) {
+                reportTitle += ` - Filtered by Assigned User: ${user.name}`;
+            }
+        }
+
+        return exportRows(req, res, reportTitle, 'sms_logs_report', data, {
             id: 'ID',
             provider: 'Provider',
             recipient: 'Recipient Phone',
+            firstName: 'First Name',
+            middleName: 'Middle Name',
+            lastName: 'Last Name',
             name: 'Recipient Name',
+            assignedTo: 'Assigned User',
             status: 'Status',
             message: 'Recipient Type',
             error: 'Error Message',

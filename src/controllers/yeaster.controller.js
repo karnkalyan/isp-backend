@@ -1407,6 +1407,42 @@ class YeastarController {
     }
   }
 
+  async saveActiveCallNote(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { callid, note } = req.body;
+
+      if (!callid) {
+        return res.status(400).json({
+          success: false,
+          error: 'Call ID is required'
+        });
+      }
+
+      const activeCall = await this.prisma.yeastarActiveCall.upsert({
+        where: { callid },
+        update: { note },
+        create: {
+          ispId,
+          callid,
+          channelid: '',
+          status: 'active',
+          note
+        }
+      });
+
+      res.json({
+        success: true,
+        data: activeCall
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
   async getMyExtensionCallStatus(req, res) {
     try {
       res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -1424,6 +1460,36 @@ class YeastarController {
 
       const service = await YeastarService.create(ispId, this.prisma);
       const result = await service.getExtensionCallStatus(assignedExtension);
+
+      if (result.success && result.data && Array.isArray(result.data.calllist)) {
+        const callIds = [];
+        result.data.calllist.forEach(ext => {
+          if (Array.isArray(ext.numbercalls)) {
+            ext.numbercalls.forEach(call => {
+              if (call.callid) callIds.push(call.callid);
+            });
+          }
+        });
+
+        if (callIds.length > 0) {
+          const dbCalls = await this.prisma.yeastarActiveCall.findMany({
+            where: { callid: { in: callIds } },
+            select: { callid: true, note: true }
+          });
+          const noteMap = {};
+          dbCalls.forEach(c => {
+            noteMap[c.callid] = c.note;
+          });
+
+          result.data.calllist = result.data.calllist.map(ext => ({
+            ...ext,
+            numbercalls: ext.numbercalls.map(call => ({
+              ...call,
+              note: noteMap[call.callid] || ''
+            }))
+          }));
+        }
+      }
 
       res.json({
         ...result,

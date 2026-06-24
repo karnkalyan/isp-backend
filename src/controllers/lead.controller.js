@@ -198,6 +198,7 @@ const getAllLeads = async (req, res, next) => {
               { lastName: { contains: term } },
               { email: { contains: term } },
               { phoneNumber: { contains: term } },
+              { secondaryContactNumber: { contains: term } },
               { middleName: { contains: term } },
               { district: { contains: term } },
               { province: { contains: term } },

@@ -105,6 +105,9 @@ module.exports = (prisma) => {
   router.get('/calls/my-extension', checkPermission('yeaster_read'), (req, res) =>
     controller.getMyExtensionCallStatus(req, res));
 
+  router.post('/calls/active/note', (req, res) =>
+    controller.saveActiveCallNote(req, res));
+
   router.get('/calls/active', checkPermission('yeaster_read'), (req, res) =>
     controller.getActiveCalls(req, res));
 
