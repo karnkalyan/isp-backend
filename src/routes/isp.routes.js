@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const {
   createIsp,
+  getPublicIspInfo,
   activeIsp,
   updateActiveIsp,
   updateActiveIspBranding,
@@ -62,6 +63,8 @@ module.exports = (prisma) => {
     req.prisma = prisma;
     next();
   });
+
+  router.get('/public', getPublicIspInfo);
 
   // Example of how auth middleware would be used
   router.use(isAuthenticated(prisma));

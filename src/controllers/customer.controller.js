@@ -1,5 +1,5 @@
 // src/controllers/customerController.js
-const { getBranchFilter } = require('../utils/branchHelper');
+const { getBranchFilter, getAllSubBranchIds } = require('../utils/branchHelper');
 const { logAudit } = require('../utils/auditLogger');
 const multer = require('multer');
 const path = require('path');
@@ -50,6 +50,40 @@ const upload = multer({
 // Helper functions
 // ----------------------------------------------------------------------
 
+function normalizeUploadPath(filePath) {
+  if (!filePath) return null;
+  const normalized = String(filePath).replace(/\\/g, '/');
+  const uploadsIndex = normalized.indexOf('uploads/');
+  if (uploadsIndex >= 0) return `/${normalized.slice(uploadsIndex)}`;
+  return null;
+}
+
+function enrichCustomerDocument(doc) {
+  if (!doc) return doc;
+  const previewUrl = normalizeUploadPath(doc.filePath);
+  const isInlinePreview = /^image\//i.test(doc.mimeType || '') || String(doc.mimeType || '').toLowerCase() === 'application/pdf';
+
+  return {
+    ...doc,
+    filePath: undefined,
+    previewUrl,
+    canPreviewInline: Boolean(previewUrl && isInlinePreview),
+    downloadUrl: `/customer/${doc.customerId}/documents/${doc.id}/download`,
+  };
+}
+
+function enrichCustomerDocuments(docs = []) {
+  return Array.isArray(docs) ? docs.map(enrichCustomerDocument) : [];
+}
+
+function enrichCustomerDocumentFields(customer) {
+  if (!customer || !Array.isArray(customer.documents)) return customer;
+  return {
+    ...customer,
+    documents: enrichCustomerDocuments(customer.documents),
+  };
+}
+
 async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) {
   const email = req.user?.email;
   if (!email) return null;
@@ -80,9 +114,11 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
             id: true,
             documentType: true,
             fileName: true,
+            filePath: true,
             mimeType: true,
             size: true,
             uploadedAt: true,
+            customerId: true,
           },
         },
         customerSubscriptions: {
@@ -151,9 +187,11 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
               id: true,
               documentType: true,
               fileName: true,
+              filePath: true,
               mimeType: true,
               size: true,
               uploadedAt: true,
+              customerId: true,
             },
           },
           customerSubscriptions: {
@@ -215,9 +253,11 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
               id: true,
               documentType: true,
               fileName: true,
+              filePath: true,
               mimeType: true,
               size: true,
               uploadedAt: true,
+              customerId: true,
             },
           },
           customerSubscriptions: {
@@ -290,9 +330,11 @@ async function findCustomerForAuthenticatedUser(prisma, req, extraInclude = {}) 
           id: true,
           documentType: true,
           fileName: true,
+          filePath: true,
           mimeType: true,
           size: true,
           uploadedAt: true,
+          customerId: true,
         },
       },
       customerSubscriptions: {
@@ -1466,7 +1508,7 @@ async function getRealtimeNetworkStatus(prisma, customer) {
 
 async function getCustomerProfile(req, res, next) {
   try {
-    const customer = await findCustomerForAuthenticatedUser(req.prisma, req);
+    const customer = enrichCustomerDocumentFields(await findCustomerForAuthenticatedUser(req.prisma, req));
     if (!customer) {
       return res.status(404).json({
         success: false,
@@ -2027,7 +2069,7 @@ async function getCustomerById(req, res, next) {
 
     // Flatten lead fields
     const response = {
-      ...customer,
+      ...enrichCustomerDocumentFields(customer),
       devices: enrichedDevices,
       portalUser,
       inventoryItems,
@@ -2120,7 +2162,7 @@ async function getCustomerByPhoneNumber(req, res, next) {
 
     // Flatten lead
     const response = {
-      ...customer,
+      ...enrichCustomerDocumentFields(customer),
       firstName: customer.lead?.firstName,
       lastName: customer.lead?.lastName,
       middleName: customer.lead?.middleName,
@@ -2997,7 +3039,7 @@ async function getCustomerDocuments(req, res, next) {
       where: { customerId, isDeleted: false, ispId: req.ispId },
       orderBy: { uploadedAt: 'desc' }
     });
-    return res.json(documents);
+    return res.json(enrichCustomerDocuments(documents));
   } catch (err) {
     console.error("getCustomerDocuments error:", err);
     return next(err);
@@ -3021,6 +3063,12 @@ async function downloadDocument(req, res, next) {
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "File not found on server" });
     }
+    if (req.query.inline === '1' || req.query.disposition === 'inline') {
+      res.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.fileName)}"`);
+      return res.sendFile(path.resolve(filePath));
+    }
+
     res.download(filePath, document.fileName);
   } catch (err) {
     console.error("downloadDocument error:", err);
@@ -3858,6 +3906,124 @@ async function disconnectAllSessions(req, res, next) {
   }
 }
 
+async function disconnectBranchSessions(req, res, next) {
+  const branchId = Number(req.params.branchId);
+  if (isNaN(branchId)) return res.status(400).json({ success: false, error: 'Invalid branch ID' });
+
+  try {
+    const branch = await req.prisma.branch.findFirst({
+      where: { id: branchId, ispId: req.ispId, isDeleted: false },
+      select: { id: true, name: true }
+    });
+    if (!branch) return res.status(404).json({ success: false, error: 'Branch not found' });
+
+    if (req.branchId) {
+      const allowedBranchIds = await getAllSubBranchIds(req.prisma, Number(req.branchId));
+      if (!allowedBranchIds.includes(branchId)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied: You do not have permission for this branch'
+        });
+      }
+    }
+
+    const includeSubBranches = req.body?.includeSubBranches !== false && req.query.includeSubBranches !== 'false';
+    const branchIds = includeSubBranches ? await getAllSubBranchIds(req.prisma, branchId) : [branchId];
+
+    const connectionUsers = await req.prisma.connectionUser.findMany({
+      where: {
+        isDeleted: false,
+        username: { not: '' },
+        OR: [
+          { branchId: { in: branchIds } },
+          {
+            customer: {
+              ispId: req.ispId,
+              isDeleted: false,
+              OR: [
+                { branchId: { in: branchIds } },
+                { subBranchId: { in: branchIds } }
+              ]
+            }
+          }
+        ]
+      },
+      select: {
+        username: true,
+        customerId: true,
+        customer: {
+          select: {
+            id: true,
+            customerUniqueId: true,
+            lead: { select: { firstName: true, lastName: true } }
+          }
+        }
+      }
+    });
+
+    const usersByUsername = new Map();
+    connectionUsers.forEach((user) => {
+      const username = String(user.username || '').trim();
+      if (username) usersByUsername.set(username, user);
+    });
+
+    const usernames = Array.from(usersByUsername.keys());
+    if (usernames.length === 0) {
+      return res.json({
+        success: true,
+        message: `No RADIUS users found for ${branch.name}.`,
+        branch: { id: branch.id, name: branch.name },
+        includeSubBranches,
+        branchIds,
+        totalUsers: 0,
+        disconnected: [],
+        failed: []
+      });
+    }
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const disconnected = [];
+    const failed = [];
+
+    for (const username of usernames) {
+      try {
+        const result = await client.disconnectAllSessions(username);
+        disconnected.push({
+          username,
+          customerId: usersByUsername.get(username)?.customerId || null,
+          result
+        });
+      } catch (error) {
+        failed.push({
+          username,
+          customerId: usersByUsername.get(username)?.customerId || null,
+          error: error.message || 'Disconnect failed'
+        });
+      }
+    }
+
+    const successCount = disconnected.length;
+    const failedCount = failed.length;
+    return res.status(failedCount > 0 && successCount === 0 ? 502 : 200).json({
+      success: failedCount === 0,
+      partialSuccess: failedCount > 0 && successCount > 0,
+      message: `Disconnected sessions for ${successCount} of ${usernames.length} RADIUS users in ${branch.name}.`,
+      branch: { id: branch.id, name: branch.name },
+      includeSubBranches,
+      branchIds,
+      totalUsers: usernames.length,
+      disconnected,
+      failed
+    });
+  } catch (error) {
+    console.error(`Error disconnecting branch sessions for branch ${branchId}:`, error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to disconnect branch sessions'
+    });
+  }
+}
+
 async function disconnectBySessionId(req, res, next) {
   const sessionId = req.params.sessionId;
   try {
@@ -3922,5 +4088,6 @@ module.exports = {
   getSessionInfoForUser,
   disconnectLatestSession,
   disconnectAllSessions,
+  disconnectBranchSessions,
   disconnectBySessionId
 };

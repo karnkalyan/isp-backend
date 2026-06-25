@@ -408,6 +408,8 @@ async function getGeneratedLicenseToken(prisma, id) {
 function isLicenseRoute(pathname) {
   return pathname.startsWith('/license') ||
     pathname.startsWith('/api/license') ||
+    pathname === '/isp/public' ||
+    pathname === '/api/isp/public' ||
     pathname.startsWith('/auth') ||
     pathname.startsWith('/api/auth');
 }

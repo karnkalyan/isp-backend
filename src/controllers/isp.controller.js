@@ -8,6 +8,22 @@ const SIDEBAR_BRANDING_KEYS = [
   'sidebarLogoCollapsedDarkUrl',
 ];
 
+const PUBLIC_ISP_SELECT = {
+  id: true,
+  companyName: true,
+  businessType: true,
+  website: true,
+  contactPerson: true,
+  phoneNumber: true,
+  description: true,
+  address: true,
+  city: true,
+  state: true,
+  zipCode: true,
+  country: true,
+  logoUrl: true,
+};
+
 function getScopedBrandingKey(ispId, key) {
   return `isp:${ispId}:${key}`;
 }
@@ -40,6 +56,57 @@ async function getSidebarBranding(prisma, ispId) {
     if (unscopedKey) acc[unscopedKey] = setting.value;
     return acc;
   }, {});
+}
+
+function compactAddress(isp = {}) {
+  return [isp.address, isp.city, isp.state, isp.country].filter(Boolean).join(', ');
+}
+
+function mapPublicIsp(isp, sidebarBranding = {}) {
+  if (!isp) return null;
+  return {
+    ...isp,
+    name: isp.companyName,
+    displayName: isp.companyName,
+    fullAddress: compactAddress(isp),
+    sidebarBranding,
+  };
+}
+
+async function resolvePublicIsp(prisma) {
+  const defaultIspId = Number(process.env.DEFAULT_ISP_ID || 1);
+
+  if (Number.isFinite(defaultIspId) && defaultIspId > 0) {
+    const defaultIsp = await prisma.iSP.findUnique({
+      where: { id: defaultIspId },
+      select: PUBLIC_ISP_SELECT,
+    });
+    if (defaultIsp) return defaultIsp;
+  }
+
+  return prisma.iSP.findFirst({
+    orderBy: { id: 'asc' },
+    select: PUBLIC_ISP_SELECT,
+  });
+}
+
+async function getPublicIspInfo(req, res, next) {
+  try {
+    const isp = await resolvePublicIsp(req.prisma);
+
+    if (!isp) {
+      return res.status(404).json({
+        success: false,
+        error: 'ISP information not found',
+      });
+    }
+
+    const sidebarBranding = await getSidebarBranding(req.prisma, isp.id);
+    res.json({ success: true, data: mapPublicIsp(isp, sidebarBranding) });
+  } catch (err) {
+    console.error('Get public ISP info error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch ISP information' });
+  }
 }
 
 // --- Create ISP ---
@@ -577,6 +644,7 @@ function deleteOldFile(fileUrl) {
 
 module.exports = {
   createIsp,
+  getPublicIspInfo,
   activeIsp,
   updateActiveIsp,
   updateActiveIspBranding,
