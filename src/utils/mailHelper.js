@@ -20,16 +20,32 @@ async function getTransporter(ispId, options = {}) {
     const mailNotificationsEnabled = settingsObj.enableMailNotifications === 'true' || settingsObj.emailNotifications === 'true';
 
     if (!emailServiceEnabled) {
+        console.log('[mailHelper] Email skipped because email service is disabled', { ispId });
         throw new Error("Email service is disabled in settings");
     }
 
     if (!options.ignoreNotificationSetting && !mailNotificationsEnabled) {
+        console.log('[mailHelper] Email skipped because mail notifications are disabled', { ispId });
         throw new Error("Mail notifications are disabled in settings");
     }
 
     if (!settingsObj.smtpHost || !settingsObj.smtpPort || !settingsObj.smtpUser || !settingsObj.smtpPass) {
+        console.log('[mailHelper] Email skipped because SMTP configuration is incomplete', {
+            ispId,
+            hasHost: Boolean(settingsObj.smtpHost),
+            hasPort: Boolean(settingsObj.smtpPort),
+            hasUser: Boolean(settingsObj.smtpUser),
+            hasPass: Boolean(settingsObj.smtpPass)
+        });
         throw new Error("Incomplete SMTP configuration");
     }
+
+    console.log('[mailHelper] SMTP transporter ready', {
+        ispId,
+        host: settingsObj.smtpHost,
+        port: settingsObj.smtpPort,
+        ignoreNotificationSetting: Boolean(options.ignoreNotificationSetting)
+    });
 
     return nodemailer.createTransport({
         host: settingsObj.smtpHost,
@@ -52,6 +68,12 @@ async function getTransporter(ispId, options = {}) {
  */
 async function sendMail(ispId, mailOptions, options = {}) {
     try {
+        console.log('[mailHelper] Preparing email', {
+            ispId,
+            to: mailOptions?.to,
+            subject: mailOptions?.subject,
+            ignoreNotificationSetting: Boolean(options.ignoreNotificationSetting)
+        });
         const settings = await prisma.iSPSettings.findFirst({
             where: { ispId, key: 'smtpFrom' }
         });
@@ -64,10 +86,15 @@ async function sendMail(ispId, mailOptions, options = {}) {
             ...mailOptions
         });
 
-        console.log('Message sent: %s', info.messageId);
+        console.log('[mailHelper] Email sent', {
+            ispId,
+            to: mailOptions?.to,
+            subject: mailOptions?.subject,
+            messageId: info.messageId
+        });
         return { success: true, messageId: info.messageId };
     } catch (error) {
-        console.error('Error sending email:', error);
+        console.error('[mailHelper] Error sending email:', error.message);
         return { success: false, error: error.message };
     }
 }

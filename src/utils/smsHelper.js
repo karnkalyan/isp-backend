@@ -10,12 +10,20 @@ const smsHelper = {
      */
     async sendEventSms(ispId, eventType, data) {
         try {
+            console.log('[smsHelper] Preparing event SMS', {
+                ispId,
+                eventType,
+                phone: data?.phoneNumber || data?.phone || data?.mobile || null
+            });
             const prisma = require('../../prisma/client');
             const { renderTemplate } = require('./templateHelper');
             const serviceSetting = await prisma.iSPSettings.findFirst({
                 where: { ispId, key: 'enableSmsService' }
             });
-            if (serviceSetting?.value === 'false') return;
+            if (serviceSetting?.value === 'false') {
+                console.log('[smsHelper] SMS skipped because enableSmsService is false', { ispId, eventType });
+                return;
+            }
 
             const services = await prisma.iSPService.findMany({
                 where: {
@@ -31,14 +39,20 @@ const smsHelper = {
                 }
             });
 
-            if (!services || services.length === 0) return;
+            if (!services || services.length === 0) {
+                console.log('[smsHelper] SMS skipped because no active SMS service is configured', { ispId, eventType });
+                return;
+            }
 
             // Filter to those with valid credentials
             const configuredServices = services.filter(s => {
                 return s.credentials.some(c => c.key === 'auth_token' && c.value);
             });
 
-            if (configuredServices.length === 0) return;
+            if (configuredServices.length === 0) {
+                console.log('[smsHelper] SMS skipped because no active SMS credentials were found', { ispId, eventType });
+                return;
+            }
 
             // Find default service
             let defaultService = configuredServices.find(s => {
@@ -63,6 +77,12 @@ const smsHelper = {
             if ((!eventConfig || eventConfig.enabled !== false) && templateText) {
                 // Continue with the DB/default template.
             } else {
+                console.log('[smsHelper] SMS skipped because event/template is disabled or empty', {
+                    ispId,
+                    eventType,
+                    eventEnabled: eventConfig?.enabled,
+                    hasTemplate: Boolean(templateText)
+                });
                 return;
             }
 
@@ -78,10 +98,28 @@ const smsHelper = {
 
             // 5. Get recipient phone
             const phone = data.phoneNumber || data.phone || data.mobile;
-            if (!phone) return;
+            if (!phone) {
+                console.log('[smsHelper] SMS skipped because recipient phone is missing', { ispId, eventType });
+                return;
+            }
 
             // 6. Send
-            return await client.sendSms(phone, message);
+            console.log('[smsHelper] Sending SMS', {
+                ispId,
+                eventType,
+                provider: defaultService.service.code,
+                phone,
+                messageLength: message.length
+            });
+            const result = await client.sendSms(phone, message);
+            console.log('[smsHelper] SMS send result', {
+                ispId,
+                eventType,
+                provider: defaultService.service.code,
+                phone,
+                success: result?.success !== false
+            });
+            return result;
         } catch (error) {
             console.error(`[smsHelper] Failed to send ${eventType} SMS:`, error.message);
         }

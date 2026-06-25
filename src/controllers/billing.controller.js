@@ -539,6 +539,12 @@ async function renewSubscription(req, res, next) {
 
             if (customer.lead?.email) {
                 try {
+                    console.log('[billing.controller] Dispatching recharge_success email', {
+                        ispId: req.ispId,
+                        customerId: customer.id,
+                        to: customer.lead.email,
+                        amount: customerTemplateData.amount
+                    });
                     const mailHelper = require('../utils/mailHelper');
                     const { renderTemplate, textToHtml } = require('../utils/templateHelper');
                     const rendered = await renderTemplate(req.ispId, 'EMAIL', 'recharge_success', customerTemplateData, {
@@ -550,6 +556,11 @@ async function renewSubscription(req, res, next) {
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)
                     }, { ignoreNotificationSetting: true });
+                    console.log('[billing.controller] recharge_success email dispatch finished', {
+                        ispId: req.ispId,
+                        customerId: customer.id,
+                        to: customer.lead.email
+                    });
                 } catch (emailErr) {
                     console.error('Failed to send recharge success email:', emailErr.message);
                 }
@@ -557,8 +568,19 @@ async function renewSubscription(req, res, next) {
 
             if (customer.lead?.phoneNumber) {
                 try {
+                    console.log('[billing.controller] Dispatching recharge_success SMS', {
+                        ispId: req.ispId,
+                        customerId: customer.id,
+                        phone: customer.lead.phoneNumber,
+                        amount: customerTemplateData.amount
+                    });
                     const smsHelper = require('../utils/smsHelper');
                     await smsHelper.sendEventSms(req.ispId, 'recharge_success', customerTemplateData);
+                    console.log('[billing.controller] recharge_success SMS dispatch finished', {
+                        ispId: req.ispId,
+                        customerId: customer.id,
+                        phone: customer.lead.phoneNumber
+                    });
                 } catch (smsErr) {
                     console.error('Failed to send recharge success SMS:', smsErr.message);
                 }

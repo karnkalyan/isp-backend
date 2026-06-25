@@ -1214,6 +1214,11 @@ async function createCustomer(req, res, next) {
 
     if (lead.email) {
       try {
+        console.log('[customer.controller] Dispatching customer_new_connection email', {
+          ispId: req.ispId,
+          customerId: createdCustomer.id,
+          to: lead.email
+        });
         const mailHelper = require('../utils/mailHelper');
         const { renderTemplate, textToHtml } = require('../utils/templateHelper');
         const rendered = await renderTemplate(req.ispId, 'EMAIL', 'customer_new_connection', customerTemplateData, {
@@ -1225,6 +1230,11 @@ async function createCustomer(req, res, next) {
           subject: rendered.subject,
           html: textToHtml(rendered.body)
         }, { ignoreNotificationSetting: true });
+        console.log('[customer.controller] customer_new_connection email dispatch finished', {
+          ispId: req.ispId,
+          customerId: createdCustomer.id,
+          to: lead.email
+        });
       } catch (err) {
         console.error('Failed to send customer creation email:', err.message);
       }
@@ -1232,8 +1242,18 @@ async function createCustomer(req, res, next) {
 
     if (lead.phoneNumber) {
       try {
+        console.log('[customer.controller] Dispatching customer_new_connection SMS', {
+          ispId: req.ispId,
+          customerId: createdCustomer.id,
+          phone: lead.phoneNumber
+        });
         const smsHelper = require('../utils/smsHelper');
         await smsHelper.sendEventSms(req.ispId, 'customer_new_connection', customerTemplateData);
+        console.log('[customer.controller] customer_new_connection SMS dispatch finished', {
+          ispId: req.ispId,
+          customerId: createdCustomer.id,
+          phone: lead.phoneNumber
+        });
       } catch (err) {
         console.error('Failed to send customer creation SMS:', err.message);
       }
@@ -1331,6 +1351,7 @@ async function findPortalUserForCustomer(prisma, customer) {
       id: true,
       email: true,
       name: true,
+      profilePicture: true,
       status: true,
       createdAt: true,
       updatedAt: true
@@ -1357,6 +1378,7 @@ async function findPortalUserForCustomer(prisma, customer) {
       id: true,
       email: true,
       name: true,
+      profilePicture: true,
       status: true,
       createdAt: true,
       updatedAt: true
@@ -1385,6 +1407,7 @@ async function findPortalUserForCustomer(prisma, customer) {
       id: true,
       email: true,
       name: true,
+      profilePicture: true,
       status: true,
       createdAt: true,
       updatedAt: true
@@ -1755,7 +1778,10 @@ async function provisionCustomer(req, res, next) {
       }),
       prisma.customerServiceConnection.updateMany({
         where: { customerId },
-        data: { status: 'active' },
+        data: {
+          status: 'active',
+          provisioningNotes: `Provisioned via ${customer.serviceDetails?.[0]?.connectionType || 'service connection'} on ${new Date().toISOString()}`,
+        },
       }),
     ]);
 
@@ -2082,6 +2108,7 @@ async function getCustomerById(req, res, next) {
       ...enrichCustomerDocumentFields(customer),
       devices: enrichedDevices,
       portalUser,
+      profilePicture: portalUser?.profilePicture || null,
       inventoryItems,
       firstName: customer.lead?.firstName,
       lastName: customer.lead?.lastName,

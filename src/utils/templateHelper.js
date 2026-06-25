@@ -148,6 +148,14 @@ function textToHtml(text = '') {
 }
 
 async function renderTemplate(ispId, channel, eventKey, data = {}, fallback = {}, db = prisma) {
+  const normalizedChannel = String(channel).toUpperCase();
+  console.log('[templateHelper] Rendering notification template', {
+    ispId,
+    channel: normalizedChannel,
+    eventKey,
+    hasFallbackSubject: Boolean(fallback.subject),
+    hasFallbackBody: Boolean(fallback.body)
+  });
   await seedDefaultTemplates(ispId, db);
   const rows = await db.$queryRawUnsafe(
     `SELECT subject, body FROM message_templates
@@ -155,14 +163,23 @@ async function renderTemplate(ispId, channel, eventKey, data = {}, fallback = {}
      ORDER BY isDefault ASC, updatedAt DESC
      LIMIT 1`,
     ispId,
-    String(channel).toUpperCase(),
+    normalizedChannel,
     eventKey
   );
   const template = rows[0] || fallback;
-  return {
+  const rendered = {
     subject: renderText(template.subject || fallback.subject || '', data),
     body: renderText(template.body || fallback.body || '', data)
   };
+  console.log('[templateHelper] Notification template rendered', {
+    ispId,
+    channel: normalizedChannel,
+    eventKey,
+    source: rows[0] ? 'database' : 'fallback',
+    subjectLength: rendered.subject.length,
+    bodyLength: rendered.body.length
+  });
+  return rendered;
 }
 
 module.exports = {
