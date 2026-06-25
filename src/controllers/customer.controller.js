@@ -2012,10 +2012,27 @@ async function listCustomers(req, res, next) {
     await enrichServiceDetailsWithVlans(req.prisma, customers);
 
     // Flatten lead fields for API consistency
+    const portalUsers = await req.prisma.user.findMany({
+      where: {
+        ispId: req.ispId,
+        isDeleted: false,
+        customerId: { in: customers.map(c => c.id) }
+      },
+      select: {
+        id: true,
+        customerId: true,
+        profilePicture: true
+      }
+    });
+    const portalUserMap = new Map(portalUsers.map(user => [user.customerId, user]));
+
     const transformed = customers.map(c => {
       const meta = c.lead?.metadata ? (typeof c.lead.metadata === 'string' ? JSON.parse(c.lead.metadata) : c.lead.metadata) : null;
+      const portalUser = portalUserMap.get(c.id) || null;
       return {
         ...c,
+        portalUser,
+        profilePicture: portalUser?.profilePicture || null,
         firstName: c.lead?.firstName,
         middleName: c.lead?.middleName || null,
         lastName: c.lead?.lastName,
