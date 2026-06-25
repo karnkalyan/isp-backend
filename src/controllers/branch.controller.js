@@ -95,7 +95,7 @@ async function listBranches(req, res, next) {
                     select: {
                         users: true,
                         customers: true,
-                        leads: true
+                        leads: { where: { isDeleted: false, convertedToCustomer: false } }
                     }
                 }
             },
@@ -148,7 +148,7 @@ async function getBranchById(req, res, next) {
                     select: {
                         users: true,
                         customers: true,
-                        leads: true
+                        leads: { where: { isDeleted: false, convertedToCustomer: false } }
                     }
                 }
             }
@@ -286,7 +286,7 @@ async function deleteBranch(req, res, next) {
                     select: {
                         users: true,
                         customers: true,
-                        leads: true
+                        leads: { where: { isDeleted: false, convertedToCustomer: false } }
                     }
                 }
             }
@@ -344,7 +344,7 @@ async function getBranchStats(req, res, next) {
                     }
                 },
                 leads: {
-                    where: { isDeleted: false },
+                    where: { isDeleted: false, convertedToCustomer: false },
                     select: {
                         status: true
                     }
@@ -417,7 +417,7 @@ async function getOverallStats(req, res, next) {
                             where: { isDeleted: false }
                         },
                         leads: {
-                            where: { isDeleted: false }
+                            where: { isDeleted: false, convertedToCustomer: false }
                         }
                     }
                 },
@@ -472,7 +472,8 @@ async function getOverallStats(req, res, next) {
         const allLeads = await req.prisma.Lead.findMany({
             where: {
                 branchId: { in: branches.map(b => b.id) },
-                isDeleted: false
+                isDeleted: false,
+                convertedToCustomer: false
             },
             select: {
                 status: true
@@ -642,7 +643,8 @@ async function getOverallStatsOptimized(req, res, next) {
                 by: ['branchId', 'status'],
                 where: {
                     branchId: { in: branchIds },
-                    isDeleted: false
+                    isDeleted: false,
+                    convertedToCustomer: false
                 },
                 _count: true
             }),

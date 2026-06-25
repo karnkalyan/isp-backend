@@ -1577,7 +1577,7 @@ async function provisionCustomer(req, res, next) {
         lead: true,
         customerSubscriptions: {
           where: { isActive: true, isTrial: true },
-          include: { packagePrice: true },
+          include: { packagePrice: { include: { packagePlanDetails: true } } },
           take: 1,
         },
         devices: true,
@@ -1682,6 +1682,13 @@ async function provisionCustomer(req, res, next) {
                 break;
               }
               case SERVICE_CODES.RADIUS:
+                if (testSubscription?.packagePrice) {
+                  const radiusGroupName =
+                    testSubscription.packagePrice.packagePlanDetails?.planCode ||
+                    testSubscription.packagePrice.referenceId ||
+                    testSubscription.packagePrice.packageName;
+                  if (radiusGroupName) data.groups = [radiusGroupName];
+                }
                 result = await client.createUser(
                   data.username,
                   data.password,
@@ -3645,7 +3652,7 @@ async function reprovisionRadius(req, res, next) {
 
     const subscription = await prisma.customerSubscription.findFirst({
       where: { customerId, isActive: true },
-      include: { packagePrice: true }
+      include: { packagePrice: { include: { packagePlanDetails: true } } }
     });
 
     const expiryDate = subscription?.planEnd
@@ -3654,7 +3661,11 @@ async function reprovisionRadius(req, res, next) {
         }).replace(/,/g, '').replace(/ /g, ' ')
       : null;
 
-    const packageName = subscription?.packagePrice?.packageName || '';
+    const radiusGroupName =
+      subscription?.packagePrice?.packagePlanDetails?.planCode ||
+      subscription?.packagePrice?.referenceId ||
+      subscription?.packagePrice?.packageName ||
+      '';
 
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
 
@@ -3668,7 +3679,7 @@ async function reprovisionRadius(req, res, next) {
     // 2. Re-create user in Radius
     const attributes = {};
     if (expiryDate) attributes.Expiration = expiryDate;
-    const groups = packageName ? [packageName] : [];
+    const groups = radiusGroupName ? [radiusGroupName] : [];
 
     const result = await client.createUser(
       connectionUser.username,
@@ -4024,6 +4035,122 @@ async function disconnectBranchSessions(req, res, next) {
   }
 }
 
+async function disconnectPoolSessions(req, res, next) {
+  const poolValue = String(req.params.poolValue || req.body?.poolValue || '').trim();
+  if (!poolValue) return res.status(400).json({ success: false, error: 'Pool value is required' });
+
+  try {
+    const branchIds = [];
+    const requestedBranchIds = Array.isArray(req.body?.branchIds) ? req.body.branchIds.map(Number).filter(Boolean) : [];
+    const requestedSubBranchIds = Array.isArray(req.body?.subBranchIds) ? req.body.subBranchIds.map(Number).filter(Boolean) : [];
+
+    if (req.branchId) {
+      branchIds.push(...await getAllSubBranchIds(req.prisma, Number(req.branchId)));
+    }
+
+    const scopedBranchFilter = req.branchId
+      ? { in: branchIds }
+      : requestedBranchIds.length > 0
+        ? { in: requestedBranchIds }
+        : undefined;
+
+    const scopedSubBranchFilter = req.branchId
+      ? { in: branchIds }
+      : requestedSubBranchIds.length > 0
+        ? { in: requestedSubBranchIds }
+        : undefined;
+
+    const packagePlanWhere = { framedPoolValue: poolValue, isDeleted: false, ispId: req.ispId };
+    const packagePrices = await req.prisma.packagePrice.findMany({
+      where: {
+        isDeleted: false,
+        ispId: req.ispId,
+        packagePlanDetails: packagePlanWhere
+      },
+      select: { id: true }
+    });
+    const packagePriceIds = packagePrices.map(item => item.id);
+
+    if (packagePriceIds.length === 0) {
+      return res.json({
+        success: true,
+        message: `No package prices found for pool ${poolValue}.`,
+        poolValue,
+        totalUsers: 0,
+        disconnected: [],
+        failed: []
+      });
+    }
+
+    const customerBranchWhere = [];
+    if (scopedBranchFilter) customerBranchWhere.push({ branchId: scopedBranchFilter });
+    if (scopedSubBranchFilter) customerBranchWhere.push({ subBranchId: scopedSubBranchFilter });
+
+    const connectionUsers = await req.prisma.connectionUser.findMany({
+      where: {
+        isDeleted: false,
+        username: { not: '' },
+        customer: {
+          ispId: req.ispId,
+          isDeleted: false,
+          subscribedPkgId: { in: packagePriceIds },
+          ...(customerBranchWhere.length > 0 ? { OR: customerBranchWhere } : {})
+        }
+      },
+      select: { username: true, customerId: true }
+    });
+
+    const usersByUsername = new Map();
+    connectionUsers.forEach((user) => {
+      const username = String(user.username || '').trim();
+      if (username) usersByUsername.set(username, user);
+    });
+
+    const usernames = Array.from(usersByUsername.keys());
+    if (usernames.length === 0) {
+      return res.json({
+        success: true,
+        message: `No RADIUS users found for pool ${poolValue}.`,
+        poolValue,
+        totalUsers: 0,
+        disconnected: [],
+        failed: []
+      });
+    }
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const disconnected = [];
+    const failed = [];
+
+    for (const username of usernames) {
+      try {
+        const result = await client.disconnectAllSessions(username);
+        disconnected.push({ username, customerId: usersByUsername.get(username)?.customerId || null, result });
+      } catch (error) {
+        failed.push({ username, customerId: usersByUsername.get(username)?.customerId || null, error: error.message || 'Disconnect failed' });
+      }
+    }
+
+    const successCount = disconnected.length;
+    const failedCount = failed.length;
+    return res.status(failedCount > 0 && successCount === 0 ? 502 : 200).json({
+      success: failedCount === 0,
+      partialSuccess: failedCount > 0 && successCount > 0,
+      message: `Disconnected sessions for ${successCount} of ${usernames.length} RADIUS users in pool ${poolValue}.`,
+      poolValue,
+      totalUsers: usernames.length,
+      disconnected,
+      failed
+    });
+  } catch (error) {
+    console.error(`Error disconnecting pool sessions for pool ${poolValue}:`, error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to disconnect pool sessions'
+    });
+  }
+}
+
 async function disconnectBySessionId(req, res, next) {
   const sessionId = req.params.sessionId;
   try {
@@ -4089,5 +4216,6 @@ module.exports = {
   disconnectLatestSession,
   disconnectAllSessions,
   disconnectBranchSessions,
+  disconnectPoolSessions,
   disconnectBySessionId
 };
