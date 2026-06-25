@@ -4218,19 +4218,36 @@ async function disconnectFilteredCustomerSessions(req, res, next) {
       subBranchIds = [],
       packageIds = [],
       status,
-      poolValue
+      poolValue,
+      usernames: inputUsernames = []
     } = req.body || {};
 
     const requestedBranchIds = Array.isArray(branchIds) ? branchIds.map(Number).filter(Boolean) : [];
     const requestedSubBranchIds = Array.isArray(subBranchIds) ? subBranchIds.map(Number).filter(Boolean) : [];
     const requestedPackageIds = Array.isArray(packageIds) ? packageIds.map(Number).filter(Boolean) : [];
+    const requestedUsernames = Array.isArray(inputUsernames) ? inputUsernames.map(String).map(s => s.trim()).filter(Boolean) : [];
 
     let allowedBranchIds = [];
     if (req.branchId) {
       allowedBranchIds = await getAllSubBranchIds(req.prisma, Number(req.branchId));
     }
 
-    const packageIdSet = new Set(requestedPackageIds);
+    const packageIdSet = new Set();
+    if (requestedPackageIds.length > 0) {
+      // Find package price IDs corresponding to these plan IDs (just plan)
+      const pricesByPlan = await req.prisma.packagePrice.findMany({
+        where: {
+          planId: { in: requestedPackageIds },
+          isDeleted: false
+        },
+        select: { id: true }
+      });
+      pricesByPlan.forEach(p => packageIdSet.add(p.id));
+
+      // Also fallback if they are actually package price IDs directly
+      requestedPackageIds.forEach(id => packageIdSet.add(id));
+    }
+
     const cleanPoolValue = String(poolValue || '').trim();
     if (cleanPoolValue) {
       const poolPackageIds = await getPackagePriceIdsForFramedPool(req, cleanPoolValue);
@@ -4256,11 +4273,11 @@ async function disconnectFilteredCustomerSessions(req, res, next) {
 
     const customerAnd = [];
     if (packageIdSet.size > 0) {
-      const packageIds = Array.from(packageIdSet);
+      const packagePriceIds = Array.from(packageIdSet);
       customerAnd.push({
         OR: [
-          { subscribedPkgId: { in: packageIds } },
-          { customerSubscriptions: { some: { isActive: true, packagePriceId: { in: packageIds } } } }
+          { subscribedPkgId: { in: packagePriceIds } },
+          { customerSubscriptions: { some: { isActive: true, package: { in: packagePriceIds } } } }
         ]
       });
     }
@@ -4277,7 +4294,10 @@ async function disconnectFilteredCustomerSessions(req, res, next) {
       where: {
         isDeleted: false,
         username: { not: '' },
-        customer: customerWhere
+        ...(requestedUsernames.length > 0
+          ? { username: { in: requestedUsernames } }
+          : { customer: customerWhere }
+        )
       },
       select: { username: true, customerId: true }
     });
