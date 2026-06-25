@@ -50,10 +50,16 @@ async function sendMessage(req, res, next) {
                 updatedAt: new Date()
             },
             include: {
-                sender: { select: { id: true, name: true } },
-                receiver: { select: { id: true, name: true } }
+                sender: { select: { id: true, name: true, role: true } },
+                receiver: { select: { id: true, name: true, role: true } }
             }
         });
+
+        const wsManager = req.app.get('webSocketManager');
+        if (wsManager) {
+            wsManager.sendToUser(Number(receiverId), 'chat.message', message);
+            wsManager.sendToUser(senderId, 'chat.message', message);
+        }
 
         res.status(201).json(message);
     } catch (err) {

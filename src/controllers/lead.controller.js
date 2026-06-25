@@ -369,17 +369,28 @@ async function getLeadById(req, res, next) {
       return res.status(404).json({ error: "Lead not found." });
     }
 
-    // Fetch SMS logs sent to this lead (including manual logs matched by phone number)
-    const phoneNumbers = [lead.phoneNumber, lead.secondaryContactNumber].filter(Boolean);
-    const orConditions = [{ recipientId: id }];
-    if (phoneNumbers.length > 0) {
-      orConditions.push({ phone: { in: phoneNumbers } });
+    // Fetch SMS logs sent to this lead. Manual uploads can be logged as
+    // recipientType "manual", so match by normalized phone variants too.
+    const phoneVariants = new Set();
+    [lead.phoneNumber, lead.secondaryContactNumber].filter(Boolean).forEach(phone => {
+      const raw = String(phone).trim();
+      const digits = raw.replace(/\D/g, '');
+      if (raw) phoneVariants.add(raw);
+      if (digits) phoneVariants.add(digits);
+      if (digits.length >= 10) phoneVariants.add(digits.slice(-10));
+      if (digits.length === 10) phoneVariants.add(`977${digits}`);
+    });
+
+    const orConditions = [
+      { recipientType: 'lead', recipientId: id }
+    ];
+    if (phoneVariants.size > 0) {
+      orConditions.push({ phone: { in: Array.from(phoneVariants) } });
     }
 
     const smsLogs = await req.prisma.smsCampaignLog.findMany({
       where: {
-        OR: orConditions,
-        recipientType: 'lead'
+        OR: orConditions
       },
       include: {
         campaign: {
@@ -400,7 +411,10 @@ async function getLeadById(req, res, next) {
         status: log.status,
         errorMessage: log.errorMessage,
         sentAt: log.sentAt || log.createdAt,
-        message: log.campaign?.message || ''
+        message: log.campaign?.message || '',
+        phone: log.phone,
+        recipientType: log.recipientType,
+        name: log.name
       }))
     };
 
@@ -607,7 +621,7 @@ async function convertLeadToCustomer(req, res, next) {
     if (lead.email) {
       const existingCustomer = await req.prisma.customer.findFirst({
         where: {
-          email: lead.email,
+          lead: { email: lead.email },
           ispId: req.ispId,
           isDeleted: false
         }
@@ -679,6 +693,45 @@ async function convertLeadToCustomer(req, res, next) {
         }
       })
     ]);
+
+    try {
+      const isp = await req.prisma.iSP.findUnique({ where: { id: req.ispId } });
+      const ispName = isp?.companyName || isp?.name || 'ISP';
+      const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Customer';
+      const packageName = newCustomer.subscribedPkg?.packagePlanDetails?.planName || newCustomer.subscribedPkg?.packageName || newCustomer.packagePrice?.packageName || 'Package';
+      const templateData = {
+        ispName,
+        customerName,
+        customerUniqueId: newCustomer.customerUniqueId || `CUST-${newCustomer.id}`,
+        packageName,
+        planStart: '',
+        planEnd: '',
+        username: '',
+        password: '',
+        phoneNumber: lead.phoneNumber || ''
+      };
+
+      if (lead.email) {
+        const mailHelper = require('../utils/mailHelper');
+        const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+        const rendered = await renderTemplate(req.ispId, 'EMAIL', 'customer_new_connection', templateData, {
+          subject: 'Customer Account Created',
+          body: `Dear ${customerName},\n\nYour customer account has been created successfully.\n\nCustomer ID: ${templateData.customerUniqueId}`
+        }, req.prisma);
+        await mailHelper.sendMail(req.ispId, {
+          to: lead.email,
+          subject: rendered.subject,
+          html: textToHtml(rendered.body)
+        }, { ignoreNotificationSetting: true });
+      }
+
+      if (lead.phoneNumber) {
+        const smsHelper = require('../utils/smsHelper');
+        await smsHelper.sendEventSms(req.ispId, 'customer_new_connection', templateData);
+      }
+    } catch (notifyErr) {
+      console.error('Lead conversion notification dispatch error:', notifyErr.message);
+    }
 
     return res.status(201).json({
       message: "Lead successfully converted to customer",

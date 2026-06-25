@@ -2221,6 +2221,7 @@ async function updateCustomer(req, res, next) {
       idNumber, panNumber,
       status, onboardStatus,
       membershipId, existingISPId, customerTypeId, subBranchId, installedById, subscribedPkgId,
+      isFree, freeCustomerSecretKey,
       deviceName, deviceMac,
       connectionType, vlanId, vlanPriority, oltId, splitterId, oltPort, splitterPort,
 
@@ -2277,6 +2278,26 @@ async function updateCustomer(req, res, next) {
     if (subscribedPkgId !== undefined) {
       customerUpdate.subscribedPkgId = subscribedPkgId ? Number(subscribedPkgId) : null;
       customerUpdate.assignedPkg = subscribedPkgId ? Number(subscribedPkgId) : null;
+    }
+    if (isFree !== undefined) {
+      const parsedIsFree = isFree === true || isFree === 'true';
+      if (parsedIsFree !== Boolean(existing.isFree)) {
+        const role = String(req.user?.role || '').toLowerCase();
+        const isAdmin = role === 'admin' || role === 'isp_admin' || role === 'administrator' || role.startsWith('global ');
+        if (!isAdmin) {
+          return res.status(403).json({ success: false, error: 'Only administrators can update Free customer status.' });
+        }
+        if (parsedIsFree) {
+          const secretSetting = await req.prisma.iSPSettings.findFirst({
+            where: { key: 'freeCustomerSecretKey', ispId: req.ispId }
+          });
+          const systemSecret = secretSetting ? secretSetting.value : 'admin123';
+          if (freeCustomerSecretKey !== systemSecret) {
+            return res.status(400).json({ success: false, error: 'Invalid Free Customer Secret Key.' });
+          }
+        }
+      }
+      customerUpdate.isFree = parsedIsFree;
     }
 
     // Build Lead update

@@ -80,6 +80,52 @@ function flattenCustomerList(tickets) {
     return tickets.map(flattenCustomer);
 }
 
+async function findTicketAutoAssignee(prisma, ispId, branchId) {
+    const supportRoles = [
+        'sub branch admin',
+        'branch admin',
+        'support manager',
+        'support agent',
+        'technician',
+        'administrator',
+        'admin'
+    ];
+
+    const roleNameFilter = { in: supportRoles };
+    const select = { id: true };
+
+    if (branchId) {
+        const branchUser = await prisma.user.findFirst({
+            where: {
+                ispId,
+                isDeleted: false,
+                status: 'active',
+                OR: [
+                    { branchId },
+                    { userBranches: { some: { branchId } } }
+                ],
+                role: { name: roleNameFilter, isActive: true }
+            },
+            orderBy: { id: 'asc' },
+            select
+        });
+        if (branchUser) return branchUser.id;
+    }
+
+    const adminUser = await prisma.user.findFirst({
+        where: {
+            ispId,
+            isDeleted: false,
+            status: 'active',
+            role: { name: { in: ['administrator', 'admin', 'global admin', 'global administrator'] }, isActive: true }
+        },
+        orderBy: { id: 'asc' },
+        select
+    });
+
+    return adminUser?.id || null;
+}
+
 /**
  * Create a new ticket
  */
@@ -87,7 +133,7 @@ async function createTicket(req, res, next) {
     try {
         let { title, description, priority, category, customerId, leadId, assignedToId, targetBranchId, notifyEmail } = req.body;
         const ispId = req.ispId;
-        let branchId = targetBranchId ? parseInt(targetBranchId) : (req.branchId || null);
+        let branchId = targetBranchId ? parseInt(targetBranchId) : null;
         const createdById = req.user?.id;
 
         // If user is a customer, auto-assign their info and branch
@@ -96,19 +142,19 @@ async function createTicket(req, res, next) {
             if (req.user.customerId) {
                 customer = await req.prisma.customer.findUnique({
                     where: { id: parseInt(req.user.customerId) },
-                    select: { id: true, branchId: true }
+                    select: { id: true, branchId: true, subBranchId: true }
                 });
             }
             if (!customer && req.user.email) {
                 customer = await req.prisma.customer.findFirst({
                     where: { lead: { email: req.user.email } },
-                    select: { id: true, branchId: true }
+                    select: { id: true, branchId: true, subBranchId: true }
                 });
             }
             if (customer) {
                 customerId = customer.id;
                 // Auto assign to their branch if not specifically targeted
-                if (!branchId) branchId = customer.branchId;
+                if (!branchId) branchId = customer.subBranchId || customer.branchId;
             }
         }
 
@@ -116,20 +162,24 @@ async function createTicket(req, res, next) {
             return res.status(400).json({ error: 'Select a lead or customer for the ticket.' });
         }
 
-        if (!branchId) {
-            if (customerId) {
-                const customer = await req.prisma.customer.findFirst({
-                    where: { id: parseInt(customerId), ispId, isDeleted: false },
-                    select: { branchId: true, subBranchId: true }
-                });
-                branchId = customer?.subBranchId || customer?.branchId || null;
-            } else if (leadId) {
-                const lead = await req.prisma.lead.findFirst({
-                    where: { id: parseInt(leadId), ispId, isDeleted: false },
-                    select: { branchId: true }
-                });
-                branchId = lead?.branchId || null;
-            }
+        if (!branchId && customerId) {
+            const customer = await req.prisma.customer.findFirst({
+                where: { id: parseInt(customerId), ispId, isDeleted: false },
+                select: { branchId: true, subBranchId: true }
+            });
+            branchId = customer?.subBranchId || customer?.branchId || null;
+        } else if (!branchId && leadId) {
+            const lead = await req.prisma.lead.findFirst({
+                where: { id: parseInt(leadId), ispId, isDeleted: false },
+                select: { branchId: true, subBranchId: true }
+            });
+            branchId = lead?.subBranchId || lead?.branchId || null;
+        }
+
+        if (!branchId && req.branchId) branchId = req.branchId;
+
+        if (!assignedToId) {
+            assignedToId = await findTicketAutoAssignee(req.prisma, ispId, branchId);
         }
 
         if (assignedToId) {
@@ -200,7 +250,8 @@ async function createTicket(req, res, next) {
                 lastName: subject.lastName,
                 phoneNumber: subject.phoneNumber,
                 ticketNumber: ticketNumber,
-                title: title
+                title: title,
+                ispName: req.user?.isp?.companyName || 'ISP'
             });
         }
 
