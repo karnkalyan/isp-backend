@@ -366,7 +366,9 @@ async function renewSubscription(req, res, next) {
                 isDeleted: false,
                 ...(req.branchId ? { branchId: req.branchId } : {})
             },
-            select: { id: true, branchId: true, isRechargeable: true, isFree: true }
+            include: {
+                lead: true
+            }
         });
 
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
@@ -516,6 +518,53 @@ async function renewSubscription(req, res, next) {
                     console.error('Radius sync failed during renewal:', e.message);
                 }
             }
+        }
+
+        // Trigger Recharge Successful Email & SMS notifications
+        try {
+            const isp = await prisma.iSP.findUnique({ where: { id: req.ispId } });
+            const ispName = isp?.companyName || isp?.name || 'ISP';
+            const customerName = customer.lead ? `${customer.lead.firstName || ''} ${customer.lead.lastName || ''}`.trim() : 'Customer';
+
+            const customerTemplateData = {
+                ispName,
+                customerName,
+                customerUniqueId: customer.customerUniqueId || `CUST-${customer.id}`,
+                packageName: pkgPrice.packagePlanDetails?.planName || pkgPrice.packageName || 'Package',
+                amount: amount !== undefined ? Number(amount) : expectedAmount,
+                expiryDate: planEnd.toLocaleDateString(),
+                planEnd: planEnd.toLocaleDateString(),
+                phoneNumber: customer.lead?.phoneNumber || ''
+            };
+
+            if (customer.lead?.email) {
+                try {
+                    const mailHelper = require('../utils/mailHelper');
+                    const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+                    const rendered = await renderTemplate(req.ispId, 'EMAIL', 'recharge_success', customerTemplateData, {
+                        subject: 'Recharge Successful',
+                        body: `Dear ${customerName},\n\nYour recharge was successful.\n\nPackage: ${customerTemplateData.packageName}\nAmount: ${customerTemplateData.amount}\nValid Until: ${customerTemplateData.expiryDate}\n\nThank you,\n${ispName}`
+                    }, prisma);
+                    await mailHelper.sendMail(req.ispId, {
+                        to: customer.lead.email,
+                        subject: rendered.subject,
+                        html: textToHtml(rendered.body)
+                    }, { ignoreNotificationSetting: true });
+                } catch (emailErr) {
+                    console.error('Failed to send recharge success email:', emailErr.message);
+                }
+            }
+
+            if (customer.lead?.phoneNumber) {
+                try {
+                    const smsHelper = require('../utils/smsHelper');
+                    await smsHelper.sendEventSms(req.ispId, 'recharge_success', customerTemplateData);
+                } catch (smsErr) {
+                    console.error('Failed to send recharge success SMS:', smsErr.message);
+                }
+            }
+        } catch (notifErr) {
+            console.error('Recharge notification dispatch error:', notifErr.message);
         }
 
         res.json({ success: true, subscription: newSub });
