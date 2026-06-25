@@ -56,6 +56,18 @@ function taskLogger() {
                             ispId
                         }, req);
 
+                        // Skip system notifications for communication endpoints (SMS, email, messages)
+                        const url = req.originalUrl.toLowerCase();
+                        const isCommunication = 
+                            url.includes('/sms') || 
+                            url.includes('/aakashsms') || 
+                            url.includes('/mail') || 
+                            url.includes('/messages');
+
+                        if (isCommunication) {
+                            return;
+                        }
+
                         const notification = await prisma.notification.create({
                             data: {
                                 type: 'info',

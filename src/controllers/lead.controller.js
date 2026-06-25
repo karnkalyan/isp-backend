@@ -259,7 +259,7 @@ const getAllLeads = async (req, res, next) => {
     if (leadIds.length > 0) {
       const orConditions = [{ recipientId: { in: leadIds } }];
       if (allPhones.length > 0) {
-        orConditions.push({ recipientPhone: { in: allPhones } });
+        orConditions.push({ phone: { in: allPhones } });
       }
 
       const sentSmsLogs = await req.prisma.smsCampaignLog.findMany({
@@ -270,15 +270,15 @@ const getAllLeads = async (req, res, next) => {
         },
         select: {
           recipientId: true,
-          recipientPhone: true
+          phone: true
         }
       });
       sentSmsLogs.forEach(log => {
         if (log.recipientId) {
           sentSmsLeadIds.add(log.recipientId);
         }
-        if (log.recipientPhone) {
-          sentSmsPhones.add(log.recipientPhone);
+        if (log.phone) {
+          sentSmsPhones.add(log.phone);
         }
       });
     }
@@ -373,7 +373,7 @@ async function getLeadById(req, res, next) {
     const phoneNumbers = [lead.phoneNumber, lead.secondaryContactNumber].filter(Boolean);
     const orConditions = [{ recipientId: id }];
     if (phoneNumbers.length > 0) {
-      orConditions.push({ recipientPhone: { in: phoneNumbers } });
+      orConditions.push({ phone: { in: phoneNumbers } });
     }
 
     const smsLogs = await req.prisma.smsCampaignLog.findMany({
