@@ -39,6 +39,7 @@ const {
   disconnectAllSessions,
   disconnectBranchSessions,
   disconnectPoolSessions,
+  disconnectFilteredCustomerSessions,
   disconnectBySessionId
 } = require('../controllers/customer.controller');
 
@@ -137,6 +138,7 @@ module.exports = (prisma) => {
   router.get('/sessions/:username', checkPermission('customer_read'), getSessionInfoForUser);
   router.post('/disconnect/branch/:branchId/all', checkPermission('customer_update'), disconnectBranchSessions);
   router.post('/disconnect/pool/:poolValue/all', checkPermission('customer_update'), disconnectPoolSessions);
+  router.post('/disconnect/filter/customers', checkPermission('customer_update'), disconnectFilteredCustomerSessions);
   router.post('/disconnect/:username', checkPermission('customer_update'), disconnectLatestSession);
   router.post('/disconnect/:username/all', checkPermission('customer_update'), disconnectAllSessions);
   router.post('/disconnect/session/:sessionId', checkPermission('customer_update'), disconnectBySessionId);

@@ -2,6 +2,34 @@
 // src/controllers/branchController.js
 const { getBranchFilter } = require('../utils/branchHelper');
 
+async function getLeadBackedCustomerCountByBranch(prisma, branchIds, ispId) {
+    if (!branchIds.length) return new Map();
+    const rows = await prisma.customer.findMany({
+        where: {
+            isDeleted: false,
+            ispId,
+            branchId: null,
+            subBranchId: null,
+            lead: {
+                OR: [
+                    { branchId: { in: branchIds } },
+                    { subBranchId: { in: branchIds } }
+                ],
+                convertedToCustomer: true,
+                isDeleted: false
+            }
+        },
+        select: { lead: { select: { branchId: true, subBranchId: true } } }
+    });
+    return rows.reduce((map, customer) => {
+        const branchId = customer.lead?.branchId;
+        const subBranchId = customer.lead?.subBranchId;
+        if (branchId && branchIds.includes(branchId)) map.set(branchId, (map.get(branchId) || 0) + 1);
+        if (subBranchId && branchIds.includes(subBranchId)) map.set(subBranchId, (map.get(subBranchId) || 0) + 1);
+        return map;
+    }, new Map());
+}
+
 // Create a new branch
 async function createBranch(req, res, next) {
     try {
@@ -95,6 +123,7 @@ async function listBranches(req, res, next) {
                     select: {
                         users: true,
                         customers: true,
+                        subBranchCustomers: true,
                         leads: { where: { isDeleted: false, convertedToCustomer: false } }
                     }
                 }
@@ -117,12 +146,15 @@ async function listBranches(req, res, next) {
             _count: true
         });
         const subCountByParent = new Map(subBranchCounts.map(row => [row.parentId, row._count]));
+        const branchIds = list.map(branch => branch.id);
+        const leadBackedCustomerCounts = await getLeadBackedCustomerCountByBranch(req.prisma, branchIds, ispId);
 
         return res.json(list.map(branch => ({
             ...branch,
             parent: branch.parentId ? parentById.get(branch.parentId) || null : null,
             _count: {
                 ...branch._count,
+                customers: (branch._count.customers || 0) + (branch._count.subBranchCustomers || 0) + (leadBackedCustomerCounts.get(branch.id) || 0),
                 subBranches: subCountByParent.get(branch.id) || 0
             }
         })));
@@ -148,6 +180,7 @@ async function getBranchById(req, res, next) {
                     select: {
                         users: true,
                         customers: true,
+                        subBranchCustomers: true,
                         leads: { where: { isDeleted: false, convertedToCustomer: false } }
                     }
                 }
@@ -170,11 +203,19 @@ async function getBranchById(req, res, next) {
             req.prisma.oNT.count({ where: { branchId: id, isDeleted: false } })
         ]);
 
+        const leadBackedCustomerCounts = await getLeadBackedCustomerCountByBranch(req.prisma, [id], req.ispId);
+
         return res.json({
             ...branch,
             parent,
             subBranches,
-            _count: { ...branch._count, olts, onts, subBranches: subBranches.length }
+            _count: {
+                ...branch._count,
+                customers: (branch._count.customers || 0) + (branch._count.subBranchCustomers || 0) + (leadBackedCustomerCounts.get(id) || 0),
+                olts,
+                onts,
+                subBranches: subBranches.length
+            }
         });
     } catch (err) {
         return next(err);

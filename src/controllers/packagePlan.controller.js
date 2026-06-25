@@ -6,11 +6,6 @@ async function convertMbpsToKbps(mbps) {
   return mbps * 1000;
 }
 
-async function convertMbpsToBps(mbps) {
-  if (typeof mbps !== 'number' || isNaN(mbps)) return 0;
-  return mbps * 1000000;
-}
-
 function calculateJuniperBurstBytes(mbps) {
   const speed = Number(mbps) || 0;
   return Math.round((speed * 1000000 / 8) * 0.005);
@@ -46,9 +41,6 @@ function normalizeVendorProfiles(plan) {
   if (selectedNas.includes('juniper') && !hasVendor('juniper')) {
     profiles.push({ vendor: 'juniper', profile: 'x-ppp-profile' });
   }
-  if (selectedNas.includes('nokia') && !hasVendor('nokia')) {
-    profiles.push({ vendor: 'nokia', profile: plan.planCode || `pkg-${Number(plan.downSpeed) || 0}mbps` });
-  }
 
   return profiles;
 }
@@ -63,6 +55,8 @@ async function generateRadiusAttributes(plan) {
 
   const downMbps = Number(plan.downSpeed) || 0;
   const upMbps = Number(plan.upSpeed) || 0;
+  const downKbps = await convertMbpsToKbps(downMbps);
+  const upKbps = await convertMbpsToKbps(upMbps);
 
   // 1. MikroTik logic (Standard attribute)
   if (nasList.includes('mikrotik')) {
@@ -84,36 +78,23 @@ async function generateRadiusAttributes(plan) {
         const bandwidthMbps = downMbps || upMbps;
         const burstBytes = calculateJuniperBurstBytes(bandwidthMbps);
         replyAttrs.push(
-          { attribute: 'Juniper-Dynamic-Profile-Name', op: '=', value: profile || 'x-ppp-profile' },
-          { attribute: 'Juniper-Profile-String', op: '+=', value: `bandwidth=${bandwidthMbps}m` },
-          { attribute: 'Juniper-Profile-String', op: '+=', value: `burst=${burstBytes}` }
+          { attribute: 'ERX-Client-Profile-Name', op: '=', value: profile || 'x-ppp-profile' },
+          { attribute: 'ERX-Service-Description', op: '+=', value: `bandwidth=${bandwidthMbps}m` },
+          { attribute: 'ERX-Service-Description', op: '+=', value: `burst=${burstBytes}` },
+          { attribute: 'ERX-IPv6-Delegated-Pool-Name', op: ':=', value: 'v6-default-pd' },
+          { attribute: 'Framed-IPv6-Pool', op: ':=', value: 'v6-ndra' }
         );
-      }
-
-      if (vendor === 'nokia') {
-        const upKbps = await convertMbpsToKbps(upMbps);
-        const downKbps = await convertMbpsToKbps(downMbps);
-        const slaProfile = profile || plan.planCode || `pkg-${downMbps}mbps`;
-        const subProfile = vp.subProfile || 'sub-default';
-        replyAttrs.push(
-          { attribute: 'Alc-Subsc-Prof-Str', op: '=', value: subProfile },
-          { attribute: 'Alc-SLA-Prof-Str', op: '=', value: slaProfile },
-          { attribute: 'Alc-Subsc-Id-Str', op: '=', value: '%{User-Name}' }
-        );
-        if (vp.dynamicRate) {
-          replyAttrs.push({ attribute: 'Alc-Agg-Rate-Limit', op: '=', value: String(Math.max(upKbps, downKbps)) });
-        }
       }
     }
   }
 
-  // 3. Fallback / Global attributes if none of above matched but we need basic ones
-  // (Optional: adding standard Alcatel attribute if not using Nokia profiles but Nokia NAS is selected)
-  if (nasList.includes('nokia') && !vendorProfiles.some(v => v.vendor === 'nokia')) {
+  // 3. Nokia QoS override attributes
+  if (nasList.includes('nokia')) {
+    const egressRate = downKbps || upKbps;
+    const ingressRate = upKbps || downKbps;
     replyAttrs.push(
-      { attribute: 'Alc-Subsc-Prof-Str', op: '=', value: 'sub-default' },
-      { attribute: 'Alc-SLA-Prof-Str', op: '=', value: plan.planCode || `pkg-${downMbps}mbps` },
-      { attribute: 'Alc-Subsc-Id-Str', op: '=', value: '%{User-Name}' }
+      { attribute: 'Alc-Subscriber-Qos-Override', op: '=', value: `E:Q:1:pir=${egressRate},cir=${egressRate}` },
+      { attribute: 'Alc-Subscriber-Qos-Override', op: '=', value: `I:P:1:pir=${ingressRate},cir=${ingressRate},cbs=-1,mbs=-1` }
     );
   }
 

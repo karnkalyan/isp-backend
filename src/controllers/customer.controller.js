@@ -871,6 +871,9 @@ async function createCustomer(req, res, next) {
       return res.status(400).json({ success: false, error: 'Only qualified leads can be converted to customers' });
     }
 
+    const effectiveBranchId = branchId || lead.branchId;
+    const effectiveSubBranchId = subBranchId || lead.subBranchId;
+
     // Validate duplicate Mobile and Email based on CustomerType rules
     const targetTypeId = customerTypeId ? Number(customerTypeId) : null;
     if (targetTypeId) {
@@ -953,8 +956,8 @@ async function createCustomer(req, res, next) {
           panNo: finalPan,
           idNumber: idNumber.trim(),
           ...(membershipId && { membership: { connect: { id: Number(membershipId) } } }),
-          ...(branchId && { branch: { connect: { id: Number(branchId) } } }),
-          ...(subBranchId && { subBranch: { connect: { id: Number(subBranchId) } } }),
+          ...(effectiveBranchId && { branch: { connect: { id: Number(effectiveBranchId) } } }),
+          ...(effectiveSubBranchId && { subBranch: { connect: { id: Number(effectiveSubBranchId) } } }),
           ...(targetTypeId && { customerType: { connect: { id: targetTypeId } } }),
           ...(req.ispId && { isp: { connect: { id: Number(req.ispId) } } }),
           ...(installedById && { installedBy: { connect: { id: Number(installedById) } } }),
@@ -968,7 +971,7 @@ async function createCustomer(req, res, next) {
       });
 
       // 2. Generate unique customer ID
-      const customerUniqueId = await generateCustomerUniqueId(tx, createdCustomer.id, lead.firstName, lead.lastName, membershipCode, branchId, subBranchId, req.ispId);
+      const customerUniqueId = await generateCustomerUniqueId(tx, createdCustomer.id, lead.firstName, lead.lastName, membershipCode, effectiveBranchId, effectiveSubBranchId, req.ispId);
       createdCustomer = await tx.customer.update({
         where: { id: createdCustomer.id },
         data: { customerUniqueId },
@@ -997,7 +1000,7 @@ async function createCustomer(req, res, next) {
             roleId: customerRole.id,
             status: 'active',
             ispId: req.ispId ? Number(req.ispId) : null,
-            branchId: branchId ? Number(branchId) : null,
+            branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
             customerId: createdCustomer.id,
           },
         });
@@ -1120,7 +1123,7 @@ async function createCustomer(req, res, next) {
               customerId: createdCustomer.id,
               username: cu.username,
               password: cu.password,
-              branchId: branchId ? Number(branchId) : null,
+              branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
               ispId: req.ispId ? Number(req.ispId) : null,
             },
           });
@@ -4035,6 +4038,63 @@ async function disconnectBranchSessions(req, res, next) {
   }
 }
 
+async function getPackagePriceIdsForFramedPool(req, poolValue) {
+  const localPackagePrices = await req.prisma.packagePrice.findMany({
+    where: {
+      isDeleted: false,
+      ispId: req.ispId,
+      packagePlanDetails: {
+        framedPoolValue: poolValue,
+        isDeleted: false,
+        ispId: req.ispId
+      }
+    },
+    select: { id: true, planId: true }
+  });
+
+  const ids = new Set(localPackagePrices.map(item => item.id));
+
+  try {
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const repliesResponse = await client.getRadgroupreply();
+    const replies = Array.isArray(repliesResponse)
+      ? repliesResponse
+      : Array.isArray(repliesResponse?.data)
+        ? repliesResponse.data
+        : [];
+    const groupNames = [...new Set(replies
+      .filter(reply =>
+        String(reply.attribute || '').toLowerCase() === 'framed-pool' &&
+        String(reply.value || '').trim() === poolValue
+      )
+      .map(reply => String(reply.groupname || '').trim())
+      .filter(Boolean))];
+
+    if (groupNames.length > 0) {
+      const plans = await req.prisma.PackagePlan.findMany({
+        where: {
+          ispId: req.ispId,
+          isDeleted: false,
+          planCode: { in: groupNames }
+        },
+        select: { id: true }
+      });
+      const planIds = plans.map(plan => plan.id);
+      if (planIds.length > 0) {
+        const radiusBackedPrices = await req.prisma.packagePrice.findMany({
+          where: { isDeleted: false, ispId: req.ispId, planId: { in: planIds } },
+          select: { id: true }
+        });
+        radiusBackedPrices.forEach(item => ids.add(item.id));
+      }
+    }
+  } catch (error) {
+    console.warn(`[POOL DISCONNECT] Unable to resolve pool ${poolValue} from Radius radgroupreply: ${error.message}`);
+  }
+
+  return Array.from(ids);
+}
+
 async function disconnectPoolSessions(req, res, next) {
   const poolValue = String(req.params.poolValue || req.body?.poolValue || '').trim();
   if (!poolValue) return res.status(400).json({ success: false, error: 'Pool value is required' });
@@ -4060,16 +4120,7 @@ async function disconnectPoolSessions(req, res, next) {
         ? { in: requestedSubBranchIds }
         : undefined;
 
-    const packagePlanWhere = { framedPoolValue: poolValue, isDeleted: false, ispId: req.ispId };
-    const packagePrices = await req.prisma.packagePrice.findMany({
-      where: {
-        isDeleted: false,
-        ispId: req.ispId,
-        packagePlanDetails: packagePlanWhere
-      },
-      select: { id: true }
-    });
-    const packagePriceIds = packagePrices.map(item => item.id);
+    const packagePriceIds = await getPackagePriceIdsForFramedPool(req, poolValue);
 
     if (packagePriceIds.length === 0) {
       return res.json({
@@ -4086,6 +4137,16 @@ async function disconnectPoolSessions(req, res, next) {
     if (scopedBranchFilter) customerBranchWhere.push({ branchId: scopedBranchFilter });
     if (scopedSubBranchFilter) customerBranchWhere.push({ subBranchId: scopedSubBranchFilter });
 
+    const customerAnd = [
+      {
+        OR: [
+          { subscribedPkgId: { in: packagePriceIds } },
+          { customerSubscriptions: { some: { isActive: true, packagePriceId: { in: packagePriceIds } } } }
+        ]
+      }
+    ];
+    if (customerBranchWhere.length > 0) customerAnd.push({ OR: customerBranchWhere });
+
     const connectionUsers = await req.prisma.connectionUser.findMany({
       where: {
         isDeleted: false,
@@ -4093,8 +4154,7 @@ async function disconnectPoolSessions(req, res, next) {
         customer: {
           ispId: req.ispId,
           isDeleted: false,
-          subscribedPkgId: { in: packagePriceIds },
-          ...(customerBranchWhere.length > 0 ? { OR: customerBranchWhere } : {})
+          AND: customerAnd
         }
       },
       select: { username: true, customerId: true }
@@ -4148,6 +4208,121 @@ async function disconnectPoolSessions(req, res, next) {
       success: false,
       error: error.message || 'Failed to disconnect pool sessions'
     });
+  }
+}
+
+async function disconnectFilteredCustomerSessions(req, res, next) {
+  try {
+    const {
+      branchIds = [],
+      subBranchIds = [],
+      packageIds = [],
+      status,
+      poolValue
+    } = req.body || {};
+
+    const requestedBranchIds = Array.isArray(branchIds) ? branchIds.map(Number).filter(Boolean) : [];
+    const requestedSubBranchIds = Array.isArray(subBranchIds) ? subBranchIds.map(Number).filter(Boolean) : [];
+    const requestedPackageIds = Array.isArray(packageIds) ? packageIds.map(Number).filter(Boolean) : [];
+
+    let allowedBranchIds = [];
+    if (req.branchId) {
+      allowedBranchIds = await getAllSubBranchIds(req.prisma, Number(req.branchId));
+    }
+
+    const packageIdSet = new Set(requestedPackageIds);
+    const cleanPoolValue = String(poolValue || '').trim();
+    if (cleanPoolValue) {
+      const poolPackageIds = await getPackagePriceIdsForFramedPool(req, cleanPoolValue);
+      poolPackageIds.forEach(id => packageIdSet.add(id));
+      if (poolPackageIds.length === 0 && requestedPackageIds.length === 0) {
+        return res.json({
+          success: true,
+          message: `No package prices found for pool ${cleanPoolValue}.`,
+          totalUsers: 0,
+          disconnected: [],
+          failed: []
+        });
+      }
+    }
+
+    const branchOr = [];
+    if (req.branchId) {
+      branchOr.push({ branchId: { in: allowedBranchIds } }, { subBranchId: { in: allowedBranchIds } });
+    } else {
+      if (requestedBranchIds.length > 0) branchOr.push({ branchId: { in: requestedBranchIds } });
+      if (requestedSubBranchIds.length > 0) branchOr.push({ subBranchId: { in: requestedSubBranchIds } });
+    }
+
+    const customerAnd = [];
+    if (packageIdSet.size > 0) {
+      const packageIds = Array.from(packageIdSet);
+      customerAnd.push({
+        OR: [
+          { subscribedPkgId: { in: packageIds } },
+          { customerSubscriptions: { some: { isActive: true, packagePriceId: { in: packageIds } } } }
+        ]
+      });
+    }
+    if (branchOr.length > 0) customerAnd.push({ OR: branchOr });
+
+    const customerWhere = {
+      ispId: req.ispId,
+      isDeleted: false,
+      ...(status && status !== 'all' ? { status: String(status) } : {}),
+      ...(customerAnd.length > 0 ? { AND: customerAnd } : {})
+    };
+
+    const connectionUsers = await req.prisma.connectionUser.findMany({
+      where: {
+        isDeleted: false,
+        username: { not: '' },
+        customer: customerWhere
+      },
+      select: { username: true, customerId: true }
+    });
+
+    const usersByUsername = new Map();
+    connectionUsers.forEach(user => {
+      const username = String(user.username || '').trim();
+      if (username) usersByUsername.set(username, user);
+    });
+
+    const usernames = Array.from(usersByUsername.keys());
+    if (usernames.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No customer RADIUS users found for selected filters.',
+        totalUsers: 0,
+        disconnected: [],
+        failed: []
+      });
+    }
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const disconnected = [];
+    const failed = [];
+
+    for (const username of usernames) {
+      try {
+        const result = await client.disconnectAllSessions(username);
+        disconnected.push({ username, customerId: usersByUsername.get(username)?.customerId || null, result });
+      } catch (error) {
+        failed.push({ username, customerId: usersByUsername.get(username)?.customerId || null, error: error.message || 'Disconnect failed' });
+      }
+    }
+
+    return res.status(failed.length > 0 && disconnected.length === 0 ? 502 : 200).json({
+      success: failed.length === 0,
+      partialSuccess: failed.length > 0 && disconnected.length > 0,
+      message: `Disconnected sessions for ${disconnected.length} of ${usernames.length} customer RADIUS users.`,
+      totalUsers: usernames.length,
+      disconnected,
+      failed
+    });
+  } catch (error) {
+    console.error('Error disconnecting filtered customer sessions:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to disconnect customer sessions' });
   }
 }
 
@@ -4217,5 +4392,6 @@ module.exports = {
   disconnectAllSessions,
   disconnectBranchSessions,
   disconnectPoolSessions,
+  disconnectFilteredCustomerSessions,
   disconnectBySessionId
 };
