@@ -551,16 +551,26 @@ async function renewSubscription(req, res, next) {
                         subject: 'Recharge Successful',
                         body: `Dear ${customerName},\n\nYour recharge was successful.\n\nPackage: ${customerTemplateData.packageName}\nAmount: ${customerTemplateData.amount}\nValid Until: ${customerTemplateData.expiryDate}\n\nThank you,\n${ispName}`
                     }, prisma);
-                    await mailHelper.sendMail(req.ispId, {
+                    const mailResult = await mailHelper.sendMail(req.ispId, {
                         to: customer.lead.email,
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)
                     }, { ignoreNotificationSetting: true });
-                    console.log('[billing.controller] recharge_success email dispatch finished', {
-                        ispId: req.ispId,
-                        customerId: customer.id,
-                        to: customer.lead.email
-                    });
+                    if (!mailResult?.success) {
+                        console.warn('[billing.controller] recharge_success email was not accepted by SMTP', {
+                            ispId: req.ispId,
+                            customerId: customer.id,
+                            to: customer.lead.email,
+                            result: mailResult
+                        });
+                    } else {
+                        console.log('[billing.controller] recharge_success email dispatch finished', {
+                            ispId: req.ispId,
+                            customerId: customer.id,
+                            to: customer.lead.email,
+                            result: mailResult
+                        });
+                    }
                 } catch (emailErr) {
                     console.error('Failed to send recharge success email:', emailErr.message);
                 }
@@ -575,12 +585,22 @@ async function renewSubscription(req, res, next) {
                         amount: customerTemplateData.amount
                     });
                     const smsHelper = require('../utils/smsHelper');
-                    await smsHelper.sendEventSms(req.ispId, 'recharge_success', customerTemplateData);
-                    console.log('[billing.controller] recharge_success SMS dispatch finished', {
-                        ispId: req.ispId,
-                        customerId: customer.id,
-                        phone: customer.lead.phoneNumber
-                    });
+                    const smsResult = await smsHelper.sendEventSms(req.ispId, 'recharge_success', customerTemplateData);
+                    if (!smsResult?.success) {
+                        console.warn('[billing.controller] recharge_success SMS was not accepted by provider', {
+                            ispId: req.ispId,
+                            customerId: customer.id,
+                            phone: customer.lead.phoneNumber,
+                            result: smsResult
+                        });
+                    } else {
+                        console.log('[billing.controller] recharge_success SMS dispatch finished', {
+                            ispId: req.ispId,
+                            customerId: customer.id,
+                            phone: customer.lead.phoneNumber,
+                            result: smsResult
+                        });
+                    }
                 } catch (smsErr) {
                     console.error('Failed to send recharge success SMS:', smsErr.message);
                 }

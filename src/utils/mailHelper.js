@@ -74,10 +74,14 @@ async function sendMail(ispId, mailOptions, options = {}) {
             subject: mailOptions?.subject,
             ignoreNotificationSetting: Boolean(options.ignoreNotificationSetting)
         });
-        const settings = await prisma.iSPSettings.findFirst({
-            where: { ispId, key: 'smtpFrom' }
+        const settings = await prisma.iSPSettings.findMany({
+            where: { ispId, key: { in: ['smtpFrom', 'smtpUser'] } }
         });
-        const fromAddress = settings ? settings.value : 'noreply@kisanisp.com';
+        const settingsObj = settings.reduce((acc, setting) => {
+            acc[setting.key] = setting.value;
+            return acc;
+        }, {});
+        const fromAddress = settingsObj.smtpFrom || settingsObj.smtpUser || 'noreply@kisanisp.com';
 
         const transporter = await getTransporter(ispId, options);
 
@@ -90,9 +94,20 @@ async function sendMail(ispId, mailOptions, options = {}) {
             ispId,
             to: mailOptions?.to,
             subject: mailOptions?.subject,
-            messageId: info.messageId
+            messageId: info.messageId,
+            accepted: info.accepted,
+            rejected: info.rejected,
+            response: info.response
         });
-        return { success: true, messageId: info.messageId };
+        const rejected = Array.isArray(info.rejected) ? info.rejected : [];
+        const accepted = Array.isArray(info.accepted) ? info.accepted : [];
+        return {
+            success: accepted.length > 0 && rejected.length === 0,
+            messageId: info.messageId,
+            accepted,
+            rejected,
+            response: info.response
+        };
     } catch (error) {
         console.error('[mailHelper] Error sending email:', error.message);
         return { success: false, error: error.message };

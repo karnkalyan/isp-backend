@@ -1225,16 +1225,26 @@ async function createCustomer(req, res, next) {
           subject: 'Customer Account Created',
           body: `Dear ${customerName},\n\nYour customer account has been created successfully.\n\nCustomer ID: ${createdCustomer.customerUniqueId}`
         }, req.prisma);
-        await mailHelper.sendMail(req.ispId, {
+        const mailResult = await mailHelper.sendMail(req.ispId, {
           to: lead.email,
           subject: rendered.subject,
           html: textToHtml(rendered.body)
         }, { ignoreNotificationSetting: true });
-        console.log('[customer.controller] customer_new_connection email dispatch finished', {
-          ispId: req.ispId,
-          customerId: createdCustomer.id,
-          to: lead.email
-        });
+        if (!mailResult?.success) {
+          console.warn('[customer.controller] customer_new_connection email was not accepted by SMTP', {
+            ispId: req.ispId,
+            customerId: createdCustomer.id,
+            to: lead.email,
+            result: mailResult
+          });
+        } else {
+          console.log('[customer.controller] customer_new_connection email dispatch finished', {
+            ispId: req.ispId,
+            customerId: createdCustomer.id,
+            to: lead.email,
+            result: mailResult
+          });
+        }
       } catch (err) {
         console.error('Failed to send customer creation email:', err.message);
       }
@@ -1248,12 +1258,22 @@ async function createCustomer(req, res, next) {
           phone: lead.phoneNumber
         });
         const smsHelper = require('../utils/smsHelper');
-        await smsHelper.sendEventSms(req.ispId, 'customer_new_connection', customerTemplateData);
-        console.log('[customer.controller] customer_new_connection SMS dispatch finished', {
-          ispId: req.ispId,
-          customerId: createdCustomer.id,
-          phone: lead.phoneNumber
-        });
+        const smsResult = await smsHelper.sendEventSms(req.ispId, 'customer_new_connection', customerTemplateData);
+        if (!smsResult?.success) {
+          console.warn('[customer.controller] customer_new_connection SMS was not accepted by provider', {
+            ispId: req.ispId,
+            customerId: createdCustomer.id,
+            phone: lead.phoneNumber,
+            result: smsResult
+          });
+        } else {
+          console.log('[customer.controller] customer_new_connection SMS dispatch finished', {
+            ispId: req.ispId,
+            customerId: createdCustomer.id,
+            phone: lead.phoneNumber,
+            result: smsResult
+          });
+        }
       } catch (err) {
         console.error('Failed to send customer creation SMS:', err.message);
       }

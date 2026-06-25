@@ -1,6 +1,48 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 
+function normalizeSmsResult(provider, result) {
+    const text = [
+        result?.response,
+        result?.message,
+        result?.status,
+        result?.detail,
+        result?.error,
+        typeof result === 'string' ? result : ''
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    const explicitFailure =
+        result?.success === false ||
+        result?.error ||
+        result?.response_code === 400 ||
+        result?.response_code === 401 ||
+        result?.response_code === 403 ||
+        result?.response_code === 422 ||
+        result?.responseCode === 400 ||
+        result?.responseCode === 401 ||
+        result?.responseCode === 403 ||
+        result?.responseCode === 422 ||
+        /\b(fail|failed|invalid|error|unauthorized|insufficient|rejected|blocked)\b/i.test(text);
+
+    const explicitSuccess =
+        result?.success === true ||
+        result?.status === true ||
+        result?.status === 'success' ||
+        result?.response_code === 200 ||
+        result?.responseCode === 200 ||
+        Number(result?.count || result?.sent || result?.total_sent || 0) > 0 ||
+        /\b(sent|success|submitted|queued|accepted)\b/i.test(text);
+
+    return {
+        provider,
+        success: Boolean(explicitSuccess && !explicitFailure),
+        raw: result,
+        response: result?.response || result?.message || result?.status || null,
+        responseCode: result?.response_code || result?.responseCode || null,
+        count: result?.count || result?.sent || result?.total_sent || null
+    };
+}
+
 /**
  * SMS Helper for event-driven notifications
  */
@@ -112,14 +154,19 @@ const smsHelper = {
                 messageLength: message.length
             });
             const result = await client.sendSms(phone, message);
+            const normalizedResult = normalizeSmsResult(defaultService.service.code, result);
             console.log('[smsHelper] SMS send result', {
                 ispId,
                 eventType,
                 provider: defaultService.service.code,
                 phone,
-                success: result?.success !== false
+                success: normalizedResult.success,
+                response: normalizedResult.response,
+                responseCode: normalizedResult.responseCode,
+                count: normalizedResult.count,
+                raw: normalizedResult.raw
             });
-            return result;
+            return normalizedResult;
         } catch (error) {
             console.error(`[smsHelper] Failed to send ${eventType} SMS:`, error.message);
         }
