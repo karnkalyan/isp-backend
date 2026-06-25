@@ -90,6 +90,9 @@ module.exports = (prisma) => {
   router.post('/profile/genieacs/:serialNumber/update-wifi', assertCustomerOwnsSerial, (req, res) => {
     return serviceController.updateSpecificSSID(req, res);
   });
+  router.post('/profile/genieacs/:serialNumber/ssid-operations', assertCustomerOwnsSerial, (req, res) => {
+    return serviceController.enableDisableSSID(req, res);
+  });
   router.post('/profile/genieacs/:serialNumber/reboot', assertCustomerOwnsSerial, (req, res) => {
     return serviceController.rebootGenieACSDevice(req, res);
   });
