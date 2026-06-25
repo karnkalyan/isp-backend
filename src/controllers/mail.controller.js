@@ -183,7 +183,7 @@ async function sendManualMail(req, res, next) {
                  VALUES (?, ?, 'sent', ?, ?, ?, ?, ?, true, NOW())`,
                 ispId,
                 req.user.id,
-                settings.smtpFrom || settings.smtpUser || req.user.email || null,
+                settings.smtpFrom || settings.smtpUser || null,
                 uniqueEmails.join(', '),
                 subject,
                 message,

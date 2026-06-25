@@ -81,7 +81,11 @@ async function sendMail(ispId, mailOptions, options = {}) {
             acc[setting.key] = setting.value;
             return acc;
         }, {});
-        const fromAddress = settingsObj.smtpFrom || settingsObj.smtpUser || 'noreply@kisanisp.com';
+        const fromAddress = settingsObj.smtpFrom || settingsObj.smtpUser;
+        if (!fromAddress) {
+            console.log('[mailHelper] Email skipped because SMTP From Address and SMTP User are missing', { ispId });
+            throw new Error("SMTP From Address or SMTP User must be configured in Mail Setup");
+        }
 
         const transporter = await getTransporter(ispId, options);
 
