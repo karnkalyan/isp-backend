@@ -244,6 +244,22 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 WebSocket available at ws://localhost:${PORT}/ws`);
     console.log(`CORS Client Origin: ${process.env.CLIENT_ORIGIN}`);
 
+    // Seed default message templates for all ISPs
+    prisma.iSP.findMany({ select: { id: true } })
+        .then(async (isps) => {
+            const { seedDefaultTemplates } = require('./utils/templateHelper');
+            for (const isp of isps) {
+                try {
+                    await seedDefaultTemplates(isp.id, prisma);
+                } catch (e) {
+                    console.error(`Failed to seed templates for ISP ${isp.id}:`, e.message);
+                }
+            }
+        })
+        .catch((err) => {
+            console.error('Failed to retrieve ISPs for template seeding:', err.message);
+        });
+
     YeastarService.initializeAllListeners(prisma).catch((error) => {
         console.error('[YEASTAR] Failed to auto-start listeners:', error.message);
     });

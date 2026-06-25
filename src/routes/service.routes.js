@@ -116,6 +116,7 @@ module.exports = (prisma) => {
 
 
     router.post('/genieacs/devices/:serialNumber/delete-wan-connection', checkPermission('services_delete'), serviceController.deleteWanConnection.bind(serviceController));
+    router.post('/genieacs/devices/:serialNumber/update-wan-connection', checkPermission('services_manage'), serviceController.updateWanConnection.bind(serviceController));
 
     router.post('/genieacs/devices/:serialNumber/ssid-operations', checkPermission('services_manage'), serviceController.enableDisableSSID.bind(serviceController));
 

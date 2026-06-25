@@ -3549,6 +3549,51 @@ class ServiceController {
     }
   }
 
+  async updateWanConnection(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { serialNumber } = req.params;
+      const { wanId, type, vlanId, serviceType, staticConfig } = req.body;
+
+      if (!wanId || !type) {
+        return res.status(400).json({
+          success: false,
+          error: 'wanId and type are required'
+        });
+      }
+
+      if (type === 'ppp') {
+        if (!staticConfig.username || !staticConfig.password || !vlanId) {
+          return res.status(400).json({
+            success: false,
+            error: 'username, password, and vlanId are required for PPPoE'
+          });
+        }
+      } else if (type === 'ip') {
+        if (staticConfig.addressingType === 'Static') {
+          if (!staticConfig.externalIp || !staticConfig.subnet || !staticConfig.gateway || !vlanId) {
+            return res.status(400).json({
+              success: false,
+              error: 'externalIp, subnet, gateway, and vlanId are required for static IPoE'
+            });
+          }
+        }
+      }
+
+      const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
+      const updateResult = await client.updateWANConnection(serialNumber, wanId, type, vlanId, serviceType, staticConfig);
+      
+      return res.json({ success: true, data: updateResult });
+    } catch (error) {
+      console.error('Error updating GenieACS WAN connection:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update WAN connection',
+        message: error.message
+      });
+    }
+  }
+
   async createDumpWanPPP(req, res) {
     try {
       const ispId = req.ispId;

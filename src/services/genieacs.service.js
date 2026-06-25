@@ -828,6 +828,80 @@ class GenieACSClient {
     }
 
 
+    async updateWANConnection(serialNumber, wanId, type, vlanId, serviceType, staticConfig) {
+        const taskResponse = {
+            success: true,
+            errors: []
+        };
+
+        try {
+            // Update VLAN ID using virtual parameter Wan_provision
+            // format: ${wanId}|${vlanId}|0|${serviceType}|${type}
+            const vlanPayload = `${wanId}|${vlanId}|0|${serviceType}|${type}`;
+            const vlanParams = {
+                name: "setParameterValues",
+                parameterValues: [
+                    [`VirtualParameters.Wan_provision`, vlanPayload, "xsd:string"],
+                ]
+            };
+            const vlanResult = await this.createTask(serialNumber, vlanParams);
+            if (vlanResult.status !== 'success') {
+                taskResponse.errors.push({ step: 'vlan_provision', message: vlanResult.message });
+            }
+
+            // Update specific connection parameters
+            let basicParam;
+            if (type === 'ppp') {
+                const { username, password, isNat } = staticConfig;
+                basicParam = {
+                    name: "setParameterValues",
+                    parameterValues: [
+                        [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANPPPConnection.1.Username`, username, "xsd:string"],
+                        [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANPPPConnection.1.Password`, password, "xsd:string"],
+                        [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANPPPConnection.1.NATEnabled`, isNat, "xsd:boolean"],
+                    ]
+                };
+            } else {
+                const { dnsServers, addressingType, externalIp, subnet, gateway, isNat, isDNS } = staticConfig;
+                const pVals = [
+                    [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.DNSServers`, dnsServers || "", "xsd:string"],
+                    [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.AddressingType`, addressingType || "DHCP", "xsd:string"],
+                    [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.DNSEnabled`, isDNS, "xsd:boolean"],
+                    [`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.NATEnabled`, isNat, "xsd:boolean"],
+                ];
+
+                if (addressingType === 'Static') {
+                    pVals.push([`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.ExternalIPAddress`, externalIp || "", "xsd:string"]);
+                    pVals.push([`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.SubnetMask`, subnet || "", "xsd:string"]);
+                    pVals.push([`InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${wanId}.WANIPConnection.1.DefaultGateway`, gateway || "", "xsd:string"]);
+                }
+
+                basicParam = {
+                    name: "setParameterValues",
+                    parameterValues: pVals
+                };
+            }
+
+            const configResult = await this.createTask(serialNumber, basicParam);
+            if (configResult.status !== 'success') {
+                taskResponse.success = false;
+                taskResponse.errors.push({ step: 'config_update', message: configResult.message });
+                throw new Error(`Failed to configure connection parameters: ${configResult.message}`);
+            }
+
+            taskResponse.message = "Successfully updated WAN Connection";
+        } catch (err) {
+            taskResponse.success = false;
+            taskResponse.errors.push({
+                step: 'exception',
+                message: err.message
+            });
+        }
+
+        return taskResponse;
+    }
+
+
     async deleteWanConnection(serialNumber, wanId) {
         const addPPPTask = {
             name: "deleteObject",

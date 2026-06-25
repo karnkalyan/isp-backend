@@ -1207,8 +1207,8 @@ async function createCustomer(req, res, next) {
       packageName: subscribedPackage?.packageName || 'Package',
       planStart: subscription?.planStart ? new Date(subscription.planStart).toLocaleDateString() : '',
       planEnd: subscription?.planEnd ? new Date(subscription.planEnd).toLocaleDateString() : '',
-      username: Array.isArray(parsedWirelessCredentials) ? (parsedWirelessCredentials.find(cu => cu.username || cu.password)?.username || '') : '',
-      password: Array.isArray(parsedWirelessCredentials) ? (parsedWirelessCredentials.find(cu => cu.username || cu.password)?.password || '') : '',
+      username: (Array.isArray(parsedWirelessCredentials) && parsedWirelessCredentials.find(cu => cu.username || cu.password)?.username) || customerLoginUsername || '',
+      password: (Array.isArray(parsedWirelessCredentials) && parsedWirelessCredentials.find(cu => cu.username || cu.password)?.password) || customerLoginPassword || '',
       phoneNumber: lead.phoneNumber || ''
     };
 

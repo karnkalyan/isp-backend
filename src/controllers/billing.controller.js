@@ -377,7 +377,7 @@ async function renewSubscription(req, res, next) {
         const renewalAmount = pkgPrice.renewAmountWithTax !== null && pkgPrice.renewAmountWithTax !== undefined
             ? Number(pkgPrice.renewAmountWithTax)
             : Number(pkgPrice.price || 0);
-        const expectedAmount = customer.isRechargeable ? renewalAmount : newPackageAmount;
+        const expectedAmount = customer.isFree ? 0 : (customer.isRechargeable ? renewalAmount : newPackageAmount);
 
         // Amount validation
         if (amount !== undefined && amount !== null) {

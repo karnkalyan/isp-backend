@@ -249,28 +249,45 @@ const getAllLeads = async (req, res, next) => {
     ]);
 
     const leadIds = rows.map(r => r.id);
+    const phoneNumbers = rows.map(r => r.phoneNumber).filter(Boolean);
+    const secondaryPhones = rows.map(r => r.secondaryContactNumber).filter(Boolean);
+    const allPhones = [...new Set([...phoneNumbers, ...secondaryPhones])];
+
     const sentSmsLeadIds = new Set();
+    const sentSmsPhones = new Set();
+
     if (leadIds.length > 0) {
+      const orConditions = [{ recipientId: { in: leadIds } }];
+      if (allPhones.length > 0) {
+        orConditions.push({ recipientPhone: { in: allPhones } });
+      }
+
       const sentSmsLogs = await req.prisma.smsCampaignLog.findMany({
         where: {
           recipientType: 'lead',
-          recipientId: { in: leadIds },
-          status: 'sent'
+          status: 'sent',
+          OR: orConditions
         },
         select: {
-          recipientId: true
+          recipientId: true,
+          recipientPhone: true
         }
       });
       sentSmsLogs.forEach(log => {
         if (log.recipientId) {
           sentSmsLeadIds.add(log.recipientId);
         }
+        if (log.recipientPhone) {
+          sentSmsPhones.add(log.recipientPhone);
+        }
       });
     }
 
     const rowsWithSmsStatus = rows.map(row => ({
       ...row,
-      smsSent: sentSmsLeadIds.has(row.id)
+      smsSent: sentSmsLeadIds.has(row.id) || 
+               (row.phoneNumber && sentSmsPhones.has(row.phoneNumber)) || 
+               (row.secondaryContactNumber && sentSmsPhones.has(row.secondaryContactNumber))
     }));
 
     return res.status(200).json({
@@ -352,10 +369,16 @@ async function getLeadById(req, res, next) {
       return res.status(404).json({ error: "Lead not found." });
     }
 
-    // Fetch SMS logs sent to this lead
+    // Fetch SMS logs sent to this lead (including manual logs matched by phone number)
+    const phoneNumbers = [lead.phoneNumber, lead.secondaryContactNumber].filter(Boolean);
+    const orConditions = [{ recipientId: id }];
+    if (phoneNumbers.length > 0) {
+      orConditions.push({ recipientPhone: { in: phoneNumbers } });
+    }
+
     const smsLogs = await req.prisma.smsCampaignLog.findMany({
       where: {
-        recipientId: id,
+        OR: orConditions,
         recipientType: 'lead'
       },
       include: {

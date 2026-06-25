@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
  */
 async function getTransporter(ispId, options = {}) {
     const settings = await prisma.iSPSettings.findMany({
-        where: { ispId, key: { in: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'enableMailNotifications', 'enableEmailService'] } }
+        where: { ispId, key: { in: ['smtpHost', 'smtpPort', 'smtpUser', 'smtpPass', 'enableMailNotifications', 'enableEmailService', 'emailNotifications'] } }
     });
 
     const settingsObj = settings.reduce((acc, s) => {
@@ -16,11 +16,14 @@ async function getTransporter(ispId, options = {}) {
         return acc;
     }, {});
 
-    if (settingsObj.enableEmailService === 'false') {
+    const emailServiceEnabled = settingsObj.enableEmailService !== 'false' && settingsObj.emailNotifications !== 'false';
+    const mailNotificationsEnabled = settingsObj.enableMailNotifications === 'true' || settingsObj.emailNotifications === 'true';
+
+    if (!emailServiceEnabled) {
         throw new Error("Email service is disabled in settings");
     }
 
-    if (!options.ignoreNotificationSetting && settingsObj.enableMailNotifications !== 'true') {
+    if (!options.ignoreNotificationSetting && !mailNotificationsEnabled) {
         throw new Error("Mail notifications are disabled in settings");
     }
 
@@ -36,6 +39,9 @@ async function getTransporter(ispId, options = {}) {
             user: settingsObj.smtpUser,
             pass: settingsObj.smtpPass,
         },
+        tls: {
+            rejectUnauthorized: false
+        }
     });
 }
 
