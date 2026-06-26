@@ -1,5 +1,121 @@
 const express = require('express');
 
+const SUPPORT_ROLE_NAMES = [
+    'administrator',
+    'admin',
+    'isp_admin',
+    'branch admin',
+    'sub branch admin',
+    'support',
+    'support agent',
+    'support manager',
+    'technician'
+];
+
+function normalizeRoleName(role) {
+    return String(typeof role === 'string' ? role : role?.name || '').toLowerCase();
+}
+
+function isSupportRole(role) {
+    const name = normalizeRoleName(role);
+    return SUPPORT_ROLE_NAMES.some(supportRole => name === supportRole || name.includes(supportRole));
+}
+
+// Get users the current account can chat with
+async function getRecipients(req, res, next) {
+    try {
+        const userId = req.user.id;
+        const ispId = req.ispId;
+        const customerId = req.user.customerId || null;
+
+        let branchIds = [req.user.branchId, req.user.subBranchId].filter(Boolean).map(Number);
+        if (customerId) {
+            const customer = await req.prisma.customer.findFirst({
+                where: { id: Number(customerId), ispId, isDeleted: false },
+                select: { branchId: true, subBranchId: true }
+            });
+            branchIds = [customer?.branchId, customer?.subBranchId, ...branchIds]
+                .filter(Boolean)
+                .map(Number);
+        }
+        branchIds = [...new Set(branchIds)];
+
+        const messageParticipants = await req.prisma.message.findMany({
+            where: {
+                ispId,
+                isDeleted: false,
+                OR: [{ receiverId: userId }, { senderId: userId }]
+            },
+            select: { senderId: true, receiverId: true },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+        });
+
+        const participantIds = [...new Set(messageParticipants.flatMap(message => [message.senderId, message.receiverId]))]
+            .filter(id => id && id !== userId);
+
+        const branchFilter = branchIds.length > 0
+            ? {
+                OR: [
+                    { branchId: { in: branchIds } },
+                    { userBranches: { some: { branchId: { in: branchIds } } } },
+                    { role: { name: { in: ['administrator', 'admin', 'isp_admin'] } } }
+                ]
+            }
+            : {};
+
+        let users = await req.prisma.user.findMany({
+            where: {
+                ispId,
+                isDeleted: false,
+                id: { not: userId },
+                status: 'active',
+                ...branchFilter,
+                OR: [
+                    { id: { in: participantIds.length ? participantIds : [-1] } },
+                    { role: { name: { in: SUPPORT_ROLE_NAMES } } }
+                ]
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                branchId: true,
+                role: { select: { name: true } }
+            },
+            orderBy: { name: 'asc' },
+            take: 50
+        });
+
+        users = users.filter(user => participantIds.includes(user.id) || isSupportRole(user.role));
+
+        if (users.length === 0) {
+            users = await req.prisma.user.findMany({
+                where: {
+                    ispId,
+                    isDeleted: false,
+                    id: { not: userId },
+                    status: 'active',
+                    role: { name: { notIn: ['Customer', 'customer', 'Customers', 'customers'] } }
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    branchId: true,
+                    role: { select: { name: true } }
+                },
+                orderBy: { name: 'asc' },
+                take: 20
+            });
+        }
+
+        res.json(users);
+    } catch (err) {
+        next(err);
+    }
+}
+
 // Get messages
 async function getMessages(req, res, next) {
     try {
@@ -34,10 +150,40 @@ async function sendMessage(req, res, next) {
         const senderId = req.user.id;
         const ispId = req.ispId;
         const branchId = req.user.branchId || null;
-        const { receiverId, content } = req.body;
+        let { receiverId, content } = req.body;
 
-        if (!receiverId || !content) {
-            return res.status(400).json({ error: 'Receiver and content are required' });
+        if (!content) {
+            return res.status(400).json({ error: 'Message content is required' });
+        }
+
+        if (!receiverId) {
+            const fallbackReceiver = await req.prisma.user.findFirst({
+                where: {
+                    ispId,
+                    isDeleted: false,
+                    id: { not: senderId },
+                    status: 'active',
+                    role: { name: { in: SUPPORT_ROLE_NAMES } }
+                },
+                select: { id: true },
+                orderBy: { id: 'asc' }
+            }) || await req.prisma.user.findFirst({
+                where: {
+                    ispId,
+                    isDeleted: false,
+                    id: { not: senderId },
+                    status: 'active',
+                    role: { name: { notIn: ['Customer', 'customer', 'Customers', 'customers'] } }
+                },
+                select: { id: true },
+                orderBy: { id: 'asc' }
+            });
+
+            receiverId = fallbackReceiver?.id || null;
+        }
+
+        if (!receiverId) {
+            return res.status(400).json({ error: 'No support or admin user is available for chat.' });
         }
 
         const message = await req.prisma.message.create({
@@ -133,6 +279,7 @@ async function deleteMessage(req, res, next) {
 }
 
 module.exports = {
+    getRecipients,
     getMessages,
     sendMessage,
     markMessageRead,

@@ -7,6 +7,7 @@ module.exports = (prisma) => {
     const auth = isAuthenticated(prisma);
 
     router.get('/', auth, messageController.getMessages);
+    router.get('/recipients', auth, messageController.getRecipients);
     router.post('/', auth, messageController.sendMessage);
     router.put('/read-all', auth, messageController.markAllMessagesRead);
     router.put('/:id/read', auth, messageController.markMessageRead);
