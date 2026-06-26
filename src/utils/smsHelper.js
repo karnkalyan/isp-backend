@@ -59,11 +59,20 @@ const smsHelper = {
             });
             const prisma = require('../../prisma/client');
             const { renderTemplate } = require('./templateHelper');
-            const serviceSetting = await prisma.iSPSettings.findFirst({
-                where: { ispId, key: 'enableSmsService' }
+            const serviceSettings = await prisma.iSPSettings.findMany({
+                where: { ispId, key: { in: ['enableSmsService', 'smsNotifications'] } }
             });
-            if (serviceSetting?.value === 'false') {
-                console.log('[smsHelper] SMS skipped because enableSmsService is false', { ispId, eventType });
+            const settingsObj = serviceSettings.reduce((acc, setting) => {
+                acc[setting.key] = setting.value;
+                return acc;
+            }, {});
+            if (settingsObj.enableSmsService === 'false' || settingsObj.smsNotifications === 'false') {
+                console.log('[smsHelper] SMS skipped because SMS service or SMS notifications are disabled', {
+                    ispId,
+                    eventType,
+                    enableSmsService: settingsObj.enableSmsService,
+                    smsNotifications: settingsObj.smsNotifications
+                });
                 return;
             }
 

@@ -3983,6 +3983,24 @@ class ServiceController {
 
       try {
         result = await client.sendBulkSms(recipientPhones, text);
+        const providerErrors = [
+          typeof result?.error === 'string' ? result.error : null,
+          typeof result?.data?.error === 'string' ? result.data.error : null,
+          ...(Array.isArray(result?.errors) ? result.errors.map(item => item?.message || item?.error) : []),
+          ...(Array.isArray(result?.data?.errors) ? result.data.errors.map(item => item?.message || item?.error) : [])
+        ].filter(Boolean);
+        const providerMessage = result?.data?.message || result?.message || result?.response || null;
+        const providerText = [providerMessage, ...providerErrors].filter(Boolean).join(' ').toLowerCase();
+        const providerFailed =
+          providerErrors.length > 0 ||
+          /\b(error|failed|fail|insufficient|not enough|balance|invalid|rejected|unauthorized)\b/i.test(providerText);
+
+        if (providerFailed) {
+          status = 'failed';
+          errorMessage = [providerMessage, ...providerErrors.map(String)]
+            .filter(Boolean)
+            .join(' - ') || 'SMS provider reported failure';
+        }
       } catch (err) {
         status = 'failed';
         errorMessage = err.message || 'SMS provider failed';
@@ -4013,6 +4031,14 @@ class ServiceController {
               }))
             }
           }
+        });
+      }
+
+      if (status === 'failed') {
+        return res.status(400).json({
+          success: false,
+          error: errorMessage || 'Failed to send SMS',
+          data: result
         });
       }
 

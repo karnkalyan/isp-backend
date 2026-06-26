@@ -16,8 +16,8 @@ async function getTransporter(ispId, options = {}) {
         return acc;
     }, {});
 
-    const emailServiceEnabled = settingsObj.enableEmailService !== 'false' && settingsObj.emailNotifications !== 'false';
-    const mailNotificationsEnabled = settingsObj.enableMailNotifications === 'true' || settingsObj.emailNotifications === 'true';
+    const emailServiceEnabled = settingsObj.enableEmailService !== 'false';
+    const mailNotificationsEnabled = settingsObj.enableMailNotifications !== 'false' && settingsObj.emailNotifications !== 'false';
 
     if (!emailServiceEnabled) {
         console.log('[mailHelper] Email skipped because email service is disabled', { ispId });

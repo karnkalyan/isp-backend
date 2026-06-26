@@ -156,8 +156,9 @@ async function sendMessage(req, res, next) {
             return res.status(400).json({ error: 'Message content is required' });
         }
 
+        let receiverIds = [];
         if (!receiverId) {
-            const fallbackReceiver = await req.prisma.user.findFirst({
+            let fallbackReceivers = await req.prisma.user.findMany({
                 where: {
                     ispId,
                     isDeleted: false,
@@ -167,31 +168,38 @@ async function sendMessage(req, res, next) {
                 },
                 select: { id: true },
                 orderBy: { id: 'asc' }
-            }) || await req.prisma.user.findFirst({
-                where: {
-                    ispId,
-                    isDeleted: false,
-                    id: { not: senderId },
-                    status: 'active',
-                    role: { name: { notIn: ['Customer', 'customer', 'Customers', 'customers'] } }
-                },
-                select: { id: true },
-                orderBy: { id: 'asc' }
             });
 
-            receiverId = fallbackReceiver?.id || null;
+            if (!fallbackReceivers.length) {
+                fallbackReceivers = await req.prisma.user.findMany({
+                    where: {
+                        ispId,
+                        isDeleted: false,
+                        id: { not: senderId },
+                        status: 'active',
+                        role: { name: { notIn: ['Customer', 'customer', 'Customers', 'customers'] } }
+                    },
+                    select: { id: true },
+                    orderBy: { id: 'asc' },
+                    take: 20
+                });
+            }
+
+            receiverIds = fallbackReceivers.map(user => Number(user.id)).filter(Boolean);
+        } else {
+            receiverIds = [Number(receiverId)].filter(Boolean);
         }
 
-        if (!receiverId) {
+        if (receiverIds.length === 0) {
             return res.status(400).json({ error: 'No support or admin user is available for chat.' });
         }
 
-        const message = await req.prisma.message.create({
+        const messages = await Promise.all(receiverIds.map((targetReceiverId) => req.prisma.message.create({
             data: {
                 ispId,
                 branchId,
                 senderId,
-                receiverId: Number(receiverId),
+                receiverId: targetReceiverId,
                 content,
                 updatedAt: new Date()
             },
@@ -199,15 +207,17 @@ async function sendMessage(req, res, next) {
                 sender: { select: { id: true, name: true, role: true } },
                 receiver: { select: { id: true, name: true, role: true } }
             }
-        });
+        })));
 
         const wsManager = req.app.get('webSocketManager');
         if (wsManager) {
-            wsManager.sendToUser(Number(receiverId), 'chat.message', message);
-            wsManager.sendToUser(senderId, 'chat.message', message);
+            messages.forEach((message) => {
+                wsManager.sendToUser(Number(message.receiverId), 'chat.message', message);
+                wsManager.sendToUser(senderId, 'chat.message', message);
+            });
         }
 
-        res.status(201).json(message);
+        res.status(201).json(messages[0]);
     } catch (err) {
         next(err);
     }

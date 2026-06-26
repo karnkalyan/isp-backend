@@ -6,6 +6,59 @@ function isSystemAdmin(req) {
     return role === 'administrator' || role === 'admin' || role.startsWith('global ');
 }
 
+const SENSITIVE_SETTING_KEYS = new Set([
+    'appLicenseToken',
+    'appHardwareFingerprint',
+    'smtpPass',
+    'imapPass',
+    'freeCustomerSecretKey'
+]);
+
+const REDACTED_SETTING_VALUE = '********';
+
+function sanitizeSettingsForResponse(settingsObj) {
+    return Object.entries(settingsObj).reduce((acc, [key, value]) => {
+        if (SENSITIVE_SETTING_KEYS.has(key)) {
+            if (value) acc[`${key}Configured`] = 'true';
+            return acc;
+        }
+        acc[key] = value;
+        return acc;
+    }, {});
+}
+
+function shouldSkipSensitiveWrite(key, value) {
+    return SENSITIVE_SETTING_KEYS.has(key) && (!String(value || '').trim() || String(value) === REDACTED_SETTING_VALUE);
+}
+
+function normalizeSettingsInput(settings = []) {
+    const normalized = [];
+    const push = (key, value, description) => {
+        if (shouldSkipSensitiveWrite(key, value)) return;
+        normalized.push({ key, value: String(value), description });
+    };
+
+    settings.forEach((setting) => {
+        push(setting.key, setting.value, setting.description);
+        if (setting.key === 'emailNotifications') {
+            push('enableMailNotifications', setting.value, 'Synced email notification setting');
+        }
+        if (setting.key === 'enableMailNotifications') {
+            push('emailNotifications', setting.value, 'Synced email notification setting');
+        }
+        if (setting.key === 'smsNotifications') {
+            push('enableSmsService', setting.value, 'Synced SMS notification setting');
+        }
+        if (setting.key === 'enableSmsService') {
+            push('smsNotifications', setting.value, 'Synced SMS notification setting');
+        }
+    });
+
+    const deduped = new Map();
+    normalized.forEach((setting) => deduped.set(setting.key, setting));
+    return Array.from(deduped.values());
+}
+
 async function getSettings(req, res, next) {
     try {
         const ispId = req.ispId;
@@ -19,7 +72,7 @@ async function getSettings(req, res, next) {
             return acc;
         }, {});
 
-        res.json(settingsObj);
+        res.json(sanitizeSettingsForResponse(settingsObj));
     } catch (err) {
         next(err);
     }
@@ -35,12 +88,21 @@ async function updateSetting(req, res, next) {
         }
         const { key, value, description } = req.body;
         const ispId = req.ispId;
+        const normalizedSettings = normalizeSettingsInput([{ key, value, description }]);
 
-        const updated = await req.prisma.ISPSettings.upsert({
-            where: { key },
-            update: { value, description, updatedAt: new Date() },
-            create: { key, value, description, ispId, updatedAt: new Date() }
-        });
+        if (normalizedSettings.length === 0) {
+            return res.json({ key, skipped: true, message: 'Sensitive setting was left unchanged.' });
+        }
+
+        const operations = normalizedSettings.map(setting =>
+            req.prisma.ISPSettings.upsert({
+                where: { key: setting.key },
+                update: { value: setting.value, description: setting.description, updatedAt: new Date() },
+                create: { key: setting.key, value: setting.value, description: setting.description, ispId, updatedAt: new Date() }
+            })
+        );
+
+        const [updated] = await req.prisma.$transaction(operations);
 
         res.json(updated);
     } catch (err) {
@@ -58,8 +120,9 @@ async function batchUpdateSettings(req, res, next) {
         }
         const { settings } = req.body; // Expecting [{key, value, description}]
         const ispId = req.ispId;
+        const normalizedSettings = normalizeSettingsInput(Array.isArray(settings) ? settings : []);
 
-        const operations = settings.map(s => 
+        const operations = normalizedSettings.map(s =>
             req.prisma.ISPSettings.upsert({
                 where: { key: s.key }, // Note: key must be unique per ISP if we want this simple, or scoped
                 update: { value: String(s.value), description: s.description, updatedAt: new Date() },
@@ -67,7 +130,9 @@ async function batchUpdateSettings(req, res, next) {
             })
         );
 
-        await req.prisma.$transaction(operations);
+        if (operations.length > 0) {
+            await req.prisma.$transaction(operations);
+        }
         res.json({ message: 'Settings updated successfully' });
     } catch (err) {
         next(err);
