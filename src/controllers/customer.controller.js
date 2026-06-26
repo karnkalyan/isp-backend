@@ -1679,7 +1679,11 @@ async function provisionCustomer(req, res, next) {
           const isTrial = testSubscription?.isTrial === true;
           
           if (!isTrial || pushTrialEnabled) {
-            const client = await ServiceFactory.getClient(service, req.ispId);
+            const isAccountService = service === SERVICE_CODES.TSHUL || service === SERVICE_CODES.NEPURIX;
+            let client = null;
+            if (!isAccountService) {
+              client = await ServiceFactory.getClient(service, req.ispId);
+            }
 
             switch (service) {
               case SERVICE_CODES.TSHUL:
@@ -1687,6 +1691,7 @@ async function provisionCustomer(req, res, next) {
                 const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
                 let clientsToProvision = activeBillingClients;
                 if (clientsToProvision.length === 0) {
+                  client = await ServiceFactory.getClient(service, req.ispId);
                   clientsToProvision = [{ code: service, client }];
                 }
 
@@ -3860,14 +3865,19 @@ async function reprovisionNettv(req, res, next) {
       where: { customerId_serviceId: { customerId, serviceId } }
     });
 
-    const nettvData = subscribedService?.serviceData || {
+    const fallbackNettvData = {
       username: customer.customerUniqueId || `cust_${customer.id}`,
-      firstName: customer.lead.firstName || 'Unknown',
-      lastName: customer.lead.lastName || 'Unknown',
-      email: customer.email || customer.lead.email || `${customer.id}@unknown.com`,
-      phoneNumber: customer.phoneNumber || customer.lead.phoneNumber || '0000000000',
-      address: customer.address || customer.lead.address || 'Unknown'
+      firstName: customer.lead?.firstName || 'Unknown',
+      lastName: customer.lead?.lastName || 'Unknown',
+      email: customer.email || customer.lead?.email || `${customer.id}@unknown.com`,
+      phoneNumber: customer.phoneNumber || customer.lead?.phoneNumber || '0000000000',
+      address: customer.address || customer.lead?.address || 'Unknown'
     };
+    const existingNettvData = subscribedService?.serviceData && typeof subscribedService.serviceData === 'object'
+      ? subscribedService.serviceData
+      : {};
+    const requestNettvData = req.body?.nettvData || req.body?.data || {};
+    const nettvData = { ...fallbackNettvData, ...existingNettvData, ...requestNettvData };
 
     const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
     
@@ -3888,6 +3898,110 @@ async function reprovisionNettv(req, res, next) {
   } catch (error) {
     console.error('Error reprovisioning NetTV:', error);
     return res.status(500).json({ error: 'NetTV reprovisioning failed', details: error.message });
+  }
+}
+
+async function reprovisionAccount(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: { lead: true }
+    });
+
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const name = `${customer.lead?.firstName || customer.firstName || ''} ${customer.lead?.lastName || customer.lastName || ''}`.trim() || `Customer ${customer.id}`;
+    const addressParts = [
+      customer.lead?.street || customer.street || customer.address,
+      customer.lead?.city || customer.city,
+      customer.lead?.province || customer.state,
+      customer.lead?.zipCode || customer.zipCode,
+    ].filter(Boolean);
+
+    const defaultPayload = {
+      Name: name,
+      ReferenceId: customer.customerUniqueId || `cust_${customer.id}`,
+      PanNo: customer.panNumber || customer.lead?.panNumber || '',
+      Address: addressParts.join(', ') || customer.lead?.address || customer.address || '',
+      City: customer.lead?.city || customer.city || '',
+      Province: customer.lead?.province || customer.state || '',
+      PostalCode: customer.lead?.zipCode || customer.zipCode || '',
+      Country: 'Nepal',
+      Phone: customer.phoneNumber || customer.lead?.phoneNumber || '',
+      Email: customer.email || customer.lead?.email || '',
+      Website: '',
+      ContactPerson: name,
+      ContactPersonPhone: customer.phoneNumber || customer.lead?.phoneNumber || '',
+      Bank: '',
+      AcNo: '',
+      AcName: '',
+      CustomerId: customer.idNumber || customer.customerUniqueId || String(customer.id),
+      Notes: `Reprovisioned from customer profile. Customer ID: ${customer.id}`,
+    };
+
+    const requestPayload = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+    const payload = { ...defaultPayload, ...requestPayload };
+    const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
+
+    if (!activeBillingClients.length) {
+      return res.status(400).json({ success: false, error: 'No account service is configured or enabled for this ISP' });
+    }
+
+    const getServiceIdByCode = async (code) => {
+      const ispService = await prisma.iSPService.findFirst({
+        where: {
+          ispId: req.ispId,
+          isDeleted: false,
+          service: {
+            code,
+            isActive: true,
+            isDeleted: false,
+          },
+        },
+        include: { service: true },
+      });
+      return ispService?.service?.id;
+    };
+
+    const results = [];
+    for (const billingClient of activeBillingClients) {
+      try {
+        const result = await billingClient.client.customer.create(payload);
+        const apiError = result?.Error || result?.Errors || result?.error;
+        if (apiError) {
+          throw new Error(Array.isArray(apiError) ? apiError.join(', ') : String(apiError));
+        }
+
+        const serviceId = await getServiceIdByCode(billingClient.code);
+        if (serviceId) {
+          await prisma.customerSubscribedService.upsert({
+            where: { customerId_serviceId: { customerId, serviceId } },
+            update: { status: 'active', serviceData: result },
+            create: { customerId, serviceId, status: 'active', serviceData: result },
+          });
+        }
+
+        results.push({ service: billingClient.code, success: true, data: result });
+      } catch (err) {
+        console.error(`${billingClient.code} account reprovision error:`, err);
+        results.push({ service: billingClient.code, success: false, message: err.message });
+      }
+    }
+
+    const failed = results.filter((result) => !result.success);
+    return res.status(failed.length === results.length ? 502 : 200).json({
+      success: failed.length === 0,
+      partialSuccess: failed.length > 0 && failed.length < results.length,
+      message: failed.length === 0 ? 'Account reprovisioned successfully' : 'Account reprovision completed with errors',
+      services: results,
+    });
+  } catch (error) {
+    console.error('Error reprovisioning Account:', error);
+    return res.status(500).json({ error: 'Account reprovisioning failed', details: error.message });
   }
 }
 
@@ -4489,6 +4603,7 @@ module.exports = {
   changeConnectionUserPassword,
   reprovisionRadius,
   reprovisionNettv,
+  reprovisionAccount,
   disconnectRadiusSession,
   listNasDevices,
   listActiveSessions,
