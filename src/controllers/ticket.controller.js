@@ -628,13 +628,26 @@ async function addComment(req, res, next) {
             })
             : null;
 
+        const commentPayload = { ...comment, user };
+
         // Update ticket's updatedAt
         await req.prisma.ticket.update({
             where: { id: parseInt(id) },
             data: { updatedAt: new Date() },
         });
 
-        res.status(201).json({ ...comment, user });
+        const wsManager = req.app.get('webSocketManager');
+        if (wsManager) {
+            wsManager.emitEvent('data.updated', {
+                ispId: req.ispId,
+                entity: 'ticket_comment',
+                action: 'created',
+                ticketId: ticket.id,
+                commentId: comment.id
+            });
+        }
+
+        res.status(201).json(commentPayload);
     } catch (err) {
         next(err);
     }
