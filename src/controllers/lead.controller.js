@@ -718,7 +718,7 @@ async function convertLeadToCustomer(req, res, next) {
           subject: 'Customer Account Created',
           body: `Dear ${customerName},\n\nYour customer account has been created successfully.\n\nCustomer ID: ${templateData.customerUniqueId}`
         }, req.prisma);
-        await mailHelper.sendMail(req.ispId, {
+        mailHelper.queueMail(req.ispId, {
           to: lead.email,
           subject: rendered.subject,
           html: textToHtml(rendered.body)

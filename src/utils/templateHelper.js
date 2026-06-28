@@ -95,6 +95,24 @@ const DEFAULT_TEMPLATES = [
   },
   {
     channel: 'EMAIL',
+    eventKey: 'password_reset',
+    name: 'Password Reset',
+    subject: 'Reset your {ispName} password',
+    body: emailTemplate({
+      eyebrow: 'Password Reset',
+      title: 'Reset Your Password',
+      intro: 'Hello {userName}, we received a request to reset your account password.',
+      rows: [
+        ['Account', '{username}'],
+        ['Reset URL', '{resetUrl}'],
+        ['Link Expires', '{expiresIn}']
+      ],
+      note: 'If you did not request this reset, you can safely ignore this email. This link can be used only once.',
+      accent: '#dc2626'
+    })
+  },
+  {
+    channel: 'EMAIL',
     eventKey: 'support_ticket_customer',
     name: 'Support Ticket - Customer',
     subject: 'Support Ticket Created: {ticketNumber}',

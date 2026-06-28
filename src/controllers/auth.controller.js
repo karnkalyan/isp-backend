@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const prisma = require('../../prisma/client');
 const { OAuth2Client } = require('google-auth-library');
 const { sendMail } = require('../utils/mailHelper');
+const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
+const { enqueueJob } = require('../utils/backgroundQueue');
 
 // --- CONFIGURATION ---
 const ACCESS_SECRET = process.env.ACCESS_SECRET || 'IspMainAdminPanel123@!23';
@@ -141,7 +144,7 @@ async function googleLogin(req, res) {
   }
 }
 
-// Forgot password: send a temporary password to the registered email address.
+// Send a one-time reset link without revealing whether the account exists.
 async function forgotPassword(req, res) {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required.' });
@@ -153,55 +156,76 @@ async function forgotPassword(req, res) {
     });
 
     // Do not reveal whether an email exists in the system.
-    const successResponse = {
-      message: 'If the email is registered, a temporary password has been sent.'
-    };
+    const successResponse = { message: 'If the email is registered, a password reset link has been sent.' };
 
     if (!user || user.isDeleted || !user.ispId) {
       return res.json(successResponse);
     }
 
-    const temporaryPassword = generateTemporaryPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
-    const previousPasswordHash = user.passwordHash;
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const resetExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash }
+      data: { passwordResetTokenHash: resetTokenHash, passwordResetExpiresAt: resetExpiresAt }
     });
 
-    const companyName = user.isp?.companyName || 'ISP Dashboard';
-    const mailResult = await sendMail(user.ispId, {
-      to: user.email,
-      subject: `${companyName} password reset`,
-      text: [
-        `Hello ${user.name || ''},`,
-        '',
-        'Your temporary password is:',
-        temporaryPassword,
-        '',
-        'Please sign in and change your password as soon as possible.',
-      ].join('\n'),
-      html: `
-        <p>Hello ${user.name || ''},</p>
-        <p>Your temporary password is:</p>
-        <p style="font-size:18px;font-weight:bold;letter-spacing:1px;">${temporaryPassword}</p>
-        <p>Please sign in and change your password as soon as possible.</p>
-      `,
+    const resetUrl = `${getRequestBaseUrl(req)}/reset-password?token=${encodeURIComponent(resetToken)}`;
+    enqueueJob(`password reset email for user ${user.id}`, async () => {
+      const rendered = await renderTemplate(user.ispId, 'EMAIL', 'password_reset', {
+        userName: user.name || user.email,
+        username: user.email,
+        resetUrl,
+        expiresIn: '30 minutes'
+      }, {
+        subject: `Reset your ${user.isp?.companyName || 'ISP'} password`,
+        body: `Reset your password using this one-time link (valid for 30 minutes):\n${resetUrl}`
+      }, prisma);
+      await sendMail(user.ispId, {
+        to: user.email,
+        subject: rendered.subject,
+        html: textToHtml(rendered.body)
+      }, { ignoreNotificationSetting: true });
     });
-
-    if (!mailResult.success) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { passwordHash: previousPasswordHash }
-      });
-      return res.status(500).json({ error: mailResult.error || 'Failed to send reset email.' });
-    }
 
     return res.json(successResponse);
   } catch (error) {
     console.error('Forgot password error:', error);
     return res.status(500).json({ error: 'Failed to process password reset request.' });
+  }
+}
+
+async function resetPassword(req, res) {
+  const { token, password } = req.body;
+  if (!token || !password || String(password).length < 8) {
+    return res.status(400).json({ error: 'A valid token and password of at least 8 characters are required.' });
+  }
+
+  try {
+    const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+    const user = await prisma.user.findFirst({
+      where: {
+        passwordResetTokenHash: tokenHash,
+        passwordResetExpiresAt: { gt: new Date() },
+        isDeleted: false
+      },
+      select: { id: true }
+    });
+    if (!user) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: await bcrypt.hash(String(password), 10),
+        passwordResetTokenHash: null,
+        passwordResetExpiresAt: null
+      }
+    });
+    return res.json({ message: 'Password reset successfully. You can now sign in.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({ error: 'Failed to reset password.' });
   }
 }
 
@@ -376,6 +400,7 @@ module.exports = {
   login,
   googleLogin,
   forgotPassword,
+  resetPassword,
   refresh,
   logout,
   me,

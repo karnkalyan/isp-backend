@@ -179,6 +179,19 @@ async function getAssignments(req, res, next) {
     }
 }
 
+async function getMyAssignments(req, res, next) {
+    try {
+        const assignments = await req.prisma.bulkInventoryAssignment.findMany({
+            where: { userId: req.user.id, bulkInventory: { ispId: req.ispId } },
+            include: { bulkInventory: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        res.json(assignments);
+    } catch (err) {
+        next(err);
+    }
+}
+
 /**
  * Assign inventory to user, branch, or sub-branch
  */
@@ -340,5 +353,6 @@ module.exports = {
     deleteBulkInventory,
     getAssignments,
     assignInventory,
-    updateAssignmentStatus
+    updateAssignmentStatus,
+    getMyAssignments
 };

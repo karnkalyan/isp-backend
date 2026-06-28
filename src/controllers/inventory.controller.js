@@ -184,6 +184,18 @@ async function listInventoryItems(req, res, next) {
     }
 }
 
+async function listMyAssignedInventory(req, res, next) {
+    try {
+        const items = await req.prisma.InventoryItem.findMany({
+            where: { ispId: req.ispId, userId: req.user.id },
+            orderBy: { updatedAt: 'desc' }
+        });
+        res.json(items);
+    } catch (err) {
+        next(err);
+    }
+}
+
 /**
  * Add a new inventory item
  */
@@ -873,5 +885,6 @@ module.exports = {
     bulkTransferItems,
     returnItem,
     getItemLogs,
-    assignInventoryItem
+    assignInventoryItem,
+    listMyAssignedInventory
 };

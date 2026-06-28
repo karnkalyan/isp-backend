@@ -1,6 +1,6 @@
 // src/routes/authRoutes.js
 const express           = require('express');
-const { login, refresh, logout, googleLogin, forgotPassword, me, switchBranch } = require('../controllers/auth.controller');
+const { login, refresh, logout, googleLogin, forgotPassword, resetPassword, me, switchBranch } = require('../controllers/auth.controller');
 
 module.exports = (prisma) => {
   const router = express.Router();
@@ -12,6 +12,7 @@ module.exports = (prisma) => {
   router.post('/logout',  logout);
   router.post('/google', googleLogin);
   router.post('/forgot-password', forgotPassword);
+  router.post('/reset-password', resetPassword);
 
   // Protected routes (auth required)
   router.get('/me', isAuthenticated, me);

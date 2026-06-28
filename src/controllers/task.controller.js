@@ -70,7 +70,7 @@ async function listTasks(req, res, next) {
             where,
             include: {
                 assignedTo: { select: { id: true, name: true, email: true } },
-                customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true } } } },
+                customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true, phoneNumber: true, address: true, street: true } } } },
                 ticket: { select: { id: true, ticketNumber: true, title: true } },
                 branch: { select: { id: true, name: true } }
             },
@@ -191,7 +191,7 @@ async function createTask(req, res, next) {
                         subject: `Task Assigned: ${title}`,
                         body: `Dear ${assignedUser.name || 'Team Member'},\n\nA task has been assigned to you.\n\nTitle: ${title}\nPriority: ${priority || 'MEDIUM'}\n${description || ''}`
                     }, req.prisma);
-                    await mailHelper.sendMail(ispId, {
+                    mailHelper.queueMail(ispId, {
                         to: assignedUser.email,
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)

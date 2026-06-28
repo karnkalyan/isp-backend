@@ -282,7 +282,7 @@ async function createTicket(req, res, next) {
                         subject: `Ticket Created: ${ticketNumber}`,
                         body: `Dear ${subject.firstName || 'Customer'},\n\nA new support ticket (${ticketNumber}) has been created for you.\n\nTitle: ${title}\n\nWe will look into this and get back to you shortly.`
                     }, req.prisma);
-                    await mailHelper.sendMail(ispId, {
+                    mailHelper.queueMail(ispId, {
                         to: subject.email,
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)
@@ -302,7 +302,7 @@ async function createTicket(req, res, next) {
                         subject: `Ticket Assigned: ${ticketNumber}`,
                         body: `Dear ${ticket.assignedTo.name || 'Team Member'},\n\nA support ticket (${ticketNumber}) has been assigned to you.\n\nTitle: ${title}\nDescription: ${description || ''}\n\nPlease review and take action.`
                     }, req.prisma);
-                    await mailHelper.sendMail(ispId, {
+                    mailHelper.queueMail(ispId, {
                         to: ticket.assignedTo.email,
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)
@@ -344,7 +344,7 @@ async function createTicket(req, res, next) {
                                     subject: `New Ticket Created in your Branch: ${ticketNumber}`,
                                     body: `Dear ${user.name || 'Team Member'},\n\nA new support ticket (${ticketNumber}) has been created in your branch.\n\nTitle: ${title}\nDescription: ${description || ''}\n\nPlease review and take action.`
                                 }, req.prisma);
-                                await mailHelper.sendMail(ispId, {
+                                mailHelper.queueMail(ispId, {
                                     to: user.email,
                                     subject: rendered.subject,
                                     html: textToHtml(rendered.body)
@@ -405,7 +405,9 @@ async function getTickets(req, res, next) {
             const userId = req.user?.id;
             let categories = [];
 
-            if (roleName.includes('tech') || roleName.includes('field')) {
+            if (roleName.includes('field')) {
+                where.AND.push({ assignedToId: userId });
+            } else if (roleName.includes('tech')) {
                 categories = ['technical', 'connectivity'];
             } else if (roleName.includes('support')) {
                 categories = null; // Sees all unassigned
@@ -413,7 +415,9 @@ async function getTickets(req, res, next) {
                 categories = ['billing', 'account'];
             }
 
-            if (categories === null) {
+            if (roleName.includes('field')) {
+                // Field staff only see tickets explicitly assigned to them.
+            } else if (categories === null) {
                 where.AND.push({
                     OR: [
                         { assignedToId: userId },

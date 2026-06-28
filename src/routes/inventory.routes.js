@@ -8,6 +8,7 @@ module.exports = (prisma) => {
     const auth = isAuthenticated(prisma);
 
     router.get('/', auth, checkPermission('inventory_read'), inventoryController.listInventoryItems);
+    router.get('/assigned/me', auth, inventoryController.listMyAssignedInventory);
     router.post('/', auth, checkPermission('inventory_manage'), inventoryController.addInventoryItem);
     router.put('/:itemId', auth, checkPermission('inventory_manage'), inventoryController.updateInventoryItem);
     router.delete('/:itemId', auth, checkPermission('inventory_manage'), inventoryController.deleteInventoryItem);

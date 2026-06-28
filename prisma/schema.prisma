@@ -142,27 +142,29 @@ model ISP {
 
 // ==================== USER MODEL ====================
 model User {
-  id             Int         @id @default(autoincrement())
-  email          String      @unique
-  passwordHash   String
-  name           String?
-  roleId         Int?
-  role           Role?       @relation(fields: [roleId], references: [id], map: "user_role_fkey")
-  status         UserStatus  @default(pending)
-  lastLogin      DateTime?
-  profilePicture String?
-  departmentId   Int?
-  department     Department? @relation(fields: [departmentId], references: [id], map: "user_department_fkey")
-  ispId          Int?
-  isp            ISP?        @relation(fields: [ispId], references: [id], map: "user_isp_fkey")
-  branchId       Int?
-  branch         Branch?     @relation(fields: [branchId], references: [id], map: "user_branch_fkey")
-  isDeleted      Boolean     @default(false)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  yeastarExt     String?
-  customerId     Int?        @unique
-  customer       Customer?   @relation("CustomerPortalUser", fields: [customerId], references: [id], onDelete: SetNull, map: "user_customer_fkey")
+  id                     Int         @id @default(autoincrement())
+  email                  String      @unique
+  passwordHash           String
+  name                   String?
+  roleId                 Int?
+  role                   Role?       @relation(fields: [roleId], references: [id], map: "user_role_fkey")
+  status                 UserStatus  @default(pending)
+  lastLogin              DateTime?
+  profilePicture         String?
+  departmentId           Int?
+  department             Department? @relation(fields: [departmentId], references: [id], map: "user_department_fkey")
+  ispId                  Int?
+  isp                    ISP?        @relation(fields: [ispId], references: [id], map: "user_isp_fkey")
+  branchId               Int?
+  branch                 Branch?     @relation(fields: [branchId], references: [id], map: "user_branch_fkey")
+  isDeleted              Boolean     @default(false)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  yeastarExt             String?
+  customerId             Int?        @unique
+  customer               Customer?   @relation("CustomerPortalUser", fields: [customerId], references: [id], onDelete: SetNull, map: "user_customer_fkey")
+  passwordResetTokenHash String?     @unique @db.VarChar(64)
+  passwordResetExpiresAt DateTime?
 
   // Relations
   refreshTokens       RefreshToken[]
@@ -185,11 +187,29 @@ model User {
   drumUserAssignments DrumAssignment[]          @relation("DrumUser")
   auditLogs           AuditLog[]                @relation("UserAuditLogs")
 
+  @@unique([ispId, yeastarExt])
   @@index([branchId])
   @@index([ispId])
   @@index([roleId])
   @@index([status])
-  @@unique([ispId, yeastarExt])
+}
+
+model MessageTemplate {
+  id        Int      @id @default(autoincrement())
+  ispId     Int
+  channel   String   @db.VarChar(16)
+  eventKey  String   @db.VarChar(80)
+  name      String   @db.VarChar(160)
+  subject   String?  @db.VarChar(255)
+  body      String   @db.LongText
+  isActive  Boolean  @default(true)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([ispId, channel], map: "message_templates_isp_channel_idx")
+  @@index([ispId, channel, eventKey], map: "message_templates_event_idx")
+  @@map("message_templates")
 }
 
 // ==================== ROLE & PERMISSION MODELS ====================
@@ -273,37 +293,37 @@ model PackagePlan {
   connectionType        Int
   connectionTypeDetails ConnectionType? @relation(fields: [connectionType], references: [id])
 
-  dataLimit Int?
-  downSpeed Int?
-  upSpeed   Int?
-  intUpload Int?
-  firDownload Int?
-  localUpload Int?
+  dataLimit     Int?
+  downSpeed     Int?
+  upSpeed       Int?
+  intUpload     Int?
+  firDownload   Int?
+  localUpload   Int?
   localDownload Int?
 
   ispId Int?
   isp   ISP? @relation(fields: [ispId], references: [id])
 
-  deviceLimit Int?
-  isPopular   Boolean @default(false)
-  description String?
-  nasType String?
-  service String?
-  priority String?
-  vendorProfiles Json?
-  packageType String?
-  allowRename Boolean @default(false)
-  fupApply Boolean @default(true)
-  fupLimitGb Int?
-  fupPenaltyPlanId Int?
-  isFupPackage Boolean @default(false)
-  onlyRenewal Boolean @default(false)
-  applyFramedPool Boolean @default(false)
-  framedPoolValue String?
+  deviceLimit            Int?
+  isPopular              Boolean @default(false)
+  description            String?
+  nasType                String?
+  service                String?
+  priority               String?
+  vendorProfiles         Json?
+  packageType            String?
+  allowRename            Boolean @default(false)
+  fupApply               Boolean @default(true)
+  fupLimitGb             Int?
+  fupPenaltyPlanId       Int?
+  isFupPackage           Boolean @default(false)
+  onlyRenewal            Boolean @default(false)
+  applyFramedPool        Boolean @default(false)
+  framedPoolValue        String?
   customRadiusAttributes Json?
-  maxDiscountPercentage Float? @default(100)
-  maxDiscountCount Int? @default(0)
-  highPriority Boolean @default(false)
+  maxDiscountPercentage  Float?  @default(100)
+  maxDiscountCount       Int?    @default(0)
+  highPriority           Boolean @default(false)
 
   isActive  Boolean @default(true)
   isDeleted Boolean @default(false)
@@ -513,7 +533,7 @@ model Customer {
 
   connectionUsers       ConnectionUser[]
   customerSubscriptions CustomerSubscription[]
-  portalUser            User?                       @relation("CustomerPortalUser")
+  portalUser            User?                     @relation("CustomerPortalUser")
   orders                CustomerOrderManagement[]
   documents             CustomerDocument[]
   wifiCredentials       CustomerWiFiCredential[]
@@ -632,19 +652,19 @@ model ConnectionUser {
 }
 
 model CustomerWiFiCredential {
-  id            Int      @id @default(autoincrement())
-  customerId    Int
-  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  ispId         Int?
-  serialNumber  String
-  ssidIndex     Int
-  instance      String?
-  ssidName      String?
-  password      String?
-  source        String?  @default("genieacs")
-  lastSyncedAt  DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           Int       @id @default(autoincrement())
+  customerId   Int
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ispId        Int?
+  serialNumber String
+  ssidIndex    Int
+  instance     String?
+  ssidName     String?
+  password     String?
+  source       String?   @default("genieacs")
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@unique([customerId, serialNumber, ssidIndex])
   @@index([serialNumber])
@@ -652,19 +672,19 @@ model CustomerWiFiCredential {
 }
 
 model CustomerReferral {
-  id             Int      @id @default(autoincrement())
-  customerId     Int
-  customer       Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  ispId          Int?
-  friendName     String
-  friendPhone    String
-  friendEmail    String?
-  friendAddress  String?
-  status         String   @default("pending")
-  offerNote      String?  @default("Once approved, both the referrer and friend receive the active referral offer.")
-  approvedAt     DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            Int       @id @default(autoincrement())
+  customerId    Int
+  customer      Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ispId         Int?
+  friendName    String
+  friendPhone   String
+  friendEmail   String?
+  friendAddress String?
+  status        String    @default("pending")
+  offerNote     String?   @default("Once approved, both the referrer and friend receive the active referral offer.")
+  approvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([customerId])
   @@index([ispId])
@@ -1082,24 +1102,24 @@ model ExistingISP {
 
 // ==================== SUBSCRIPTION & ORDER MODELS ====================
 model CustomerSubscription {
-  id           Int                       @id @default(autoincrement())
-  customerId   Int
-  customer     Customer                  @relation(fields: [customerId], references: [id], map: "customer_subscription_customer_fkey")
-  package      Int
-  packagePrice PackagePrice              @relation(fields: [package], references: [id], map: "customer_subscription_package_fkey")
-  isTrial      Boolean                   @default(false)
-  planStart    DateTime
-  planEnd      DateTime
-  isPaused     Boolean                   @default(false)
-  pauseDate    DateTime?
-  extensionCount   Int                   @default(0)
-  graceDaysBalance Int                   @default(0)
-  compensationDays Int                   @default(0)
-  isActive     Boolean                   @default(true)
-  isInvoicing  Boolean                   @default(true)
-  orders       CustomerOrderManagement[]
-  createdAt    DateTime                  @default(now())
-  updatedAt    DateTime                  @updatedAt
+  id               Int                       @id @default(autoincrement())
+  customerId       Int
+  customer         Customer                  @relation(fields: [customerId], references: [id], map: "customer_subscription_customer_fkey")
+  package          Int
+  packagePrice     PackagePrice              @relation(fields: [package], references: [id], map: "customer_subscription_package_fkey")
+  isTrial          Boolean                   @default(false)
+  planStart        DateTime
+  planEnd          DateTime
+  isPaused         Boolean                   @default(false)
+  pauseDate        DateTime?
+  extensionCount   Int                       @default(0)
+  graceDaysBalance Int                       @default(0)
+  compensationDays Int                       @default(0)
+  isActive         Boolean                   @default(true)
+  isInvoicing      Boolean                   @default(true)
+  orders           CustomerOrderManagement[]
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
 }
 
 model CustomerOrderManagement {
@@ -1229,25 +1249,25 @@ model ServiceLog {
 }
 
 model SmsCampaign {
-  id             Int      @id @default(autoincrement())
-  ispId          Int
-  createdById    Int?
-  recipientType  String
-  provider       String
-  message        String   @db.Text
-  filters        Json?
-  status         String   @default("queued")
-  totalCount     Int      @default(0)
-  queuedCount    Int      @default(0)
-  sentCount      Int      @default(0)
-  failedCount    Int      @default(0)
-  skippedCount   Int      @default(0)
-  batchSize      Int      @default(100)
-  errorMessage   String?  @db.Text
-  startedAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            Int       @id @default(autoincrement())
+  ispId         Int
+  createdById   Int?
+  recipientType String
+  provider      String
+  message       String    @db.Text
+  filters       Json?
+  status        String    @default("queued")
+  totalCount    Int       @default(0)
+  queuedCount   Int       @default(0)
+  sentCount     Int       @default(0)
+  failedCount   Int       @default(0)
+  skippedCount  Int       @default(0)
+  batchSize     Int       @default(100)
+  errorMessage  String?   @db.Text
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   logs SmsCampaignLog[]
 
@@ -1258,19 +1278,19 @@ model SmsCampaign {
 }
 
 model SmsCampaignLog {
-  id           Int      @id @default(autoincrement())
-  campaignId   Int
-  recipientId  Int?
+  id            Int       @id @default(autoincrement())
+  campaignId    Int
+  recipientId   Int?
   recipientType String
-  name         String?
-  phone        String
-  status       String   @default("queued")
-  provider     String?
-  response     Json?
-  errorMessage String?  @db.Text
-  sentAt       DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  name          String?
+  phone         String
+  status        String    @default("queued")
+  provider      String?
+  response      Json?
+  errorMessage  String?   @db.Text
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   campaign SmsCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
@@ -2304,7 +2324,7 @@ model AsteriskSystemStatus {
 }
 
 model Vendor {
-  id            Int             @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   name          String
   contactPerson String?
   email         String?
@@ -2313,8 +2333,8 @@ model Vendor {
   companyName   String?
   panVatNumber  String?
   ispId         Int
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   inventoryItems InventoryItem[]
   drums          Drum[]

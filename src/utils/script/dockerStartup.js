@@ -2,7 +2,8 @@ const { execSync } = require('child_process');
 const prisma = require('../../../prisma/client.js');
 
 async function main() {
-  execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
+  // Never authorize destructive schema changes during an automatic restart.
+  execSync('npx prisma db push', { stdio: 'inherit' });
 
   const userCount = await prisma.user.count();
   const forceSeed = String(process.env.FORCE_FULL_SEED || '').toLowerCase() === 'true';

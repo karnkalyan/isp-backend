@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const { enqueueJob } = require('./backgroundQueue');
 
 /**
  * Gets the SMTP transporter configured from ISP settings
@@ -118,6 +119,15 @@ async function sendMail(ispId, mailOptions, options = {}) {
     }
 }
 
+function queueMail(ispId, mailOptions, options = {}) {
+    enqueueJob(`email to ${mailOptions?.to || 'unknown recipient'}`, async () => {
+        const result = await sendMail(ispId, mailOptions, options);
+        if (!result?.success) throw new Error(result?.error || 'SMTP did not accept the message');
+    });
+    return { queued: true };
+}
+
 module.exports = {
-    sendMail
+    sendMail,
+    queueMail
 };

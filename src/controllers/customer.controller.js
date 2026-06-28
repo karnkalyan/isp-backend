@@ -1216,12 +1216,8 @@ async function createCustomer(req, res, next) {
     };
 
     if (lead.email) {
-      try {
-        console.log('[customer.controller] Dispatching customer_new_connection email', {
-          ispId: req.ispId,
-          customerId: createdCustomer.id,
-          to: lead.email
-        });
+      const { enqueueJob } = require('../utils/backgroundQueue');
+      enqueueJob(`new connection email for customer ${createdCustomer.id}`, async () => {
         const mailHelper = require('../utils/mailHelper');
         const { renderTemplate, textToHtml } = require('../utils/templateHelper');
         const rendered = await renderTemplate(req.ispId, 'EMAIL', 'customer_new_connection', customerTemplateData, {
@@ -1240,17 +1236,8 @@ async function createCustomer(req, res, next) {
             to: lead.email,
             result: mailResult
           });
-        } else {
-          console.log('[customer.controller] customer_new_connection email dispatch finished', {
-            ispId: req.ispId,
-            customerId: createdCustomer.id,
-            to: lead.email,
-            result: mailResult
-          });
         }
-      } catch (err) {
-        console.error('Failed to send customer creation email:', err.message);
-      }
+      });
     }
 
     if (lead.phoneNumber) {
@@ -2906,7 +2893,8 @@ async function changePortalPassword(req, res, next) {
     }
 
     if (portalAccountCreated && customer.lead?.email) {
-      try {
+      const { enqueueJob } = require('../utils/backgroundQueue');
+      enqueueJob(`portal welcome email for customer ${customer.id}`, async () => {
         const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
         const mailHelper = require('../utils/mailHelper');
         const { renderTemplate, textToHtml } = require('../utils/templateHelper');
@@ -2925,9 +2913,7 @@ async function changePortalPassword(req, res, next) {
           subject: rendered.subject,
           html: textToHtml(rendered.body)
         }, { ignoreNotificationSetting: true });
-      } catch (mailError) {
-        console.error('[customer.controller] Failed to send portal welcome email:', mailError.message);
-      }
+      });
     }
 
     return res.json({

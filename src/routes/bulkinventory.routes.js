@@ -12,6 +12,7 @@ module.exports = (prisma) => {
     router.put('/:id', auth, checkPermission('bulk_inventory_update'), bulkInventoryController.updateBulkInventory);
     router.delete('/:id', auth, checkPermission('bulk_inventory_delete'), bulkInventoryController.deleteBulkInventory);
 
+    router.get('/assignments/me', auth, bulkInventoryController.getMyAssignments);
     router.get('/assignments', auth, checkPermission('bulk_inventory_read'), bulkInventoryController.getAssignments);
     router.post('/assignments', auth, checkPermission('bulk_inventory_update'), bulkInventoryController.assignInventory);
     router.put('/assignments/:id/status', auth, checkPermission('bulk_inventory_update'), bulkInventoryController.updateAssignmentStatus);

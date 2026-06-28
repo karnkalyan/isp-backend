@@ -189,7 +189,7 @@ async function getSystemAlerts(req, res, next) {
         const branchFilter = await getBranchFilter(req);
         const [tickets, services, offlineOlts, lowInventory] = await Promise.all([
             req.prisma.ticket.findMany({
-                where: { ispId, isDeleted: false, status: { in: ['OPEN', 'IN_PROGRESS'] }, priority: { in: ['HIGH', 'URGENT'] }, ...(branchFilter || {}) },
+                where: { ispId, isDeleted: false, status: { in: ['OPEN', 'IN_PROGRESS'] }, priority: { in: ['HIGH', 'CRITICAL'] }, ...(branchFilter || {}) },
                 select: { id: true, ticketNumber: true, title: true, priority: true, status: true, createdAt: true },
                 orderBy: { createdAt: 'desc' },
                 take: 10
@@ -220,7 +220,7 @@ async function getSystemAlerts(req, res, next) {
                 title: `Ticket ${ticket.ticketNumber}`,
                 description: ticket.title,
                 timestamp: ticket.createdAt,
-                severity: ticket.priority === 'URGENT' ? 'critical' : 'warning',
+                severity: ticket.priority === 'CRITICAL' ? 'critical' : 'warning',
                 status: 'active',
                 source: 'ticket'
             })),
@@ -319,7 +319,7 @@ async function getRecentActivity(req, res, next) {
                 title: `Ticket: ${ticket.ticketNumber}`,
                 description: ticket.title,
                 timestamp: ticket.createdAt,
-                status: ticket.priority === 'HIGH' || ticket.priority === 'URGENT' ? 'warning' : 'success',
+                status: ticket.priority === 'HIGH' || ticket.priority === 'CRITICAL' ? 'warning' : 'success',
                 type: 'ticket'
             }))
         ];

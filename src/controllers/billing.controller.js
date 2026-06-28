@@ -538,42 +538,20 @@ async function renewSubscription(req, res, next) {
             };
 
             if (customer.lead?.email) {
-                try {
-                    console.log('[billing.controller] Dispatching recharge_success email', {
-                        ispId: req.ispId,
-                        customerId: customer.id,
-                        to: customer.lead.email,
-                        amount: customerTemplateData.amount
-                    });
+                const { enqueueJob } = require('../utils/backgroundQueue');
+                enqueueJob(`recharge email for customer ${customer.id}`, async () => {
                     const mailHelper = require('../utils/mailHelper');
                     const { renderTemplate, textToHtml } = require('../utils/templateHelper');
                     const rendered = await renderTemplate(req.ispId, 'EMAIL', 'recharge_success', customerTemplateData, {
                         subject: 'Recharge Successful',
                         body: `Dear ${customerName},\n\nYour recharge was successful.\n\nPackage: ${customerTemplateData.packageName}\nAmount: ${customerTemplateData.amount}\nValid Until: ${customerTemplateData.expiryDate}\n\nThank you,\n${ispName}`
                     }, prisma);
-                    const mailResult = await mailHelper.sendMail(req.ispId, {
+                    await mailHelper.sendMail(req.ispId, {
                         to: customer.lead.email,
                         subject: rendered.subject,
                         html: textToHtml(rendered.body)
                     }, { ignoreNotificationSetting: true });
-                    if (!mailResult?.success) {
-                        console.warn('[billing.controller] recharge_success email was not accepted by SMTP', {
-                            ispId: req.ispId,
-                            customerId: customer.id,
-                            to: customer.lead.email,
-                            result: mailResult
-                        });
-                    } else {
-                        console.log('[billing.controller] recharge_success email dispatch finished', {
-                            ispId: req.ispId,
-                            customerId: customer.id,
-                            to: customer.lead.email,
-                            result: mailResult
-                        });
-                    }
-                } catch (emailErr) {
-                    console.error('Failed to send recharge success email:', emailErr.message);
-                }
+                });
             }
 
             if (customer.lead?.phoneNumber) {
