@@ -1,4 +1,7 @@
 const bcrypt = require('bcrypt');
+const mailHelper = require('../utils/mailHelper');
+const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
 
 function normalizeBranchIds(value, primaryBranchId) {
   if (value === undefined || value === null || value === '') return [];
@@ -125,6 +128,36 @@ async function createUser(req, res, next) {
         createdAt: true
       }
     });
+
+    // Account creation succeeds independently of SMTP availability, while a
+    // welcome message is attempted for every new back-office user.
+    try {
+      const loginUrl = getRequestBaseUrl(req);
+      const rendered = await renderTemplate(req.ispId, 'EMAIL', 'user_welcome', {
+        userName: user.name || user.email,
+        username: user.email,
+        password,
+        loginUrl
+      }, {
+        subject: `Welcome, ${user.name || user.email}`,
+        body: `Your account has been created.\n\nUsername: ${user.email}\nPassword: ${password}\nLogin URL: ${loginUrl}`
+      }, req.prisma);
+      const mailResult = await mailHelper.sendMail(req.ispId, {
+        to: user.email,
+        subject: rendered.subject,
+        html: textToHtml(rendered.body)
+      }, { ignoreNotificationSetting: true });
+      if (!mailResult?.success) {
+        console.warn('[users.controller] Welcome email was not accepted by SMTP', {
+          ispId: req.ispId,
+          userId: user.id,
+          to: user.email,
+          error: mailResult?.error
+        });
+      }
+    } catch (mailError) {
+      console.error('[users.controller] Failed to send welcome email:', mailError.message);
+    }
 
     res.status(201).json(user);
   } catch (err) {

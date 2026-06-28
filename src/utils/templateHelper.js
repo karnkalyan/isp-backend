@@ -68,10 +68,29 @@ const DEFAULT_TEMPLATES = [
         ['Plan Start', '{planStart}'],
         ['Plan End', '{planEnd}'],
         ['Login Username', '{username}'],
-        ['Login Password', '{password}']
+        ['Login Password', '{password}'],
+        ['Login URL', '{loginUrl}']
       ],
       note: 'For your account security, please keep your login credentials private and contact support if you need any help.',
       accent: '#0f766e'
+    })
+  },
+  {
+    channel: 'EMAIL',
+    eventKey: 'user_welcome',
+    name: 'Welcome - New User',
+    subject: 'Welcome to {ispName}, {userName}',
+    body: emailTemplate({
+      eyebrow: 'User Account Created',
+      title: 'Welcome, {userName}',
+      intro: 'Your account has been created successfully. Use the credentials below to sign in.',
+      rows: [
+        ['Login Username', '{username}'],
+        ['Login Password', '{password}'],
+        ['Login URL', '{loginUrl}']
+      ],
+      note: 'For your account security, sign in and change your password as soon as possible. Never share your credentials.',
+      accent: '#2563eb'
     })
   },
   {
@@ -375,7 +394,10 @@ async function renderTemplate(ispId, channel, eventKey, data = {}, fallback = {}
     eventKey
   );
   const template = rows[0] || fallback;
-  const mergedData = { ...companyData, ...data };
+  // Company fields loaded for the authenticated ISP are authoritative. Some
+  // callers provide generic fallback values (for example "ISP"), which must
+  // not replace the real tenant branding resolved above.
+  const mergedData = { ...data, ...companyData };
   const bodyTemplate = template.body || fallback.body || '';
   const bodyIsHtml = normalizedChannel === 'EMAIL' && looksLikeHtml(bodyTemplate);
   const rendered = {

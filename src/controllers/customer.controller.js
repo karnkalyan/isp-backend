@@ -1200,15 +1200,18 @@ async function createCustomer(req, res, next) {
 
     // ---------- Build response ----------
     const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || `Customer ${createdCustomer.id}`;
+    const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
     const customerTemplateData = {
-      ispName: req.user?.isp?.companyName || 'ISP',
       customerName,
       customerUniqueId: createdCustomer.customerUniqueId,
       packageName: subscribedPackage?.packageName || 'Package',
       planStart: subscription?.planStart ? new Date(subscription.planStart).toLocaleDateString() : '',
       planEnd: subscription?.planEnd ? new Date(subscription.planEnd).toLocaleDateString() : '',
-      username: (Array.isArray(parsedWirelessCredentials) && parsedWirelessCredentials.find(cu => cu.username || cu.password)?.username) || customerLoginUsername || '',
-      password: (Array.isArray(parsedWirelessCredentials) && parsedWirelessCredentials.find(cu => cu.username || cu.password)?.password) || customerLoginPassword || '',
+      // Welcome emails contain subscriber portal credentials, never RADIUS /
+      // wireless credentials. customerLogin also contains generated defaults.
+      username: customerLogin?.username || '',
+      password: customerLogin?.password || '',
+      loginUrl: getRequestBaseUrl(req),
       phoneNumber: lead.phoneNumber || ''
     };
 
@@ -2842,6 +2845,7 @@ async function changePortalPassword(req, res, next) {
     const name = `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim() || customer.customerUniqueId || `Customer ${customer.id}`;
 
     let updatedUser;
+    let portalAccountCreated = false;
     if (portalUser) {
       const updateData = { status: 'active', roleId: customerRole.id };
       if (newPassword) {
@@ -2898,6 +2902,32 @@ async function changePortalPassword(req, res, next) {
           customerId: customer.id
         }
       });
+      portalAccountCreated = true;
+    }
+
+    if (portalAccountCreated && customer.lead?.email) {
+      try {
+        const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
+        const mailHelper = require('../utils/mailHelper');
+        const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+        const loginUrl = getRequestBaseUrl(req);
+        const rendered = await renderTemplate(req.ispId, 'EMAIL', 'user_welcome', {
+          userName: name,
+          username: updatedUser.email,
+          password: newPassword,
+          loginUrl
+        }, {
+          subject: `Welcome, ${name}`,
+          body: `Your account has been created.\n\nUsername: ${updatedUser.email}\nPassword: ${newPassword}\nLogin URL: ${loginUrl}`
+        }, req.prisma);
+        await mailHelper.sendMail(req.ispId, {
+          to: customer.lead.email,
+          subject: rendered.subject,
+          html: textToHtml(rendered.body)
+        }, { ignoreNotificationSetting: true });
+      } catch (mailError) {
+        console.error('[customer.controller] Failed to send portal welcome email:', mailError.message);
+      }
     }
 
     return res.json({
