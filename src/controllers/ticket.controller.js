@@ -11,6 +11,10 @@ const customerInclude = {
                 lastName: true,
                 email: true,
                 phoneNumber: true,
+                address: true,
+                street: true,
+                district: true,
+                province: true,
             }
         }
     }
@@ -23,6 +27,10 @@ const leadInclude = {
         lastName: true,
         email: true,
         phoneNumber: true,
+        address: true,
+        street: true,
+        district: true,
+        province: true,
     }
 };
 
@@ -35,6 +43,11 @@ const customerIncludeBasic = {
                 firstName: true,
                 lastName: true,
                 email: true,
+                phoneNumber: true,
+                address: true,
+                street: true,
+                district: true,
+                province: true,
             }
         }
     }
@@ -56,6 +69,7 @@ function flattenCustomer(ticket) {
             lastName: ticket.customer.lead?.lastName || '',
             email: ticket.customer.lead?.email || '',
             phoneNumber: ticket.customer.lead?.phoneNumber || '',
+            address: [ticket.customer.lead?.address, ticket.customer.lead?.street, ticket.customer.lead?.district, ticket.customer.lead?.province].filter(Boolean).join(', '),
         };
     } else if (ticket.lead) {
         subject = {
@@ -66,6 +80,7 @@ function flattenCustomer(ticket) {
             lastName: ticket.lead.lastName || '',
             email: ticket.lead.email || '',
             phoneNumber: ticket.lead.phoneNumber || '',
+            address: [ticket.lead.address, ticket.lead.street, ticket.lead.district, ticket.lead.province].filter(Boolean).join(', '),
         };
     }
 

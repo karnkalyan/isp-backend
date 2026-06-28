@@ -71,7 +71,7 @@ async function listTasks(req, res, next) {
             include: {
                 assignedTo: { select: { id: true, name: true, email: true } },
                 customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true, phoneNumber: true, address: true, street: true } } } },
-                ticket: { select: { id: true, ticketNumber: true, title: true } },
+                ticket: { select: { id: true, ticketNumber: true, title: true, lead: { select: { address: true, street: true } }, customer: { select: { lead: { select: { address: true, street: true } } } } } },
                 branch: { select: { id: true, name: true } }
             },
             orderBy: { startTime: 'asc' }
@@ -118,11 +118,68 @@ async function createTask(req, res, next) {
         const ispId = req.ispId;
         const createdById = req.user.id;
 
-        // Overlap warning check
-        let warning = null;
-        if (assignedToId && startTime) {
-            warning = await checkOverlap(req.prisma, assignedToId, startTime, duration || 60);
+        // Duplicate check: Same title and same startTime
+        if (title && startTime) {
+            const duplicate = await req.prisma.task.findFirst({
+                where: {
+                    title: title.trim(),
+                    startTime: new Date(startTime),
+                    ispId,
+                    status: { not: 'CANCELLED' }
+                }
+            });
+            if (duplicate) {
+                const errPayload = {
+                    type: 'DUPLICATE',
+                    title: title,
+                    startTime: new Date(startTime).toISOString()
+                };
+                return res.status(400).json({ error: JSON.stringify(errPayload) });
+            }
         }
+
+        // Overlap validation check - block creation
+        if (assignedToId && startTime) {
+            const start = new Date(startTime);
+            const end = new Date(start.getTime() + (Number(duration || 60)) * 60 * 1000);
+            
+            const overlap = await req.prisma.task.findFirst({
+                where: {
+                    assignedToId: Number(assignedToId),
+                    status: { notIn: ['CANCELLED', 'COMPLETED'] },
+                    startTime: { not: null },
+                    OR: [
+                        {
+                            startTime: { lte: start },
+                            endTime: { gte: start }
+                        },
+                        {
+                            startTime: { lte: end },
+                            endTime: { gte: end }
+                        },
+                        {
+                            startTime: { gte: start },
+                            endTime: { lte: end }
+                        }
+                    ]
+                },
+                include: {
+                    assignedTo: { select: { name: true } }
+                }
+            });
+
+            if (overlap) {
+                const errPayload = {
+                    type: 'OVERLAP',
+                    technicianName: overlap.assignedTo?.name || 'assigned',
+                    title: overlap.title,
+                    startTime: overlap.startTime.toISOString(),
+                    endTime: (overlap.endTime || start).toISOString()
+                };
+                return res.status(400).json({ error: JSON.stringify(errPayload) });
+            }
+        }
+
 
         const calculatedEndTime = startTime 
             ? new Date(new Date(startTime).getTime() + (Number(duration || 60)) * 60 * 1000)
@@ -202,7 +259,7 @@ async function createTask(req, res, next) {
             }
         }
 
-        res.status(201).json({ ...task, warning });
+        res.status(201).json({ ...task, warning: null });
     } catch (err) {
         next(err);
     }
@@ -372,7 +429,7 @@ async function getTaskDetails(req, res, next) {
                         } 
                     } 
                 },
-                ticket: { select: { id: true, ticketNumber: true, title: true, description: true } },
+                ticket: { select: { id: true, ticketNumber: true, title: true, description: true, lead: { select: { address: true, street: true } }, customer: { select: { lead: { select: { address: true, street: true } } } } } },
                 branch: { select: { id: true, name: true } },
                 activityLogs: {
                     include: {

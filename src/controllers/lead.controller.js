@@ -131,7 +131,9 @@ const getAllLeads = async (req, res, next) => {
     };
 
     // ROLE-BASED FILTERING (EXACTLY LIKE FOLLOW-UPS)
-    if (userRole !== 'Administrator') {
+    // If the request specifically queries qualified leads, allow non-admins (like field staff) to see them all
+    const isSearchingAllQualified = status === 'qualified' || qualified === 'true' || req.query.showAllQualified === 'true';
+    if (userRole !== 'Administrator' && !isSearchingAllQualified) {
       // For non-admin users, show only their assigned leads
       where.assignedUserId = userId;
     } else {

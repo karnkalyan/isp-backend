@@ -40,7 +40,7 @@
     "nanoid": "^5.1.5",
     "node-routeros": "^1.6.8",
     "node-ssh": "^13.2.1",
-    "nodemailer": "^8.0.9",
+    "nodemailer": "^9.0.1",
     "pdfkit": "^0.18.0",
     "qrcode": "^1.5.4",
     "telnet-client": "^2.2.9",
