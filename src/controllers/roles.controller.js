@@ -196,8 +196,67 @@ async function deleteRole(req, res, next) {
   }
 }
 
+const UI_PERMISSION_DEFINITIONS = [
+  { name: 'dashboard_overview', menuName: 'dashboard', legacy: ['dashboard_view'] },
+  { name: 'dashboard_realtime', menuName: 'dashboard', legacy: ['dashboard_view'] },
+  { name: 'dashboard_settings', menuName: 'dashboard', legacy: ['settings_read'] },
+  { name: 'customers_list', menuName: 'customers', legacy: ['customer_read'] },
+  { name: 'customers_create', menuName: 'customers', legacy: ['customer_create'] },
+  { name: 'customers_details', menuName: 'customers', legacy: ['customer_read', 'customer_update'] },
+  { name: 'leads_manage', menuName: 'leads', legacy: ['lead_read'] },
+  { name: 'inventory_assigned', menuName: 'inventory', legacy: [] },
+  { name: 'tasks_manage', menuName: 'tasks', legacy: ['tasks_read', 'tasks_read_self'] },
+  { name: 'tickets_manage', menuName: 'tickets', legacy: ['tickets_read', 'tickets_read_self'] }
+];
+
+async function ensureUiPermissions(prisma) {
+  const existing = await prisma.permission.findMany({
+    where: { name: { in: UI_PERMISSION_DEFINITIONS.map(item => item.name) } },
+    select: { name: true }
+  });
+  const existingNames = new Set(existing.map(item => item.name));
+  const missing = UI_PERMISSION_DEFINITIONS.filter(item => !existingNames.has(item.name));
+  if (missing.length === 0) return;
+
+  await prisma.permission.createMany({
+    data: missing.map(({ name, menuName }) => ({ name, menuName })),
+    skipDuplicates: true
+  });
+
+  const createdPermissions = await prisma.permission.findMany({
+    where: { name: { in: missing.map(item => item.name) } },
+    select: { id: true, name: true }
+  });
+  const createdByName = new Map(createdPermissions.map(item => [item.name, item.id]));
+  const roles = await prisma.role.findMany({
+    include: { permissions: { select: { name: true } } }
+  });
+
+  for (const role of roles) {
+    const legacyNames = new Set(role.permissions.map(permission => permission.name));
+    const isAdministrator = role.name.toLowerCase().includes('administrator') || role.name.toLowerCase() === 'admin';
+    const isFieldStaff = role.name.toLowerCase().includes('field staff');
+    const permissionIds = missing
+      .filter(definition =>
+        isAdministrator ||
+        definition.legacy.some(name => legacyNames.has(name)) ||
+        (isFieldStaff && definition.name === 'inventory_assigned')
+      )
+      .map(definition => createdByName.get(definition.name))
+      .filter(Boolean);
+
+    if (permissionIds.length > 0) {
+      await prisma.role.update({
+        where: { id: role.id },
+        data: { permissions: { connect: permissionIds.map(id => ({ id })) } }
+      });
+    }
+  }
+}
+
 async function getPermissions(req, res, next) {
   try {
+    await ensureUiPermissions(req.prisma);
     const permissions = await req.prisma.permission.findMany({
       select: {
         id: true,
@@ -243,6 +302,7 @@ async function getPermissions(req, res, next) {
 
 async function getRolePermissions(req, res, next) {
   try {
+    await ensureUiPermissions(req.prisma);
     const { id } = req.params;
 
     const role = await req.prisma.role.findUnique({
@@ -322,12 +382,33 @@ async function updateRolePermissions(req, res, next) {
       });
     }
 
+    // Route-level UI permissions automatically include the underlying API
+    // capabilities without coupling sibling sidebar selections together.
+    const selected = await req.prisma.permission.findMany({
+      where: { id: { in: permissionIds.map(pid => parseInt(pid)) } },
+      select: { id: true, name: true }
+    });
+    const selectedNames = new Set(selected.map(permission => permission.name));
+    const dependencyNames = UI_PERMISSION_DEFINITIONS
+      .filter(definition => selectedNames.has(definition.name))
+      .flatMap(definition => definition.legacy);
+    const dependencies = dependencyNames.length
+      ? await req.prisma.permission.findMany({
+          where: { name: { in: [...new Set(dependencyNames)] } },
+          select: { id: true }
+        })
+      : [];
+    const expandedPermissionIds = [...new Set([
+      ...permissionIds.map(pid => parseInt(pid)),
+      ...dependencies.map(permission => permission.id)
+    ])];
+
     // Update role permissions
     const updatedRole = await req.prisma.role.update({
       where: { id: parseInt(id) },
       data: {
         permissions: {
-          set: permissionIds.map(pid => ({ id: parseInt(pid) }))
+          set: expandedPermissionIds.map(pid => ({ id: pid }))
         }
       },
       include: {
@@ -341,7 +422,7 @@ async function updateRolePermissions(req, res, next) {
       }
     });
 
-    await logAudit(req.prisma, req.user.id, 'ROLE_PERMISSIONS_UPDATE', { id, permissionIds }, req);
+    await logAudit(req.prisma, req.user.id, 'ROLE_PERMISSIONS_UPDATE', { id, permissionIds: expandedPermissionIds }, req);
 
     const permissionIdsUpdated = updatedRole.permissions.map(p => p.id);
 
