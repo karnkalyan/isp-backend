@@ -202,11 +202,16 @@ const UI_PERMISSION_DEFINITIONS = [
   { name: 'dashboard_settings', menuName: 'dashboard', legacy: ['settings_read'] },
   { name: 'customers_list', menuName: 'customers', legacy: ['customer_read'] },
   { name: 'customers_create', menuName: 'customers', legacy: ['customer_create'] },
-  { name: 'customers_details', menuName: 'customers', legacy: ['customer_read', 'customer_update'] },
   { name: 'leads_manage', menuName: 'leads', legacy: ['lead_read'] },
   { name: 'inventory_assigned', menuName: 'inventory', legacy: [] },
   { name: 'tasks_manage', menuName: 'tasks', legacy: ['tasks_read', 'tasks_read_self'] },
-  { name: 'tickets_manage', menuName: 'tickets', legacy: ['tickets_read', 'tickets_read_self'] }
+  { name: 'tickets_manage', menuName: 'tickets', legacy: ['tickets_read', 'tickets_read_self'] },
+  { name: 'radius_disconnect', menuName: 'radius', legacy: ['settings_read', 'settings_update'] },
+  { name: 'customer_types_read', menuName: 'customer_types', legacy: ['settings_read'] },
+  { name: 'customer_types_create', menuName: 'customer_types', legacy: ['settings_update'] },
+  { name: 'customer_types_update', menuName: 'customer_types', legacy: ['settings_update'] },
+  { name: 'customer_types_delete', menuName: 'customer_types', legacy: ['settings_update'] },
+  { name: 'nav_yeastar', menuName: 'sidebar_visibility', legacy: [] }
 ];
 
 async function ensureUiPermissions(prisma) {
