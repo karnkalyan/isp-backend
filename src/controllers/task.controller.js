@@ -71,7 +71,38 @@ async function listTasks(req, res, next) {
             include: {
                 assignedTo: { select: { id: true, name: true, email: true } },
                 customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true, phoneNumber: true, address: true, street: true } } } },
-                ticket: { select: { id: true, ticketNumber: true, title: true, lead: { select: { address: true, street: true } }, customer: { select: { lead: { select: { address: true, street: true } } } } } },
+                ticket: { 
+                    select: { 
+                        id: true, 
+                        ticketNumber: true, 
+                        title: true, 
+                        lead: { 
+                            select: { 
+                                id: true,
+                                firstName: true,
+                                lastName: true,
+                                phoneNumber: true,
+                                address: true,
+                                street: true
+                            } 
+                        }, 
+                        customer: { 
+                            select: { 
+                                id: true,
+                                customerUniqueId: true,
+                                lead: { 
+                                    select: { 
+                                        firstName: true,
+                                        lastName: true,
+                                        phoneNumber: true,
+                                        address: true,
+                                        street: true
+                                    } 
+                                } 
+                            } 
+                        } 
+                    } 
+                },
                 branch: { select: { id: true, name: true } }
             },
             orderBy: { startTime: 'asc' }
@@ -293,6 +324,9 @@ async function updateTask(req, res, next) {
             status, 
             priority, 
             assignedToId,
+            customerId,
+            ticketId,
+            branchId,
             lat,
             lon,
             notes
@@ -306,8 +340,11 @@ async function updateTask(req, res, next) {
             return res.status(404).json({ error: 'Task not found' });
         }
 
-        // Enforce that only the assigned user can change status to Start/Resume, Pause, or Complete
-        if (status && status !== task.status) {
+        const roleName = String(req.user.role || '').toLowerCase();
+        const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName.includes('global admin') || roleName.includes('branch admin');
+
+        // Enforce that only the assigned user can change status to Start/Resume, Pause, or Complete (unless they are admin)
+        if (status && status !== task.status && !isAdmin) {
             const isStatusTransition = ['IN_PROGRESS', 'ON_HOLD', 'COMPLETED'].includes(status);
             if (isStatusTransition) {
                 if (task.assignedToId !== req.user.id) {
@@ -321,8 +358,8 @@ async function updateTask(req, res, next) {
             return res.status(400).json({ error: 'Validation Error: A completed task cannot be cancelled.' });
         }
 
-        // GPS checks on state changes
-        if (status && status !== task.status) {
+        // GPS checks on state changes (unless admin)
+        if (status && status !== task.status && !isAdmin) {
             if (status === 'IN_PROGRESS' || status === 'COMPLETED') {
                 if (!lat || !lon) {
                     return res.status(400).json({ error: 'GPS is mandatory to start or complete this task. Please enable location services.' });
@@ -352,6 +389,9 @@ async function updateTask(req, res, next) {
             ...(status && { status }),
             ...(priority && { priority }),
             ...(assignedToId !== undefined && { assignedToId: assignedToId ? Number(assignedToId) : null }),
+            ...(customerId !== undefined && { customerId: customerId ? Number(customerId) : null }),
+            ...(ticketId !== undefined && { ticketId: ticketId ? Number(ticketId) : null }),
+            ...(branchId !== undefined && { branchId: branchId ? Number(branchId) : null }),
             updatedAt: new Date()
         };
 
@@ -359,12 +399,12 @@ async function updateTask(req, res, next) {
         if (status && status !== task.status) {
             if (status === 'IN_PROGRESS') {
                 updateData.startedAt = new Date();
-                updateData.startLat = Number(lat);
-                updateData.startLon = Number(lon);
+                if (lat !== undefined) updateData.startLat = Number(lat);
+                if (lon !== undefined) updateData.startLon = Number(lon);
             } else if (status === 'COMPLETED') {
                 updateData.completedAt = new Date();
-                updateData.completeLat = Number(lat);
-                updateData.completeLon = Number(lon);
+                if (lat !== undefined) updateData.completeLat = Number(lat);
+                if (lon !== undefined) updateData.completeLon = Number(lon);
 
                 // Calculate working duration
                 const activeStart = task.startedAt || new Date();
@@ -375,6 +415,17 @@ async function updateTask(req, res, next) {
                 const totalDur = Math.round((new Date().getTime() - task.createdAt.getTime()) / 1000);
                 updateData.totalDuration = totalDur;
             }
+        }
+
+        if (assignedToId !== undefined && Number(assignedToId) !== task.assignedToId) {
+            await req.prisma.taskActivityLog.create({
+                data: {
+                    taskId: task.id,
+                    userId: req.user.id,
+                    action: 'ASSIGNED',
+                    notes: assignedToId ? `Assigned to user ID ${assignedToId}` : 'Task was unassigned'
+                }
+            });
         }
 
         const updatedTask = await req.prisma.task.update({
@@ -447,7 +498,39 @@ async function getTaskDetails(req, res, next) {
                         } 
                     } 
                 },
-                ticket: { select: { id: true, ticketNumber: true, title: true, description: true, lead: { select: { address: true, street: true } }, customer: { select: { lead: { select: { address: true, street: true } } } } } },
+                ticket: { 
+                    select: { 
+                        id: true, 
+                        ticketNumber: true, 
+                        title: true, 
+                        description: true, 
+                        lead: { 
+                            select: { 
+                                id: true,
+                                firstName: true,
+                                lastName: true,
+                                phoneNumber: true,
+                                address: true,
+                                street: true
+                            } 
+                        }, 
+                        customer: { 
+                            select: { 
+                                id: true,
+                                customerUniqueId: true,
+                                lead: { 
+                                    select: { 
+                                        firstName: true,
+                                        lastName: true,
+                                        phoneNumber: true,
+                                        address: true,
+                                        street: true
+                                    } 
+                                } 
+                            } 
+                        } 
+                    } 
+                },
                 branch: { select: { id: true, name: true } },
                 activityLogs: {
                     include: {
