@@ -71,6 +71,7 @@ model Branch {
   bulkBranchAssignments    BulkInventoryAssignment[] @relation("BulkInvBranch")
   bulkSubBranchAssignments BulkInventoryAssignment[] @relation("BulkInvSubBranch")
   drumBranchAssignments    DrumAssignment[]          @relation("DrumBranch")
+  branchRequests           BranchRequest[]
 
   parent      Branch?  @relation("BranchHierarchy", fields: [parentId], references: [id])
   subBranches Branch[] @relation("BranchHierarchy")
@@ -143,6 +144,7 @@ model ISP {
   tasks                Task[]
   notices              Notice[]
   notifications        Notification[]
+  branchRequests       BranchRequest[]
 }
 
 // ==================== USER MODEL ====================
@@ -547,6 +549,7 @@ model Customer {
   esewaPayments         ESewaTokenPayment[]
   tickets               Ticket[]
   tasks                 Task[]
+  branchRequests        BranchRequest[]
 
   status        String?  @default("active")
   isDeleted     Boolean? @default(false)
@@ -2444,3 +2447,25 @@ model MailMessage {
   @@index([ispId, userId, folder, imapUid], map: "mail_messages_imap_uid_idx")
   @@map("mail_messages")
 }
+
+model BranchRequest {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  branchId    Int
+  customerId  Int
+  type        String   @db.VarChar(50) // 'DISCOUNT' or 'PACKAGE_CHANGE'
+  status      String   @db.VarChar(50) @default("PENDING") // 'PENDING', 'APPROVED', 'REJECTED'
+  details     String   @db.LongText // JSON with details (e.g. { packageId, discountAmount, etc. })
+  reason      String?  @db.Text
+  requestedBy Int
+  approvedBy  Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branch      Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade, map: "branch_request_branch_fkey")
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "branch_request_customer_fkey")
+  isp         ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "branch_request_isp_fkey")
+
+  @@map("branch_requests")
+}
+

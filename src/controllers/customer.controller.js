@@ -1165,9 +1165,9 @@ async function createCustomer(req, res, next) {
         tx.iSPSettings.findFirst({ where: { key: 'autoTrialEnabled', ispId: req.ispId } }),
         tx.iSPSettings.findFirst({ where: { key: 'trialDurationDays', ispId: req.ispId } })
       ]);
-      const autoTrialEnabled = pushTrialSetting
-        ? pushTrialSetting.value !== 'false'
-        : (autoTrialSetting ? autoTrialSetting.value !== 'false' : true);
+      const autoTrialEnabled = autoTrialSetting
+        ? autoTrialSetting.value !== 'false'
+        : true;
 
       if (autoTrialEnabled) {
         const parsedTrialDays = trialSetting ? parseInt(trialSetting.value, 10) : 3;
@@ -3038,6 +3038,29 @@ async function changePackage(req, res, next) {
       }
     });
     if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const isGlobalAdmin = req.user.role === 'admin' || 
+                         req.user.role?.name === 'administrator' || 
+                         req.user.role?.name === 'isp_admin' || 
+                         req.user.role?.name === 'super admin' || 
+                         req.user.role?.name?.startsWith('global') ||
+                         req.user.role?.name?.toLowerCase().includes('admin');
+
+    if (!isGlobalAdmin) {
+      await req.prisma.branchRequest.create({
+        data: {
+          ispId: req.ispId,
+          branchId: req.branchId || customer.branchId || 1,
+          customerId: customerId,
+          type: 'PACKAGE_CHANGE',
+          status: 'PENDING',
+          details: JSON.stringify({ newPackageId: Number(newPackageId) }),
+          reason: req.body.reason || 'Package change requested by branch user',
+          requestedBy: req.user.id
+        }
+      });
+      return res.json({ success: true, message: "Package change request submitted to admin for approval." });
+    }
 
     const newPackage = await req.prisma.packagePrice.findFirst({
       where: { id: Number(newPackageId), isDeleted: false, ispId: req.ispId },

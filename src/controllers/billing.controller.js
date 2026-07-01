@@ -177,6 +177,22 @@ async function addAdjustmentItem(req, res, next) {
 
         if (!order) return res.status(404).json({ error: 'Order not found' });
 
+        if (Number(itemPrice) < 0) {
+            const orderCustomer = await prisma.customer.findUnique({
+                where: { id: order.customerId },
+                include: { branch: true }
+            });
+            const branch = orderCustomer?.branch;
+            if (branch && branch.discountThresholdEnabled && Math.abs(Number(itemPrice)) > branch.discountThresholdValue) {
+                return res.status(400).json({ 
+                    error: `Discount exceeds branch limit of ${branch.discountThresholdValue} NPR. Please request admin approval.`,
+                    exceedsLimit: true,
+                    limitValue: branch.discountThresholdValue,
+                    requestedValue: Math.abs(Number(itemPrice))
+                });
+            }
+        }
+
         if (order.isPaid) return res.status(400).json({ error: 'Cannot add adjustment to a paid invoice.' });
 
         const updatedOrder = await prisma.$transaction(async (tx) => {
@@ -241,7 +257,7 @@ async function removeAdjustmentItem(req, res, next) {
 async function payOrder(req, res, next) {
     const prisma = req.prisma;
     const orderId = req.params.orderId || req.body.orderId;
-    const { invoiceId, paymentMethod, amount } = req.body;
+    const { invoiceId, paymentMethod, amount, fiscalYearId, paymentMethodId } = req.body;
     
     try {
         const order = await prisma.customerOrderManagement.findUnique({
@@ -273,30 +289,38 @@ async function payOrder(req, res, next) {
         const invIdNumeric = Number(invoiceId);
         if (isNaN(invIdNumeric)) return res.status(400).json({ error: 'Invoice ID must be numeric' });
 
-        // Enforce global uniqueness of the invoice ID within the same ISP
+        const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
+        if (!fiscalYear) return res.status(400).json({ error: 'Select the fiscal year that is active for the current date' });
+
+        const paymentMethodRecord = paymentMethodId 
+            ? await prisma.billingPaymentMethod.findUnique({ where: { id: Number(paymentMethodId) } })
+            : null;
+
+        // Enforce global uniqueness of the invoice ID within the same ISP and fiscal year
         const existingInvoice = await prisma.customerOrderManagement.findFirst({
             where: {
                 invoiceId: invoiceId.toString(),
                 isPaid: true,
+                fiscalYearId: fiscalYear.id,
                 customer: {
                     ispId: req.ispId
                 }
             }
         });
         if (existingInvoice) {
-            return res.status(400).json({ error: 'Invoice number is already used/duplicate in this ISP' });
+            return res.status(400).json({ error: 'Invoice number is already used/duplicate in this fiscal year' });
         }
 
-        // Check branch invoice range
+        // Check branch invoice range for this fiscal year
         if (customer.branchId) {
             const ranges = await prisma.branchInvoiceRange.findMany({
-                where: { branchId: customer.branchId, isActive: true }
+                where: { branchId: customer.branchId, fiscalYearId: fiscalYear.id, isActive: true }
             });
 
             if (ranges.length > 0) {
                 const isValid = ranges.some(r => invIdNumeric >= r.rangeStart && invIdNumeric <= r.rangeEnd);
                 if (!isValid) {
-                    return res.status(400).json({ error: 'Invoice ID is outside the assigned ranges for this branch' });
+                    return res.status(400).json({ error: 'Invoice ID is outside the assigned ranges for this branch and fiscal year' });
                 }
             }
         }
@@ -306,12 +330,14 @@ async function payOrder(req, res, next) {
             data: {
                 isPaid: true,
                 invoiceId: invoiceId.toString(),
-                paymentId: paymentMethod || 'MANUAL',
+                paymentId: paymentMethodRecord ? paymentMethodRecord.code : (paymentMethod || 'CASH'),
+                fiscalYearId: fiscalYear.id,
+                paymentMethodId: paymentMethodRecord ? paymentMethodRecord.id : undefined,
                 updatedAt: new Date()
             }
         });
 
-        const subscription = await prisma.customerSubscription.findUnique({ where: { id: order.subscriptionId } });
+        const subscription = await prisma.customerSubscription.findUnique({ where: { id: order.subscriptionId || 0 } });
 
         if (subscription) {
             await prisma.customerSubscription.update({

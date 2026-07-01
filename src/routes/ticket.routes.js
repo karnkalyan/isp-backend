@@ -19,6 +19,7 @@ module.exports = (prisma) => {
     router.get('/customer/:customerId', auth, checkAnyPermission(['tickets_read', 'tickets_read_self', 'customer_read']), ticketController.getTicketsByCustomer);
     router.get('/:id', auth, checkAnyPermission(['tickets_read', 'tickets_read_self', 'customer_read']), ticketController.getTicketById);
     router.put('/:id', auth, checkPermission('tickets_update'), ticketController.updateTicket);
+    router.delete('/:id', auth, checkPermission('tickets_update'), ticketController.deleteTicket);
     router.post('/:id/comments', auth, checkAnyPermission(['tickets_read', 'tickets_read_self', 'tickets_update']), ticketController.addComment);
 
     return router;

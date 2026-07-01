@@ -1,3 +1,5 @@
+const smsHelper = require('../utils/smsHelper');
+
 async function runCustomerLifecycle(prisma) {
   const isps = await prisma.iSP.findMany({ select: { id: true } });
   const now = Date.now();
@@ -23,6 +25,50 @@ async function runCustomerLifecycle(prisma) {
         await prisma.customer.updateMany({ where: { id: { in: ids } }, data: { isDeleted: true, status: 'deleted' } });
       }
       console.log(`[CUSTOMER LIFECYCLE] ${action} applied to ${ids.length} customer(s) for ISP ${isp.id}`);
+    }
+
+    // Expiring subscriptions notification check (once a day: hour between 0 and 6)
+    const currentHour = new Date().getHours();
+    if (currentHour >= 0 && currentHour < 6) {
+      try {
+        const threeDaysFromNowStart = new Date();
+        threeDaysFromNowStart.setDate(threeDaysFromNowStart.getDate() + 3);
+        threeDaysFromNowStart.setHours(0, 0, 0, 0);
+        const threeDaysFromNowEnd = new Date(threeDaysFromNowStart);
+        threeDaysFromNowEnd.setHours(23, 59, 59, 999);
+
+        const expiringSubs = await prisma.customerSubscription.findMany({
+          where: {
+            customer: { ispId: isp.id, isDeleted: false },
+            isActive: true,
+            planEnd: { gte: threeDaysFromNowStart, lte: threeDaysFromNowEnd }
+          },
+          include: {
+            customer: { include: { lead: true } },
+            packagePrice: { include: { packagePlanDetails: { select: { planName: true } } } }
+          }
+        });
+
+        for (const sub of expiringSubs) {
+          const customer = sub.customer;
+          const lead = customer.lead;
+          if (lead?.phoneNumber) {
+            const customerTemplateData = {
+              customerName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Customer',
+              packageName: sub.packagePrice?.packagePlanDetails?.planName || sub.packagePrice?.packageName || 'Package',
+              expiryDate: new Date(sub.planEnd).toLocaleDateString(),
+              amount: sub.packagePrice?.price || 0,
+              customerUniqueId: customer.customerUniqueId || `CUST-${customer.id}`,
+              phoneNumber: lead.phoneNumber
+            };
+
+            await smsHelper.sendEventSms(isp.id, 'subscription_expiring', customerTemplateData)
+              .catch(err => console.error('[LIFECYCLE SMS ERROR]', err.message));
+          }
+        }
+      } catch (err) {
+        console.error('[LIFECYCLE SMS PROCESS ERROR]', err.message);
+      }
     }
   }
 }

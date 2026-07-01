@@ -786,6 +786,19 @@ async function getTicketDashboard(req, res, next) {
     } catch (err) { next(err); }
 }
 
+async function deleteTicket(req, res, next) {
+    try {
+        const { id } = req.params;
+        await req.prisma.ticket.update({
+            where: { id: Number(id) },
+            data: { isDeleted: true }
+        });
+        res.json({ success: true, message: 'Ticket deleted successfully' });
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
     createTicket,
     getTickets,
@@ -798,4 +811,5 @@ module.exports = {
     listSlaPolicies,
     saveSlaPolicy,
     getTicketDashboard,
+    deleteTicket,
 };
