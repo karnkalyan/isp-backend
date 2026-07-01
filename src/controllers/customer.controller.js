@@ -874,6 +874,19 @@ async function createCustomer(req, res, next) {
     const effectiveBranchId = branchId || lead.branchId;
     const effectiveSubBranchId = subBranchId || lead.subBranchId;
 
+    if (parsedServiceConnection.connectionType === 'infra_share') {
+      const devicePolicyBranchId = Number(effectiveSubBranchId || effectiveBranchId || 0);
+      if (devicePolicyBranchId) {
+        const devicePolicy = await prisma.branch.findFirst({
+          where: { id: devicePolicyBranchId, ispId: req.ispId, isDeleted: false },
+          select: { infraShareDeviceRequired: true }
+        });
+        if (devicePolicy?.infraShareDeviceRequired && parsedDevices.length === 0) {
+          return res.status(400).json({ success: false, error: 'A device is required for Infra Share customers in the selected branch.' });
+        }
+      }
+    }
+
     // Validate duplicate Mobile and Email based on CustomerType rules
     const targetTypeId = customerTypeId ? Number(customerTypeId) : null;
     if (targetTypeId) {

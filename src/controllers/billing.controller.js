@@ -2,6 +2,20 @@ const { computeExpiryFromBase } = require('../utils/dateHelper');
 const RadiusClient = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 
+async function resolveActiveFiscalYear(prisma, ispId, fiscalYearId) {
+    const now = new Date();
+    return prisma.fiscalYear.findFirst({
+        where: {
+            ispId: Number(ispId),
+            isEnabled: true,
+            startDate: { lte: now },
+            endDate: { gte: now },
+            ...(fiscalYearId ? { id: Number(fiscalYearId) } : {})
+        },
+        orderBy: { startDate: 'desc' }
+    });
+}
+
 /**
  * Extend a customer's subscription
  */
@@ -343,7 +357,7 @@ async function payOrder(req, res, next) {
  */
 async function renewSubscription(req, res, next) {
     const prisma = req.prisma;
-    const { customerId, packageId, invoiceId, amount } = req.body;
+    const { customerId, packageId, invoiceId, amount, fiscalYearId, paymentMethodId } = req.body;
     
     try {
         const subscription = await prisma.customerSubscription.findFirst({
@@ -373,6 +387,23 @@ async function renewSubscription(req, res, next) {
 
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
+        const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
+        if (!fiscalYear) return res.status(400).json({ error: 'Select the fiscal year that is active for the current date' });
+
+        const paymentMethod = await prisma.billingPaymentMethod.findFirst({
+            where: { id: Number(paymentMethodId), ispId: req.ispId, isEnabled: true }
+        });
+        if (!paymentMethod) return res.status(400).json({ error: 'Select an enabled payment method' });
+
+        const policyBranchId = customer.subBranchId || customer.branchId;
+        const branchPolicy = policyBranchId ? await prisma.branch.findFirst({
+            where: { id: Number(policyBranchId), ispId: req.ispId, isDeleted: false },
+            select: { receiptRequired: true }
+        }) : null;
+        if (branchPolicy?.receiptRequired && !invoiceId) {
+            return res.status(400).json({ error: 'Invoice/receipt number is required for this branch' });
+        }
+
         const newPackageAmount = pkgPrice.initialTotalWithTax !== null && pkgPrice.initialTotalWithTax !== undefined
             ? Number(pkgPrice.initialTotalWithTax)
             : Number(pkgPrice.price || 0);
@@ -388,15 +419,17 @@ async function renewSubscription(req, res, next) {
             }
         }
 
+        let invoiceRange = null;
         if (invoiceId) {
             const invoiceNumber = Number(invoiceId);
             if (isNaN(invoiceNumber)) return res.status(400).json({ error: 'Invoice number must be numeric' });
 
-            // Enforce global uniqueness of the invoice ID within the same ISP
+            // Invoice numbers repeat across fiscal years, but never within one.
             const existingInvoice = await prisma.customerOrderManagement.findFirst({
                 where: {
                     invoiceId: invoiceId.toString(),
-                    isPaid: true,
+                    fiscalYearId: fiscalYear.id,
+                    isDeleted: false,
                     customer: {
                         ispId: req.ispId
                     }
@@ -406,10 +439,11 @@ async function renewSubscription(req, res, next) {
                 return res.status(400).json({ error: 'Invoice number is already used/duplicate in this ISP' });
             }
 
-            if (customer.branchId) {
+            if (policyBranchId) {
                 const activeRange = await prisma.branchInvoiceRange.findFirst({
                     where: {
-                        branchId: customer.branchId,
+                        branchId: Number(policyBranchId),
+                        fiscalYearId: fiscalYear.id,
                         isActive: true,
                         rangeStart: { lte: invoiceNumber },
                         rangeEnd: { gte: invoiceNumber }
@@ -419,6 +453,7 @@ async function renewSubscription(req, res, next) {
                 if (!activeRange) {
                     return res.status(400).json({ error: 'Invoice number is outside the active range for this branch' });
                 }
+                invoiceRange = activeRange;
             }
         }
         
@@ -475,6 +510,8 @@ async function renewSubscription(req, res, next) {
                     isActive: true,
                     invoiceId: invoiceId ? String(invoiceId) : null,
                     paymentId: 'PENDING_APPROVAL',
+                    fiscalYearId: fiscalYear.id,
+                    paymentMethodId: paymentMethod.id,
                     updatedAt: new Date(),
                     items: {
                         create: orderItems.map(i => ({
@@ -485,6 +522,12 @@ async function renewSubscription(req, res, next) {
                     }
                 }
             });
+            if (invoiceRange && invoiceId) {
+                await tx.branchInvoiceRange.update({
+                    where: { id: invoiceRange.id },
+                    data: { current: Math.max(Number(invoiceRange.current), Number(invoiceId) + 1), updatedAt: new Date() }
+                });
+            }
 
             await tx.customer.update({
                 where: { id: customer.id },
@@ -884,7 +927,9 @@ async function getInvoiceSummary(req, res, next) {
 async function listInvoiceRanges(req, res, next) {
     const prisma = req.prisma;
     try {
+        const branches = await prisma.branch.findMany({ where: { ispId: req.ispId, isDeleted: false }, select: { id: true } });
         const ranges = await prisma.branchInvoiceRange.findMany({
+            where: { branchId: { in: branches.map(branch => branch.id) } },
             orderBy: { createdAt: 'desc' }
         });
 
@@ -902,12 +947,15 @@ async function listInvoiceRanges(req, res, next) {
  */
 async function createInvoiceRange(req, res, next) {
     const prisma = req.prisma;
-    const { branchId, rangeStart, rangeEnd } = req.body;
+    const { branchId, rangeStart, rangeEnd, fiscalYearId } = req.body;
 
     try {
-        if (!branchId || !rangeStart || !rangeEnd) {
-            return res.status(400).json({ error: 'branchId, rangeStart, and rangeEnd are required' });
+        if (!branchId || !rangeStart || !rangeEnd || !fiscalYearId) {
+            return res.status(400).json({ error: 'branchId, fiscalYearId, rangeStart, and rangeEnd are required' });
         }
+
+        const fiscalYear = await prisma.fiscalYear.findFirst({ where: { id: Number(fiscalYearId), ispId: req.ispId } });
+        if (!fiscalYear) return res.status(400).json({ error: 'Invalid fiscal year' });
 
         const start = Number(rangeStart);
         const end = Number(rangeEnd);
@@ -920,6 +968,7 @@ async function createInvoiceRange(req, res, next) {
         const overlapping = await prisma.branchInvoiceRange.findFirst({
             where: {
                 branchId: Number(branchId),
+                fiscalYearId: Number(fiscalYearId),
                 isActive: true,
                 OR: [
                     { rangeStart: { lte: start }, rangeEnd: { gte: start } },
@@ -936,6 +985,7 @@ async function createInvoiceRange(req, res, next) {
         const newRange = await prisma.branchInvoiceRange.create({
             data: {
                 branchId: Number(branchId),
+                fiscalYearId: Number(fiscalYearId),
                 rangeStart: start,
                 rangeEnd: end,
                 current: start,
@@ -991,6 +1041,55 @@ async function deleteInvoiceRange(req, res, next) {
     }
 }
 
+async function listFiscalYears(req, res, next) {
+    try {
+        const now = new Date();
+        const rows = await req.prisma.fiscalYear.findMany({ where: { ispId: req.ispId }, orderBy: { startDate: 'desc' } });
+        res.json(rows.map(row => ({ ...row, isActive: row.isEnabled && row.startDate <= now && row.endDate >= now })));
+    } catch (err) { next(err); }
+}
+
+async function createFiscalYear(req, res, next) {
+    try {
+        const { name, startDate, endDate, isEnabled = true } = req.body;
+        const start = new Date(startDate); const end = new Date(endDate);
+        if (!name || isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) return res.status(400).json({ error: 'Valid name, start date and end date are required' });
+        const overlap = await req.prisma.fiscalYear.findFirst({ where: { ispId: req.ispId, isEnabled: true, startDate: { lte: end }, endDate: { gte: start } } });
+        if (overlap) return res.status(400).json({ error: `Fiscal year overlaps ${overlap.name}` });
+        res.status(201).json(await req.prisma.fiscalYear.create({ data: { ispId: req.ispId, name: String(name).trim(), startDate: start, endDate: end, isEnabled: Boolean(isEnabled) } }));
+    } catch (err) { next(err); }
+}
+
+async function updateFiscalYear(req, res, next) {
+    try {
+        const current = await req.prisma.fiscalYear.findFirst({ where: { id: Number(req.params.id), ispId: req.ispId } });
+        if (!current) return res.status(404).json({ error: 'Fiscal year not found' });
+        const start = req.body.startDate ? new Date(req.body.startDate) : current.startDate;
+        const end = req.body.endDate ? new Date(req.body.endDate) : current.endDate;
+        if (start >= end) return res.status(400).json({ error: 'End date must be after start date' });
+        res.json(await req.prisma.fiscalYear.update({ where: { id: current.id }, data: { name: req.body.name, startDate: start, endDate: end, isEnabled: req.body.isEnabled } }));
+    } catch (err) { next(err); }
+}
+
+async function listPaymentMethods(req, res, next) {
+    try { res.json(await req.prisma.billingPaymentMethod.findMany({ where: { ispId: req.ispId, ...(req.query.enabled === 'true' ? { isEnabled: true } : {}) }, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] })); } catch (err) { next(err); }
+}
+
+async function savePaymentMethod(req, res, next) {
+    try {
+        const { name, code, description, isEnabled = true, isDefault = false } = req.body;
+        if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
+        if (isDefault) await req.prisma.billingPaymentMethod.updateMany({ where: { ispId: req.ispId }, data: { isDefault: false } });
+        const data = { name: String(name).trim(), code: String(code).trim().toUpperCase(), description: description || null, isEnabled: Boolean(isEnabled), isDefault: Boolean(isDefault) };
+        const existing = req.params.id ? await req.prisma.billingPaymentMethod.findFirst({ where: { id: Number(req.params.id), ispId: req.ispId } }) : null;
+        if (req.params.id && !existing) return res.status(404).json({ error: 'Payment method not found' });
+        const row = req.params.id
+            ? await req.prisma.billingPaymentMethod.update({ where: { id: existing.id }, data })
+            : await req.prisma.billingPaymentMethod.create({ data: { ...data, ispId: req.ispId } });
+        res.status(req.params.id ? 200 : 201).json(row);
+    } catch (err) { next(err); }
+}
+
 module.exports = {
     extendSubscription,
     togglePause,
@@ -1006,4 +1105,9 @@ module.exports = {
     createInvoiceRange,
     toggleInvoiceRange,
     deleteInvoiceRange
+    ,listFiscalYears
+    ,createFiscalYear
+    ,updateFiscalYear
+    ,listPaymentMethods
+    ,savePaymentMethod
 };

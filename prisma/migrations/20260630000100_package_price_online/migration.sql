@@ -1,0 +1,2 @@
+ALTER TABLE `PackagePrice`
+  ADD COLUMN `isOnline` BOOLEAN NOT NULL DEFAULT false;

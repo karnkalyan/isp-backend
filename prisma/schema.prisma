@@ -35,6 +35,8 @@ model Branch {
   discountThresholdEnabled Boolean @default(false)
   discountThresholdValue   Float?  @default(0)
   invoicePrefix            String?
+  infraShareDeviceRequired Boolean @default(false)
+  receiptRequired          Boolean @default(false)
 
   // Foreign Keys
   ispId Int
@@ -347,6 +349,7 @@ model PackagePrice {
   isTrial               Boolean                   @default(false)
   isTscApplicable       Boolean?                  @default(false)
   isActive              Boolean                   @default(true)
+  isOnline              Boolean                   @default(false)
   isDeleted             Boolean                   @default(false)
   createdAt             DateTime                  @default(now())
   updatedAt             DateTime                  @updatedAt
@@ -1140,6 +1143,8 @@ model CustomerOrderManagement {
   isDeleted      Boolean              @default(false)
   invoiceId      String?
   paymentId      String?
+  fiscalYearId   Int?
+  paymentMethodId Int?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 }
@@ -1566,12 +1571,44 @@ model BranchInvoiceRange {
   rangeStart Int
   rangeEnd   Int
   current    Int
+  fiscalYearId Int?
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime
 
   @@index([branchId])
   @@map("branch_invoice_ranges")
+}
+
+model FiscalYear {
+  id        Int      @id @default(autoincrement())
+  ispId     Int
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  isEnabled Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([ispId, name])
+  @@index([ispId, startDate, endDate])
+  @@map("fiscal_years")
+}
+
+model BillingPaymentMethod {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  name        String
+  code        String
+  description String?
+  isEnabled   Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([ispId, code])
+  @@index([ispId, isEnabled])
+  @@map("billing_payment_methods")
 }
 
 model BranchSetting {
@@ -1874,6 +1911,15 @@ model Ticket {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime
   leadId       Int?
+  ticketTypeId Int?
+  departmentId Int?
+  contactName  String?
+  contactPhone String?
+  contactEmail String?
+  responseDueAt DateTime?
+  resolutionDueAt DateTime?
+  closeDueAt DateTime?
+  firstRespondedAt DateTime?
 
   customer   Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   assignedTo User?           @relation("TicketAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
@@ -1894,6 +1940,37 @@ model Ticket {
   @@index([priority])
   @@index([status])
   @@map("tickets")
+}
+
+model TicketType {
+  id           Int      @id @default(autoincrement())
+  ispId        Int
+  name         String
+  code         String
+  description  String?
+  departmentId Int?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([ispId, code])
+  @@index([ispId, isActive])
+  @@map("ticket_types")
+}
+
+model TicketSlaPolicy {
+  id              Int             @id @default(autoincrement())
+  ispId           Int
+  priority        Ticket_priority
+  responseHours   Float
+  resolutionHours Float
+  closeHours      Float
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([ispId, priority])
+  @@map("ticket_sla_policies")
 }
 
 model Tr069Device {

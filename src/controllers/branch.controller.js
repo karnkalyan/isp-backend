@@ -66,6 +66,8 @@ async function createBranch(req, res, next) {
             discountThresholdEnabled: req.body.discountThresholdEnabled ?? false,
             discountThresholdValue: req.body.discountThresholdValue ? Number(req.body.discountThresholdValue) : 0,
             invoicePrefix: req.body.invoicePrefix || null,
+            infraShareDeviceRequired: req.body.infraShareDeviceRequired === true,
+            receiptRequired: req.body.receiptRequired === true,
         };
 
         if (!isGlobalAdmin) {
@@ -274,6 +276,8 @@ async function updateBranch(req, res, next) {
             parentId: req.body.parentId !== undefined ? (req.body.parentId ? Number(req.body.parentId) : null) : undefined,
             invoiceStart: req.body.invoiceStart !== undefined ? (req.body.invoiceStart ? Number(req.body.invoiceStart) : null) : undefined,
             invoiceEnd: req.body.invoiceEnd !== undefined ? (req.body.invoiceEnd ? Number(req.body.invoiceEnd) : null) : undefined,
+            infraShareDeviceRequired: req.body.infraShareDeviceRequired !== undefined ? Boolean(req.body.infraShareDeviceRequired) : undefined,
+            receiptRequired: req.body.receiptRequired !== undefined ? Boolean(req.body.receiptRequired) : undefined,
         };
 
         // Check if user is global admin

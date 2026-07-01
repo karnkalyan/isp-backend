@@ -107,6 +107,7 @@ async function createPackagePrice(req, res, next) {
       isTrial,
       packageName,
       isActive,
+      isOnline,
       initialTotalWithTax,
       renewAmountWithTax,
       isTscApplicable,
@@ -147,6 +148,7 @@ async function createPackagePrice(req, res, next) {
         isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
         packageName: packageName || `${plan.planName} - ${packageDuration}`,
         isActive: isActive !== false,
+        isOnline: isOnline === true,
         ispId: ispId,
         referenceId,
         isTrial: isTrial === true,
@@ -213,7 +215,12 @@ async function createPackagePrice(req, res, next) {
 async function listPackagePrices(req, res, next) {
   try {
     const list = await req.prisma.PackagePrice.findMany({
-      where: { isDeleted: false, ispId: req.ispId },
+      where: {
+        isDeleted: false,
+        ispId: req.ispId,
+        ...(req.query.online === 'true' ? { isOnline: true, isActive: true } : {}),
+        ...(req.query.active === 'true' ? { isActive: true } : {})
+      },
       select: {
         id: true,
         price: true,
@@ -223,6 +230,7 @@ async function listPackagePrices(req, res, next) {
         packageDuration: true,
         packageName: true,
         isActive: true,
+        isOnline: true,
         planId: true,
         referenceId: true,
         isTrial: true,
@@ -268,6 +276,7 @@ async function getPackagePriceById(req, res, next) {
         packageDuration: true,
         packageName: true,
         isActive: true,
+        isOnline: true,
         planId: true,
         referenceId: true,
         isTrial: true,
@@ -305,6 +314,7 @@ async function updatePackagePrice(req, res, next) {
       isTrial,
       packageName,
       isActive,
+      isOnline,
       initialTotalWithTax,
       renewAmountWithTax,
       isTscApplicable,
@@ -327,6 +337,7 @@ async function updatePackagePrice(req, res, next) {
         isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
         packageName: packageName !== undefined ? packageName : undefined,
         isActive: isActive !== undefined ? Boolean(isActive) : undefined,
+        isOnline: isOnline !== undefined ? Boolean(isOnline) : undefined,
         isTrial: isTrial !== undefined ? isTrial : undefined,
         updatedAt: new Date()
       }
@@ -431,6 +442,8 @@ async function createBulkPackagePrices(req, res, next) {
         initialTotalWithTax,
         renewAmountWithTax,
         isTscApplicable,
+        isActive,
+        isOnline,
         oneTimeCharges = [],
         oneTimeChargeIds = []
       } = p;
@@ -454,7 +467,8 @@ async function createBulkPackagePrices(req, res, next) {
             renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
             isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
             packageName: `${plan.planName} - ${duration}`,
-            isActive: true,
+            isActive: isActive !== false,
+            isOnline: isOnline === true,
             isDeleted: false,
             updatedAt: new Date()
           }
@@ -481,7 +495,8 @@ async function createBulkPackagePrices(req, res, next) {
           renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
           isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
           packageName: `${plan.planName} - ${duration}`,
-          isActive: true,
+          isActive: isActive !== false,
+          isOnline: isOnline === true,
           ispId: ispId,
           referenceId,
           isTrial: false,

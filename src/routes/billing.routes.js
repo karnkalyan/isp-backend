@@ -13,7 +13,12 @@ const {
     listInvoiceRanges,
     createInvoiceRange,
     toggleInvoiceRange,
-    deleteInvoiceRange
+    deleteInvoiceRange,
+    listFiscalYears,
+    createFiscalYear,
+    updateFiscalYear,
+    listPaymentMethods,
+    savePaymentMethod
 } = require('../controllers/billing.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -47,6 +52,12 @@ module.exports = (prisma) => {
     router.post('/invoice-ranges', checkPermission('billing_update'), createInvoiceRange);
     router.patch('/invoice-ranges/:id', checkPermission('billing_update'), toggleInvoiceRange);
     router.delete('/invoice-ranges/:id', checkPermission('billing_update'), deleteInvoiceRange);
+    router.get('/fiscal-years', checkAnyPermission(['billing_read', 'billing_create', 'billing_read_self']), listFiscalYears);
+    router.post('/fiscal-years', checkPermission('billing_update'), createFiscalYear);
+    router.patch('/fiscal-years/:id', checkPermission('billing_update'), updateFiscalYear);
+    router.get('/payment-methods', checkAnyPermission(['billing_read', 'billing_create', 'billing_read_self']), listPaymentMethods);
+    router.post('/payment-methods', checkPermission('billing_update'), savePaymentMethod);
+    router.patch('/payment-methods/:id', checkPermission('billing_update'), savePaymentMethod);
 
     return router;
 }

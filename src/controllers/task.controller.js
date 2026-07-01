@@ -117,6 +117,19 @@ async function createTask(req, res, next) {
         
         const ispId = req.ispId;
         const createdById = req.user.id;
+        let resolvedCustomerId = customerId ? Number(customerId) : null;
+        let resolvedBranchId = branchId ? Number(branchId) : (req.selectedBranchId || req.branchId || null);
+        if (ticketId) {
+            const ticket = await req.prisma.ticket.findFirst({ where: { id: Number(ticketId), ispId, isDeleted: false }, select: { id: true, customerId: true, branchId: true } });
+            if (!ticket) return res.status(400).json({ error: 'Selected ticket is not available' });
+            resolvedCustomerId = resolvedCustomerId || ticket.customerId;
+            resolvedBranchId = resolvedBranchId || ticket.branchId;
+        }
+        if (resolvedCustomerId) {
+            const customer = await req.prisma.customer.findFirst({ where: { id: resolvedCustomerId, ispId, isDeleted: false }, select: { id: true, branchId: true, subBranchId: true } });
+            if (!customer) return res.status(400).json({ error: 'Selected customer is not available' });
+            resolvedBranchId = resolvedBranchId || customer.subBranchId || customer.branchId;
+        }
 
         // Duplicate check: Same title and same startTime
         if (title && startTime) {
@@ -195,9 +208,9 @@ async function createTask(req, res, next) {
                 status: status || 'PENDING',
                 priority: priority || 'MEDIUM',
                 assignedToId: assignedToId ? Number(assignedToId) : null,
-                customerId: customerId ? Number(customerId) : null,
+                customerId: resolvedCustomerId,
                 ticketId: ticketId ? Number(ticketId) : null,
-                branchId: branchId ? Number(branchId) : (req.selectedBranchId || null),
+                branchId: resolvedBranchId,
                 ispId,
                 createdById,
                 updatedAt: new Date()

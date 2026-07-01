@@ -82,6 +82,9 @@ function flattenCustomer(ticket) {
             phoneNumber: ticket.lead.phoneNumber || '',
             address: [ticket.lead.address, ticket.lead.street, ticket.lead.district, ticket.lead.province].filter(Boolean).join(', '),
         };
+    } else if (ticket.contactName || ticket.contactPhone || ticket.contactEmail) {
+        const parts = String(ticket.contactName || 'Guest').trim().split(/\s+/);
+        subject = { type: 'GUEST', id: ticket.id, uniqueId: ticket.ticketNumber, firstName: parts[0] || 'Guest', lastName: parts.slice(1).join(' '), email: ticket.contactEmail || '', phoneNumber: ticket.contactPhone || '', address: '' };
     }
 
     const { customer, lead, ...rest } = ticket;
@@ -146,7 +149,7 @@ async function findTicketAutoAssignee(prisma, ispId, branchId) {
  */
 async function createTicket(req, res, next) {
     try {
-        let { title, description, priority, category, customerId, leadId, assignedToId, targetBranchId, notifyEmail } = req.body;
+        let { title, description, priority, category, customerId, leadId, assignedToId, targetBranchId, notifyEmail, ticketTypeId, departmentId, contactName, contactPhone, contactEmail } = req.body;
         const ispId = req.ispId;
         let branchId = targetBranchId ? parseInt(targetBranchId) : null;
         const createdById = req.user?.id;
@@ -173,8 +176,18 @@ async function createTicket(req, res, next) {
             }
         }
 
-        if (!customerId && !leadId) {
-            return res.status(400).json({ error: 'Select a lead or customer for the ticket.' });
+        if (!customerId && !leadId && !String(contactName || '').trim()) {
+            return res.status(400).json({ error: 'Select a lead/customer or enter the contact name.' });
+        }
+
+        const selectedPriority = priority || 'MEDIUM';
+        const sla = await req.prisma.ticketSlaPolicy.findFirst({ where: { ispId, priority: selectedPriority, isActive: true } });
+        const now = new Date();
+        const dueAt = hours => sla ? new Date(now.getTime() + Number(hours) * 3600000) : null;
+        if (ticketTypeId) {
+            const type = await req.prisma.ticketType.findFirst({ where: { id: Number(ticketTypeId), ispId, isActive: true } });
+            if (!type) return res.status(400).json({ error: 'Invalid ticket type' });
+            if (!departmentId && type.departmentId) departmentId = type.departmentId;
         }
 
         if (!branchId && customerId) {
@@ -226,7 +239,7 @@ async function createTicket(req, res, next) {
                 ticketNumber,
                 title,
                 description,
-                priority: priority || 'MEDIUM',
+                priority: selectedPriority,
                 category,
                 customerId: customerId ? parseInt(customerId) : null,
                 leadId: leadId ? parseInt(leadId) : null,
@@ -234,6 +247,14 @@ async function createTicket(req, res, next) {
                 createdById,
                 ispId,
                 branchId,
+                ticketTypeId: ticketTypeId ? Number(ticketTypeId) : null,
+                departmentId: departmentId ? Number(departmentId) : null,
+                contactName: contactName ? String(contactName).trim() : null,
+                contactPhone: contactPhone ? String(contactPhone).trim() : null,
+                contactEmail: contactEmail ? String(contactEmail).trim() : null,
+                responseDueAt: dueAt(sla?.responseHours),
+                resolutionDueAt: dueAt(sla?.resolutionHours),
+                closeDueAt: dueAt(sla?.closeHours),
                 updatedAt: new Date(),
             },
             include: {
@@ -396,7 +417,8 @@ async function getTickets(req, res, next) {
                 {
                     OR: [
                         { customerId: { not: null } },
-                        { leadId: { not: null } }
+                        { leadId: { not: null } },
+                        { contactName: { not: null } }
                     ]
                 }
             ],
@@ -557,7 +579,14 @@ async function getTicketById(req, res, next) {
 async function updateTicket(req, res, next) {
     try {
         const { id } = req.params;
-        const { title, description, status, priority, category, assignedToId, resolution } = req.body;
+        const { title, description, status, priority, category, assignedToId, resolution, ticketTypeId, departmentId } = req.body;
+
+        const existing = await req.prisma.ticket.findFirst({ where: { id: parseInt(id), ispId: req.ispId, isDeleted: false } });
+        if (!existing || (req.branchId && existing.branchId !== req.branchId)) return res.status(404).json({ error: 'Ticket not found in your branch' });
+        if (assignedToId) {
+            const assignee = await req.prisma.user.findFirst({ where: { id: Number(assignedToId), ispId: req.ispId, isDeleted: false, ...(existing.branchId ? { OR: [{ branchId: existing.branchId }, { userBranches: { some: { branchId: existing.branchId } } }] } : {}) } });
+            if (!assignee) return res.status(400).json({ error: 'Assignee must be a user of the ticket branch' });
+        }
 
         const updateData = {};
         if (title !== undefined) updateData.title = title;
@@ -567,9 +596,16 @@ async function updateTicket(req, res, next) {
         if (category !== undefined) updateData.category = category;
         if (assignedToId !== undefined) updateData.assignedToId = assignedToId ? parseInt(assignedToId) : null;
         if (resolution !== undefined) updateData.resolution = resolution;
+        if (ticketTypeId !== undefined) updateData.ticketTypeId = ticketTypeId ? Number(ticketTypeId) : null;
+        if (departmentId !== undefined) updateData.departmentId = departmentId ? Number(departmentId) : null;
+        if ((status === 'IN_PROGRESS' || resolution) && !existing.firstRespondedAt) updateData.firstRespondedAt = new Date();
 
         if (status === 'RESOLVED' || status === 'CLOSED') {
             updateData.resolvedAt = new Date();
+        }
+        if (status === 'RESOLVED') {
+            const policy = await req.prisma.ticketSlaPolicy.findFirst({ where: { ispId: req.ispId, priority: priority || existing.priority, isActive: true } });
+            if (policy) updateData.closeDueAt = new Date(Date.now() + Number(policy.closeHours) * 3600000);
         }
 
         const ticket = await req.prisma.ticket.update({
@@ -703,6 +739,53 @@ async function getTicketsByCustomer(req, res, next) {
     }
 }
 
+async function listTicketTypes(req, res, next) {
+    try { res.json(await req.prisma.ticketType.findMany({ where: { ispId: req.ispId, ...(req.query.active === 'true' ? { isActive: true } : {}) }, orderBy: { name: 'asc' } })); } catch (err) { next(err); }
+}
+
+async function saveTicketType(req, res, next) {
+    try {
+        const { name, code, description, departmentId, isActive = true } = req.body;
+        if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
+        const data = { name: String(name).trim(), code: String(code).trim().toUpperCase(), description: description || null, departmentId: departmentId ? Number(departmentId) : null, isActive: Boolean(isActive) };
+        let row;
+        if (req.params.id) {
+            const current = await req.prisma.ticketType.findFirst({ where: { id: Number(req.params.id), ispId: req.ispId } });
+            if (!current) return res.status(404).json({ error: 'Ticket type not found' });
+            row = await req.prisma.ticketType.update({ where: { id: current.id }, data });
+        } else row = await req.prisma.ticketType.create({ data: { ...data, ispId: req.ispId } });
+        res.json(row);
+    } catch (err) { next(err); }
+}
+
+async function listSlaPolicies(req, res, next) {
+    try { res.json(await req.prisma.ticketSlaPolicy.findMany({ where: { ispId: req.ispId }, orderBy: { priority: 'asc' } })); } catch (err) { next(err); }
+}
+
+async function saveSlaPolicy(req, res, next) {
+    try {
+        const { priority, responseHours, resolutionHours, closeHours, isActive = true } = req.body;
+        if (!['LOW','MEDIUM','HIGH','CRITICAL'].includes(priority) || [responseHours,resolutionHours,closeHours].some(v => Number(v) < 0)) return res.status(400).json({ error: 'Valid priority and SLA hours are required' });
+        const row = await req.prisma.ticketSlaPolicy.upsert({ where: { ispId_priority: { ispId: req.ispId, priority } }, update: { responseHours: Number(responseHours), resolutionHours: Number(resolutionHours), closeHours: Number(closeHours), isActive: Boolean(isActive) }, create: { ispId: req.ispId, priority, responseHours: Number(responseHours), resolutionHours: Number(resolutionHours), closeHours: Number(closeHours), isActive: Boolean(isActive) } });
+        res.json(row);
+    } catch (err) { next(err); }
+}
+
+async function getTicketDashboard(req, res, next) {
+    try {
+        const where = { ispId: req.ispId, isDeleted: false, ...(req.branchId ? { branchId: req.branchId } : {}) };
+        const [statusRows, priorityRows, typeRows, total] = await Promise.all([
+            req.prisma.ticket.groupBy({ by: ['status'], where, _count: true }),
+            req.prisma.ticket.groupBy({ by: ['priority'], where, _count: true }),
+            req.prisma.ticket.groupBy({ by: ['ticketTypeId'], where, _count: true }),
+            req.prisma.ticket.count({ where })
+        ]);
+        const types = await req.prisma.ticketType.findMany({ where: { ispId: req.ispId } });
+        const names = new Map(types.map(t => [t.id, t.name]));
+        res.json({ total, byStatus: Object.fromEntries(statusRows.map(r => [r.status, r._count])), byPriority: Object.fromEntries(priorityRows.map(r => [r.priority, r._count])), byType: typeRows.map(r => ({ ticketTypeId: r.ticketTypeId, name: names.get(r.ticketTypeId) || 'Unclassified', count: r._count })) });
+    } catch (err) { next(err); }
+}
+
 module.exports = {
     createTicket,
     getTickets,
@@ -710,4 +793,9 @@ module.exports = {
     updateTicket,
     addComment,
     getTicketsByCustomer,
+    listTicketTypes,
+    saveTicketType,
+    listSlaPolicies,
+    saveSlaPolicy,
+    getTicketDashboard,
 };
