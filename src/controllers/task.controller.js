@@ -316,6 +316,11 @@ async function updateTask(req, res, next) {
             }
         }
 
+        // Prevent cancelling a task if it is already completed
+        if (status === 'CANCELLED' && task.status === 'COMPLETED') {
+            return res.status(400).json({ error: 'Validation Error: A completed task cannot be cancelled.' });
+        }
+
         // GPS checks on state changes
         if (status && status !== task.status) {
             if (status === 'IN_PROGRESS' || status === 'COMPLETED') {
