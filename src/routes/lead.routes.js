@@ -16,6 +16,7 @@ const {
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
+const checkAnyPermission = require('../middlewares/checkAnyPermission');
 
 // Configure multer for file upload
 const storage = multer.memoryStorage(); // Store file in memory
@@ -47,7 +48,7 @@ module.exports = (prisma) => {
   // CRUD endpoints
   router.post('/', checkPermission('lead_create'), createLead);
   router.get('/template', checkPermission('lead_read'), downloadCSVTemplate);
-  router.get('/', checkPermission('lead_read'), getAllLeads);
+  router.get('/', checkAnyPermission(['lead_read', 'tasks_read_self', 'tasks_update']), getAllLeads);
   router.get('/converted', checkPermission('lead_read'), getConvertedLeads);
   router.get('/:id', checkPermission('lead_read'), getLeadById);
   router.put('/:id', checkPermission('lead_update'), updateLead);

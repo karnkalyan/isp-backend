@@ -46,6 +46,7 @@ const {
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
+const checkAnyPermission = require('../middlewares/checkAnyPermission');
 const { ServiceController } = require('../controllers/services.controller');
 const ticketController = require('../controllers/ticket.controller');
 
@@ -116,7 +117,7 @@ module.exports = (prisma) => {
     provisionCustomer
   );
 
-  router.get('/', checkPermission('customer_read'), listCustomers);
+  router.get('/', checkAnyPermission(['customer_read', 'tasks_read_self', 'tasks_update']), listCustomers);
   router.get('/summary', checkPermission('customer_read'), getCustomerStatusSummary); // New endpoint
   router.post('/by-phone',
     checkPermission('customer_read'),

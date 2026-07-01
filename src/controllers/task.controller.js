@@ -500,10 +500,42 @@ async function deleteTask(req, res, next) {
     }
 }
 
+async function addTaskComment(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { content, lat, lon } = req.body;
+        if (!content || !String(content).trim()) {
+            return res.status(400).json({ error: 'Comment content is required' });
+        }
+
+        const task = await req.prisma.task.findUnique({ where: { id: Number(id) } });
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const log = await req.prisma.taskActivityLog.create({
+            data: {
+                taskId: task.id,
+                userId: req.user.id,
+                action: 'COMMENT',
+                notes: String(content).trim(),
+                lat: lat ? Number(lat) : null,
+                lon: lon ? Number(lon) : null
+            },
+            include: {
+                user: { select: { id: true, name: true } }
+            }
+        });
+
+        res.status(201).json(log);
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
     listTasks,
     createTask,
     updateTask,
     getTaskDetails,
-    deleteTask
+    deleteTask,
+    addTaskComment
 };

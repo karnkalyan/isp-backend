@@ -111,6 +111,11 @@ async function createLead(req, res, next) {
 
 const getAllLeads = async (req, res, next) => {
   try {
+    const roleName = String(req.user?.role?.name || "").toLowerCase();
+    const isFieldStaff = roleName.includes("field staff") || roleName.includes("field_staff");
+    if (isFieldStaff && (!req.query.search || !String(req.query.search).trim())) {
+      return res.json({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
+    }
     const userId = req.user.id;
     const userRole = req.user.role;
     const {

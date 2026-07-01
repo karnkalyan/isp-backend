@@ -1958,6 +1958,7 @@ model TicketType {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  slaPolicies  TicketSlaPolicy[]
 
   @@unique([ispId, code])
   @@index([ispId, isActive])
@@ -1972,10 +1973,12 @@ model TicketSlaPolicy {
   resolutionHours Float
   closeHours      Float
   isActive        Boolean         @default(true)
+  ticketTypeId    Int?
+  ticketType      TicketType?     @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  @@unique([ispId, priority])
+  @@unique([ispId, priority, ticketTypeId])
   @@map("ticket_sla_policies")
 }
 

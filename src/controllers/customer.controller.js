@@ -1929,6 +1929,11 @@ async function enrichServiceDetailsWithVlans(prisma, customers) {
 async function listCustomers(req, res, next) {
   try {
     await deactivateExpiredCustomers(req.prisma, req.ispId);
+    const roleName = String(req.user?.role?.name || "").toLowerCase();
+    const isFieldStaff = roleName.includes("field staff") || roleName.includes("field_staff");
+    if (isFieldStaff && (!req.query.search || !String(req.query.search).trim())) {
+      return res.json({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
+    }
     const {
       search,
       status,

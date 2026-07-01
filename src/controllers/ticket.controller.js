@@ -181,7 +181,25 @@ async function createTicket(req, res, next) {
         }
 
         const selectedPriority = priority || 'MEDIUM';
-        const sla = await req.prisma.ticketSlaPolicy.findFirst({ where: { ispId, priority: selectedPriority, isActive: true } });
+        const typeId = ticketTypeId ? Number(ticketTypeId) : null;
+        let sla = await req.prisma.ticketSlaPolicy.findFirst({
+            where: {
+                ispId,
+                priority: selectedPriority,
+                ticketTypeId: typeId,
+                isActive: true
+            }
+        });
+        if (!sla && typeId) {
+            sla = await req.prisma.ticketSlaPolicy.findFirst({
+                where: {
+                    ispId,
+                    priority: selectedPriority,
+                    ticketTypeId: null,
+                    isActive: true
+                }
+            });
+        }
         const now = new Date();
         const dueAt = hours => sla ? new Date(now.getTime() + Number(hours) * 3600000) : null;
         if (ticketTypeId) {
@@ -604,7 +622,26 @@ async function updateTicket(req, res, next) {
             updateData.resolvedAt = new Date();
         }
         if (status === 'RESOLVED') {
-            const policy = await req.prisma.ticketSlaPolicy.findFirst({ where: { ispId: req.ispId, priority: priority || existing.priority, isActive: true } });
+            const targetPriority = priority || existing.priority;
+            const targetTypeId = ticketTypeId !== undefined ? (ticketTypeId ? Number(ticketTypeId) : null) : existing.ticketTypeId;
+            let policy = await req.prisma.ticketSlaPolicy.findFirst({
+                where: {
+                    ispId: req.ispId,
+                    priority: targetPriority,
+                    ticketTypeId: targetTypeId,
+                    isActive: true
+                }
+            });
+            if (!policy && targetTypeId) {
+                policy = await req.prisma.ticketSlaPolicy.findFirst({
+                    where: {
+                        ispId: req.ispId,
+                        priority: targetPriority,
+                        ticketTypeId: null,
+                        isActive: true
+                    }
+                });
+            }
             if (policy) updateData.closeDueAt = new Date(Date.now() + Number(policy.closeHours) * 3600000);
         }
 
@@ -759,14 +796,55 @@ async function saveTicketType(req, res, next) {
 }
 
 async function listSlaPolicies(req, res, next) {
-    try { res.json(await req.prisma.ticketSlaPolicy.findMany({ where: { ispId: req.ispId }, orderBy: { priority: 'asc' } })); } catch (err) { next(err); }
+    try {
+        const { ticketTypeId } = req.query;
+        const parsedTypeId = ticketTypeId ? (ticketTypeId === 'null' ? null : Number(ticketTypeId)) : undefined;
+        
+        const where = {
+            ispId: req.ispId,
+            ...(parsedTypeId !== undefined ? { ticketTypeId: parsedTypeId } : {})
+        };
+        
+        const rows = await req.prisma.ticketSlaPolicy.findMany({
+            where,
+            orderBy: { priority: 'asc' }
+        });
+        res.json(rows);
+    } catch (err) { next(err); }
 }
 
 async function saveSlaPolicy(req, res, next) {
     try {
-        const { priority, responseHours, resolutionHours, closeHours, isActive = true } = req.body;
-        if (!['LOW','MEDIUM','HIGH','CRITICAL'].includes(priority) || [responseHours,resolutionHours,closeHours].some(v => Number(v) < 0)) return res.status(400).json({ error: 'Valid priority and SLA hours are required' });
-        const row = await req.prisma.ticketSlaPolicy.upsert({ where: { ispId_priority: { ispId: req.ispId, priority } }, update: { responseHours: Number(responseHours), resolutionHours: Number(resolutionHours), closeHours: Number(closeHours), isActive: Boolean(isActive) }, create: { ispId: req.ispId, priority, responseHours: Number(responseHours), resolutionHours: Number(resolutionHours), closeHours: Number(closeHours), isActive: Boolean(isActive) } });
+        const { priority, responseHours, resolutionHours, closeHours, isActive = true, ticketTypeId } = req.body;
+        if (!['LOW','MEDIUM','HIGH','CRITICAL'].includes(priority) || [responseHours,resolutionHours,closeHours].some(v => Number(v) < 0)) {
+            return res.status(400).json({ error: 'Valid priority and SLA hours are required' });
+        }
+        const parsedTypeId = ticketTypeId ? Number(ticketTypeId) : null;
+        
+        const row = await req.prisma.ticketSlaPolicy.upsert({ 
+            where: { 
+                ispId_priority_ticketTypeId: { 
+                    ispId: req.ispId, 
+                    priority, 
+                    ticketTypeId: parsedTypeId 
+                } 
+            }, 
+            update: { 
+                responseHours: Number(responseHours), 
+                resolutionHours: Number(resolutionHours), 
+                closeHours: Number(closeHours), 
+                isActive: Boolean(isActive) 
+            }, 
+            create: { 
+                ispId: req.ispId, 
+                priority, 
+                ticketTypeId: parsedTypeId,
+                responseHours: Number(responseHours), 
+                resolutionHours: Number(resolutionHours), 
+                closeHours: Number(closeHours), 
+                isActive: Boolean(isActive) 
+            } 
+        });
         res.json(row);
     } catch (err) { next(err); }
 }

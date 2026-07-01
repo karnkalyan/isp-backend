@@ -13,6 +13,7 @@ module.exports = (prisma) => {
     router.get('/:id', auth, checkAnyPermission(['tasks_read', 'tasks_read_self']), taskController.getTaskDetails);
     router.put('/:id', auth, checkPermission('tasks_update'), taskController.updateTask);
     router.delete('/:id', auth, checkPermission('tasks_delete'), taskController.deleteTask);
+    router.post('/:id/comments', auth, checkAnyPermission(['tasks_read', 'tasks_read_self', 'tasks_update']), taskController.addTaskComment);
 
     return router;
 };

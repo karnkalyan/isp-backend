@@ -84,6 +84,64 @@ function isYeastarExtUniqueError(err) {
   );
 }
 
+async function validateVoipExtension(prisma, ispId, yeastarExt) {
+  if (!yeastarExt) return null;
+
+  // 1. Check if there is an active VOIP service for this ISP
+  const voipService = await prisma.iSPService.findFirst({
+    where: {
+      ispId,
+      isActive: true,
+      service: {
+        category: 'VOIP'
+      }
+    },
+    include: {
+      service: true
+    }
+  });
+
+  if (!voipService) {
+    throw new Error('VoIP service is not enabled for this ISP. Cannot assign a VoIP extension.');
+  }
+
+  // 2. Check if the extension exists in the extension table for the active provider
+  const providerCode = voipService.service.code;
+  
+  if (providerCode.includes('YEASTAR') || providerCode.includes('yeastar')) {
+    const ext = await prisma.yeastarExtension.findFirst({
+      where: {
+        ispId,
+        extensionNumber: yeastarExt,
+        isActive: true
+      }
+    });
+    if (!ext) {
+      throw new Error(`VoIP extension '${yeastarExt}' does not exist in the Yeastar extensions list.`);
+    }
+  } else if (providerCode.includes('ASTERISK') || providerCode.includes('asterisk')) {
+    const ext = await prisma.asteriskExtension.findFirst({
+      where: {
+        ispId,
+        extensionNumber: yeastarExt,
+        isActive: true
+      }
+    });
+    if (!ext) {
+      throw new Error(`VoIP extension '${yeastarExt}' does not exist in the Asterisk extensions list.`);
+    }
+  } else {
+    // Default fallback: check both
+    const [yeastarExtExists, asteriskExtExists] = await Promise.all([
+      prisma.yeastarExtension.findFirst({ where: { ispId, extensionNumber: yeastarExt, isActive: true } }),
+      prisma.asteriskExtension.findFirst({ where: { ispId, extensionNumber: yeastarExt, isActive: true } })
+    ]);
+    if (!yeastarExtExists && !asteriskExtExists) {
+      throw new Error(`VoIP extension '${yeastarExt}' does not exist in the VoIP extensions list.`);
+    }
+  }
+}
+
 // Create User
 async function createUser(req, res, next) {
   try {
@@ -101,14 +159,15 @@ async function createUser(req, res, next) {
     const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
     const normalizedYeastarExt = normalizeYeastarExt(yeastarExt);
 
-    // Removed: const authenticatedIspId = req.ispId;
+    if (normalizedYeastarExt) {
+      try {
+        await validateVoipExtension(req.prisma, req.ispId, normalizedYeastarExt);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+
     // Directly using req.ispId where needed
-
-    // Removed the if (!authenticatedIspId) check as per your request.
-    // Important: If req.ispId is null/undefined here, the user will be created with ispId: null.
-    // Ensure your database schema for `ispId` in the `User` model handles nulls if this is acceptable,
-    // or add validation to prevent users being created without an ISP if it's mandatory.
-
     const hashed = await bcrypt.hash(password, 10);
     const profilePicture = req.file ? `/uploads/${req.file.filename}` : null;
     const duplicateExtUser = await ensureYeastarExtIsUnique(req.prisma, req.ispId, normalizedYeastarExt);
@@ -315,6 +374,15 @@ async function updateUser(req, res, next) {
     const additionalBranchIds = normalizeBranchIds(branchIds, branchId);
     const normalizedYeastarExt = normalizeYeastarExt(yeastarExt);
     const nextIspId = ispId !== undefined ? Number(ispId) : req.ispId;
+
+    if (normalizedYeastarExt) {
+      try {
+        await validateVoipExtension(req.prisma, nextIspId, normalizedYeastarExt);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+
     const existingUser = await req.prisma.user.findFirst({
       where: { id, ispId: req.ispId, isDeleted: false },
       select: { id: true, email: true }
