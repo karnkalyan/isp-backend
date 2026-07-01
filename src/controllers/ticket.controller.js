@@ -609,6 +609,12 @@ async function updateTicket(req, res, next) {
 
         const existing = await req.prisma.ticket.findFirst({ where: { id: parseInt(id), ispId: req.ispId, isDeleted: false } });
         if (!existing || (req.branchId && existing.branchId !== req.branchId)) return res.status(404).json({ error: 'Ticket not found in your branch' });
+
+        const userRoleName = String(req.user?.role || '').toLowerCase();
+        const isFieldStaff = userRoleName.includes('field staff') || userRoleName.includes('field_staff');
+        if (isFieldStaff && status !== undefined && status === 'CLOSED') {
+            return res.status(403).json({ error: 'Field staff are not authorized to close tickets.' });
+        }
         if (assignedToId) {
             const assignee = await req.prisma.user.findFirst({ where: { id: Number(assignedToId), ispId: req.ispId, isDeleted: false, ...(existing.branchId ? { OR: [{ branchId: existing.branchId }, { userBranches: { some: { branchId: existing.branchId } } }] } : {}) } });
             if (!assignee) return res.status(400).json({ error: 'Assignee must be a user of the ticket branch' });
