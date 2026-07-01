@@ -2315,8 +2315,9 @@ async function updateCustomer(req, res, next) {
       status, onboardStatus,
       membershipId, existingISPId, customerTypeId, subBranchId, installedById, subscribedPkgId,
       isFree, freeCustomerSecretKey,
-      deviceName, deviceMac,
+      deviceName, deviceMac, deviceBrand, deviceSerial, devicePonSerial,
       connectionType, vlanId, vlanPriority, oltId, splitterId, oltPort, splitterPort,
+      connectionUsername, connectionPassword,
 
       ...rest
     } = req.body;
@@ -2411,13 +2412,16 @@ async function updateCustomer(req, res, next) {
     if (lon !== undefined) leadUpdate.lon = lon ? Number(lon) : null;
 
     // Update Device (find first ONT device or create)
-    if (deviceName !== undefined || deviceMac !== undefined) {
+    if (deviceName !== undefined || deviceMac !== undefined || deviceBrand !== undefined || deviceSerial !== undefined || devicePonSerial !== undefined) {
       const device = await req.prisma.customerDevice.findFirst({
         where: { customerId: id, deviceType: 'ONT' }
       });
       const deviceData = {};
+      if (deviceBrand !== undefined) deviceData.brand = deviceBrand;
       if (deviceName !== undefined) deviceData.model = deviceName;
+      if (deviceSerial !== undefined) deviceData.serialNumber = deviceSerial;
       if (deviceMac !== undefined) deviceData.macAddress = deviceMac?.toUpperCase();
+      if (devicePonSerial !== undefined) deviceData.ponSerial = devicePonSerial;
       if (device) {
         await req.prisma.customerDevice.update({
           where: { id: device.id },
@@ -2458,6 +2462,104 @@ async function updateCustomer(req, res, next) {
         await req.prisma.customerServiceConnection.create({
           data: { customerId: id, ...serviceData, status: 'pending' }
         });
+      }
+    }
+
+    // Update Connection User (PPPoE / Radius Credentials)
+    if (connectionUsername !== undefined && connectionPassword !== undefined) {
+      if (connectionUsername || connectionPassword) {
+        // Validate required fields if one is provided
+        if (!connectionUsername || !connectionPassword) {
+          return res.status(400).json({ error: "Both connection username and password are required to update credentials." });
+        }
+
+        // Check duplicate
+        const duplicateUser = await req.prisma.connectionUser.findFirst({
+          where: {
+            username: connectionUsername,
+            customerId: { not: id },
+            isDeleted: false
+          }
+        });
+        if (duplicateUser) {
+          return res.status(400).json({ error: `Connection username '${connectionUsername}' is already in use by another customer.` });
+        }
+
+        const existingConnectionUser = await req.prisma.connectionUser.findFirst({
+          where: { customerId: id, isDeleted: false }
+        });
+
+        const oldUsername = existingConnectionUser?.username;
+
+        if (existingConnectionUser) {
+          await req.prisma.connectionUser.update({
+            where: { id: existingConnectionUser.id },
+            data: { username: connectionUsername, password: connectionPassword }
+          });
+        } else {
+          await req.prisma.connectionUser.create({
+            data: {
+              customerId: id,
+              username: connectionUsername,
+              password: connectionPassword,
+              branchId: existing.branchId,
+              ispId: req.ispId
+            }
+          });
+        }
+
+        // Sync to Radius
+        try {
+          const RadiusClient = require('../services/radiusClient');
+          const radius = await RadiusClient.create(req.ispId);
+
+          if (oldUsername) {
+            try {
+              await radius.deleteUser(oldUsername);
+            } catch (err) {
+              console.warn(`[RADIUS UPDATE] Delete old user failed: ${err.message}`);
+            }
+          }
+          if (connectionUsername !== oldUsername) {
+            try {
+              await radius.deleteUser(connectionUsername);
+            } catch (err) {
+              console.warn(`[RADIUS UPDATE] Delete final user failed: ${err.message}`);
+            }
+          }
+
+          // Fetch active subscription for expiry and package for group
+          const subscription = await req.prisma.customerSubscription.findFirst({
+            where: { customerId: id, isActive: true },
+            include: { packagePrice: { include: { packagePlanDetails: true } } }
+          });
+
+          const expiryDate = subscription?.planEnd
+            ? new Date(subscription.planEnd).toLocaleDateString('en-GB', {
+                day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+              }).replace(/,/g, '').replace(/ /g, ' ')
+            : null;
+
+          const radiusGroupName =
+            subscription?.packagePrice?.packagePlanDetails?.planCode ||
+            subscription?.packagePrice?.referenceId ||
+            subscription?.packagePrice?.packageName ||
+            '';
+
+          const attributes = {};
+          if (expiryDate) attributes.Expiration = expiryDate;
+          const groups = radiusGroupName ? [radiusGroupName] : [];
+
+          await radius.createUser(connectionUsername, connectionPassword, attributes, groups);
+
+          try {
+            await radius.sendCoA(connectionUsername, { action: 'disconnect' });
+          } catch (err) {
+            console.warn(`[RADIUS UPDATE] sendCoA disconnect failed: ${err.message}`);
+          }
+        } catch (e) {
+          console.error('Radius sync failed during customer update:', e.message);
+        }
       }
     }
 
@@ -3800,6 +3902,8 @@ async function reprovisionRadius(req, res, next) {
   const customerId = Number(req.params.id);
   if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
 
+  const { subscribedPkgId, username, password } = req.body;
+
   try {
     const customer = await prisma.customer.findFirst({
       where: { id: customerId, isDeleted: false, ispId: req.ispId },
@@ -3811,11 +3915,77 @@ async function reprovisionRadius(req, res, next) {
 
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-    const connectionUser = customer.connectionUsers[0];
-    if (!connectionUser) {
-      return res.status(400).json({ error: 'No active connection user found for this customer' });
+    let finalUsername = username;
+    let finalPassword = password;
+    let finalSubscribedPkgId = subscribedPkgId ? Number(subscribedPkgId) : customer.subscribedPkgId;
+
+    // If username and password are provided, validate and update/insert ConnectionUser
+    if (username && password) {
+      // Check duplicate username
+      const duplicateUser = await prisma.connectionUser.findFirst({
+        where: {
+          username: username,
+          customerId: { not: customerId },
+          isDeleted: false
+        }
+      });
+      if (duplicateUser) {
+        return res.status(400).json({ error: `Username '${username}' is already in use by another customer.` });
+      }
+
+      // Update or create connection user
+      const existingConnectionUser = customer.connectionUsers[0];
+      if (existingConnectionUser) {
+        await prisma.connectionUser.update({
+          where: { id: existingConnectionUser.id },
+          data: { username, password }
+        });
+      } else {
+        await prisma.connectionUser.create({
+          data: {
+            customerId,
+            username,
+            password,
+            branchId: customer.branchId,
+            ispId: req.ispId
+          }
+        });
+      }
+    } else {
+      // Fallback to existing connection user
+      const connectionUser = customer.connectionUsers[0];
+      if (!connectionUser) {
+        return res.status(400).json({ error: 'No active connection user found and no credentials provided.' });
+      }
+      finalUsername = connectionUser.username;
+      finalPassword = connectionUser.password;
     }
 
+    // If package is updated, update customer package field
+    if (subscribedPkgId && Number(subscribedPkgId) !== customer.subscribedPkgId) {
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: {
+          subscribedPkgId: finalSubscribedPkgId,
+          assignedPkg: finalSubscribedPkgId
+        }
+      });
+    }
+
+    // Get package plan details for radius group name
+    let radiusGroupName = '';
+    if (finalSubscribedPkgId) {
+      const packagePrice = await prisma.packagePrice.findFirst({
+        where: { id: finalSubscribedPkgId, ispId: req.ispId },
+        include: { packagePlanDetails: true }
+      });
+      radiusGroupName = packagePrice?.packagePlanDetails?.planCode ||
+                        packagePrice?.referenceId ||
+                        packagePrice?.packageName ||
+                        '';
+    }
+
+    // Get active subscription for expiry date
     const subscription = await prisma.customerSubscription.findFirst({
       where: { customerId, isActive: true },
       include: { packagePrice: { include: { packagePlanDetails: true } } }
@@ -3827,52 +3997,53 @@ async function reprovisionRadius(req, res, next) {
         }).replace(/,/g, '').replace(/ /g, ' ')
       : null;
 
-    const radiusGroupName =
-      subscription?.packagePrice?.packagePlanDetails?.planCode ||
-      subscription?.packagePrice?.referenceId ||
-      subscription?.packagePrice?.packageName ||
-      '';
-
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
 
-    // 1. Delete user first to clear out any stale credentials/attributes
-    try {
-      await client.deleteUser(connectionUser.username);
-    } catch (err) {
-      console.warn(`[RADIUS REPROVISION] Delete user failed (might not exist): ${err.message}`);
+    // Delete in Radius first (could use customer's old username if it changed)
+    const oldUsername = customer.connectionUsers[0]?.username;
+    if (oldUsername) {
+      try {
+        await client.deleteUser(oldUsername);
+      } catch (err) {
+        console.warn(`[RADIUS REPROVISION] Delete old user failed: ${err.message}`);
+      }
+    }
+    // Delete final username just in case
+    if (finalUsername !== oldUsername) {
+      try {
+        await client.deleteUser(finalUsername);
+      } catch (err) {
+        console.warn(`[RADIUS REPROVISION] Delete final user failed: ${err.message}`);
+      }
     }
 
-    // 2. Re-create user in Radius
+    // Create user in Radius
     const attributes = {};
     if (expiryDate) attributes.Expiration = expiryDate;
     const groups = radiusGroupName ? [radiusGroupName] : [];
 
     const result = await client.createUser(
-      connectionUser.username,
-      connectionUser.password,
+      finalUsername,
+      finalPassword,
       attributes,
       groups
     );
 
-    // 3. Try to disconnect existing session to force reconnect with new credentials
+    // Disconnect
     try {
-      await client.sendCoA(connectionUser.username, { action: 'disconnect' });
+      await client.sendCoA(finalUsername, { action: 'disconnect' });
     } catch (err) {
       console.warn(`[RADIUS REPROVISION] sendCoA disconnect failed: ${err.message}`);
     }
 
-    // 4. Update/Upsert customerSubscribedService table
+    // Upsert subscribed service status
     const getServiceIdByCode = async (code) => {
       const ispService = await prisma.iSPService.findFirst({
         where: {
           ispId: req.ispId,
           isActive: true,
           isDeleted: false,
-          service: {
-            code: code,
-            isActive: true,
-            isDeleted: false,
-          },
+          service: { code: code, isActive: true, isDeleted: false },
         },
         include: { service: true },
       });

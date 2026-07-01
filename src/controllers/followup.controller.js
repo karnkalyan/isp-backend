@@ -98,6 +98,8 @@ async function createFollowUp(req, res, next) {
             id: true,
             firstName: true,
             lastName: true,
+            phoneNumber: true,
+            secondaryContactNumber: true,
             status: true
           }
         }
@@ -550,6 +552,7 @@ async function getAllFollowUps(req, res, next) {
               firstName: true,
               lastName: true,
               phoneNumber: true,
+              secondaryContactNumber: true,
               email: true,
               status: true,
               assignedUserId: true,
@@ -664,6 +667,7 @@ async function getMyFollowUps(req, res, next) {
               firstName: true,
               lastName: true,
               phoneNumber: true,
+              secondaryContactNumber: true,
               email: true,
               status: true
             }
@@ -850,6 +854,7 @@ async function getUpcomingFollowUps(req, res, next) {
             firstName: true,
             lastName: true,
             phoneNumber: true,
+            secondaryContactNumber: true,
             email: true,
             status: true,
             assignedUser: {
