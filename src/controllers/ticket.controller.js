@@ -553,6 +553,14 @@ async function getTicketById(req, res, next) {
                 assignedTo: { select: { id: true, name: true, email: true } },
                 createdBy: { select: { id: true, name: true, email: true } },
                 branch: { select: { id: true, name: true } },
+                tasks: {
+                    include: {
+                        assignedTo: { select: { id: true, name: true, email: true } },
+                        customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true, phoneNumber: true, address: true } } } },
+                        activityLogs: { orderBy: { timestamp: 'desc' }, take: 5 },
+                    },
+                    orderBy: { createdAt: 'desc' },
+                },
             },
         });
 
