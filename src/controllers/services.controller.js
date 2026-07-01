@@ -3958,6 +3958,21 @@ class ServiceController {
     return configuredServices[0].service.code;
   }
 
+  async resolveBranchSmsProvider(req, requestedProvider) {
+    if (!req.branchId) return requestedProvider;
+    let branch = await this.prisma.branch.findFirst({ where: { id: Number(req.branchId), ispId: Number(req.ispId), isDeleted: false }, select: { id: true, parentId: true, smsEnabled: true, smsUseParentProvider: true, smsProviderCode: true } });
+    if (!branch) throw new Error('SMS branch policy was not found.');
+    if (!branch.smsEnabled) {
+      const error = new Error('SMS sending is disabled for this branch.');
+      error.status = 403;
+      throw error;
+    }
+    while (branch?.smsUseParentProvider && branch.parentId) {
+      branch = await this.prisma.branch.findFirst({ where: { id: Number(branch.parentId), ispId: Number(req.ispId), isDeleted: false }, select: { id: true, parentId: true, smsEnabled: true, smsUseParentProvider: true, smsProviderCode: true } });
+    }
+    return branch?.smsProviderCode || requestedProvider;
+  }
+
   async sendBulkSms(req, res) {
     try {
       const ispId = Number(req.ispId);
@@ -3968,7 +3983,8 @@ class ServiceController {
       }
 
       const recipientType = type === 'lead' ? 'lead' : 'customer';
-      const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
+      const branchProvider = await this.resolveBranchSmsProvider(req, provider);
+      const resolvedProvider = await this.resolveSmsProvider(ispId, branchProvider);
       const client = await ServiceFactory.getClient(resolvedProvider, ispId);
 
       const recipientPhones = (Array.isArray(to) ? to : [to]).map(p => normalizePhone(p)).filter(Boolean);
@@ -4290,7 +4306,8 @@ class ServiceController {
       }
 
       const recipientType = type === 'lead' ? 'lead' : 'customer';
-      const resolvedProvider = await this.resolveSmsProvider(ispId, provider);
+      const branchProvider = await this.resolveBranchSmsProvider(req, provider);
+      const resolvedProvider = await this.resolveSmsProvider(ispId, branchProvider);
       let recipients = selectAll
         ? await this.getSmsCampaignRecipients(ispId, recipientType, filters)
         : (Array.isArray(to) ? to : [to]).map((item) => {

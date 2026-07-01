@@ -68,6 +68,9 @@ async function createBranch(req, res, next) {
             invoicePrefix: req.body.invoicePrefix || null,
             infraShareDeviceRequired: req.body.infraShareDeviceRequired === true,
             receiptRequired: req.body.receiptRequired === true,
+            smsEnabled: req.body.smsEnabled !== false,
+            smsUseParentProvider: req.body.smsUseParentProvider !== false,
+            smsProviderCode: req.body.smsProviderCode || null,
         };
 
         if (!isGlobalAdmin) {
@@ -278,6 +281,9 @@ async function updateBranch(req, res, next) {
             invoiceEnd: req.body.invoiceEnd !== undefined ? (req.body.invoiceEnd ? Number(req.body.invoiceEnd) : null) : undefined,
             infraShareDeviceRequired: req.body.infraShareDeviceRequired !== undefined ? Boolean(req.body.infraShareDeviceRequired) : undefined,
             receiptRequired: req.body.receiptRequired !== undefined ? Boolean(req.body.receiptRequired) : undefined,
+            smsEnabled: req.body.smsEnabled !== undefined ? Boolean(req.body.smsEnabled) : undefined,
+            smsUseParentProvider: req.body.smsUseParentProvider !== undefined ? Boolean(req.body.smsUseParentProvider) : undefined,
+            smsProviderCode: req.body.smsProviderCode !== undefined ? (req.body.smsProviderCode || null) : undefined,
         };
 
         // Check if user is global admin

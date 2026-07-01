@@ -263,6 +263,11 @@ server.listen(PORT, '0.0.0.0', () => {
     YeastarService.initializeAllListeners(prisma).catch((error) => {
         console.error('[YEASTAR] Failed to auto-start listeners:', error.message);
     });
+
+    const { runCustomerLifecycle } = require('./services/customerLifecycle.service');
+    runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message));
+    const lifecycleTimer = setInterval(() => runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message)), 6 * 60 * 60 * 1000);
+    lifecycleTimer.unref();
 });
 
 // Graceful shutdown

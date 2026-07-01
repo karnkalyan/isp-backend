@@ -36,6 +36,9 @@ async function extendSubscription(req, res, next) {
         });
 
         if (!subscription) return res.status(404).json({ error: 'Active subscription not found' });
+        if (subscription.isTrial && !isAdmin) {
+            return res.status(403).json({ error: 'Only an administrator can extend a trial subscription.' });
+        }
 
         if (type === 'grace') {
             const now = new Date();

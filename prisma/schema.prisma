@@ -37,6 +37,9 @@ model Branch {
   invoicePrefix            String?
   infraShareDeviceRequired Boolean @default(false)
   receiptRequired          Boolean @default(false)
+  smsEnabled               Boolean @default(true)
+  smsUseParentProvider     Boolean @default(true)
+  smsProviderCode          String?
 
   // Foreign Keys
   ispId Int
@@ -2417,4 +2420,27 @@ model Vendor {
   drums          Drum[]
 
   @@map("vendors")
+}
+
+// Mail inbox/sent cache. This table is also accessed with raw SQL by
+// mail.controller.js, so it must remain represented in Prisma to prevent
+// `prisma db push` from treating the existing production table as unmanaged.
+model MailMessage {
+  id              Int      @id @default(autoincrement())
+  ispId           Int
+  userId          Int
+  folder          String   @db.VarChar(32)
+  imapUid         Int?
+  fromEmail       String?  @db.VarChar(255)
+  toEmails        String?  @db.Text
+  subject         String?  @db.VarChar(500)
+  body            String?  @db.LongText
+  messageId       String?  @db.VarChar(255)
+  attachmentsJson String?  @db.LongText
+  isRead          Boolean? @default(false)
+  createdAt       DateTime? @default(now())
+
+  @@index([ispId, userId, folder], map: "mail_messages_isp_user_folder_idx")
+  @@index([ispId, userId, folder, imapUid], map: "mail_messages_imap_uid_idx")
+  @@map("mail_messages")
 }

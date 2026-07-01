@@ -874,6 +874,22 @@ async function createCustomer(req, res, next) {
     const effectiveBranchId = branchId || lead.branchId;
     const effectiveSubBranchId = subBranchId || lead.subBranchId;
 
+    const requirementRows = await prisma.iSPSettings.findMany({
+      where: { ispId: req.ispId, key: { in: ['customerDocumentsRequired', 'customerDeviceRequired', 'fiberOnuRequired'] } }
+    });
+    const requirements = Object.fromEntries(requirementRows.map(row => [row.key, String(row.value).toLowerCase() === 'true']));
+    const uploadedFileCount = req.files ? Object.values(req.files).reduce((total, files) => total + (Array.isArray(files) ? files.length : 0), 0) : 0;
+    if (requirements.customerDocumentsRequired && uploadedFileCount === 0) {
+      return res.status(400).json({ success: false, error: 'Customer documents are required by system settings.' });
+    }
+    if (requirements.customerDeviceRequired && parsedDevices.length === 0) {
+      return res.status(400).json({ success: false, error: 'A customer device is required by system settings.' });
+    }
+    if (requirements.fiberOnuRequired && parsedServiceConnection.connectionType === 'fiber') {
+      const hasOnu = parsedDevices.some(device => ['ONU', 'ONT'].includes(String(device.deviceType || device.type || '').toUpperCase()) && String(device.serialNumber || device.ponSerial || '').trim());
+      if (!hasOnu) return res.status(400).json({ success: false, error: 'An ONU/ONT with a serial number is required for Fiber customers.' });
+    }
+
     if (parsedServiceConnection.connectionType === 'infra_share') {
       const devicePolicyBranchId = Number(effectiveSubBranchId || effectiveBranchId || 0);
       if (devicePolicyBranchId) {
