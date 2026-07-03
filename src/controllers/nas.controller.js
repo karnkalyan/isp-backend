@@ -24,6 +24,9 @@ async function createNas(req, res, next) {
             branchId: req.body.branchId ? Number(req.body.branchId) : (req.selectedBranchId || null)
         };
 
+        if (data.isDefault) {
+            await req.prisma.nas.updateMany({ where: { ispId: req.ispId, isDeleted: false }, data: { isDefault: false } });
+        }
         const nas = await req.prisma.nas.create({ data });
 
         try {
@@ -73,7 +76,7 @@ async function listNas(req, res, next) {
                 isDeleted: false,
                 ...branchFilter
             },
-            orderBy: { createdAt: "desc" }
+            orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }]
         });
 
         res.json(list);
@@ -143,8 +146,13 @@ async function updateNas(req, res, next) {
             server: req.body.server,
             community: req.body.community,
             description: req.body.description,
-            isActive: req.body.isActive
+            isActive: req.body.isActive,
+            isDefault: req.body.isDefault
         };
+
+        if (req.body.isDefault === true) {
+            await req.prisma.nas.updateMany({ where: { ispId: req.ispId, isDeleted: false, id: { not: id } }, data: { isDefault: false } });
+        }
 
         const updated = await req.prisma.nas.update({
             where: { id },

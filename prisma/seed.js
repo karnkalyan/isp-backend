@@ -7,6 +7,18 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Start seeding specific data...');
 
+  // Production-safe catalog upserts: never delete ISP configuration or credentials.
+  for (const service of [
+    { name: 'TShul Billing', code: 'TSHUL', description: 'TShul accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/tshul.svg' },
+    { name: 'Nepurix Accounting', code: 'NEPURIX', description: 'Nepurix accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/nepurix.svg' }
+  ]) {
+    await prisma.service.upsert({
+      where: { code: service.code },
+      update: { ...service, isActive: true, isDeleted: false },
+      create: service
+    });
+  }
+
   // --- 1. Define all unique Granular Permissions as objects { name, menuName } ---
   const allPermissions = [
     // Dashboard

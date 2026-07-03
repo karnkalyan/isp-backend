@@ -338,8 +338,13 @@ class ServiceFactory {
         const clients = [];
 
         if (activeServices.length > 0) {
-            // Instantiate all active ones
-            for (const service of activeServices) {
+            // Accounting providers are mutually exclusive. Prefer the configured
+            // default and use the first active provider only as a legacy fallback.
+            const selectedService = activeServices.find(s => {
+                const config = s.config && typeof s.config === 'object' ? s.config : {};
+                return config.isDefault === true;
+            }) || activeServices[0];
+            for (const service of [selectedService]) {
                 try {
                     const client = await this.getClient(service.service.code, ispId, prismaClient);
                     clients.push({ code: service.service.code, client });
@@ -374,8 +379,10 @@ class ServiceFactory {
      */
     static validateServiceConfig(serviceCode, config) {
         const errors = [];
+        const integrationMode = String(config?.config?.integrationMode || config?.integrationMode || '').toUpperCase();
+        const isEsewaTokenBased = serviceCode === SERVICE_CODES.ESEWA && integrationMode === 'TOKEN_BASED';
 
-        if (!config.baseUrl) {
+        if (!config.baseUrl && !isEsewaTokenBased) {
             errors.push('baseUrl is required');
         }
 

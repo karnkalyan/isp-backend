@@ -7,6 +7,7 @@
     "dev": "nodemon src/index.js",
     "seed": "node prisma/seed.js",
     "servicesSeed": "node src/utils/script/setupDefaultServices.js",
+    "services:update-accounting": "node prisma/updateServiceCatalog.js",
     "dockerStartup": "node src/utils/script/dockerStartup.js",
     "fullSeed": "node prisma/defaultFullSeed.js",
     "defaultFullSeed": "node prisma/defaultFullSeed.js",

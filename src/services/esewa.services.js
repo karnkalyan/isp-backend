@@ -43,9 +43,14 @@ class EsewaClient {
             }
         });
 
-        if (!esewaService || !esewaService.baseUrl) {
+        if (!esewaService) {
             throw new Error(`eSewa service is not configured or enabled for ISP ID: ${ispId}`);
         }
+
+        const serviceConfig = esewaService.config && typeof esewaService.config === 'object'
+            ? esewaService.config
+            : {};
+        const integrationMode = String(serviceConfig.integrationMode || 'TOKEN_BASED').toUpperCase();
 
         const credentials = {};
         esewaService.credentials.forEach(cred => {
@@ -56,7 +61,7 @@ class EsewaClient {
         const clientSecret = credentials.client_secret;
         const merchantCode = credentials.merchant_code;
 
-        if (!clientId || !clientSecret || !merchantCode) {
+        if (integrationMode !== 'TOKEN_BASED' && (!clientId || !clientSecret || !merchantCode)) {
             throw new Error(`Missing credentials for eSewa service. Required: client_id, client_secret, merchant_code`);
         }
 
@@ -66,8 +71,9 @@ class EsewaClient {
             clientSecret: clientSecret,
             merchantCode: merchantCode,
             apiVersion: esewaService.apiVersion || 'v1',
-            config: esewaService.config || {},
-            environment: esewaService.baseUrl.includes('uat') ? 'uat' : 'production'
+            config: serviceConfig,
+            integrationMode,
+            environment: (esewaService.baseUrl || '').includes('uat') ? 'uat' : (serviceConfig.environment || 'production')
         });
     }
 
@@ -96,6 +102,8 @@ class EsewaClient {
                 };
             }
 
+            const config = service.config && typeof service.config === 'object' ? service.config : {};
+            const integrationMode = String(config.integrationMode || 'TOKEN_BASED').toUpperCase();
             const hasCredentials = service.credentials.length > 0;
             const hasValidCredentials = service.credentials.some(c =>
                 c.key === 'client_id' && c.value
@@ -107,13 +115,14 @@ class EsewaClient {
 
             return {
                 enabled: service.isActive && service.isEnabled,
-                configured: !!service.baseUrl && hasValidCredentials,
+                configured: integrationMode === 'TOKEN_BASED' ? true : (!!service.baseUrl && hasValidCredentials),
                 isActive: service.isActive,
                 isEnabled: service.isEnabled,
                 baseUrl: service.baseUrl,
                 hasCredentials,
                 hasValidCredentials,
-                environment: service.baseUrl.includes('uat') ? 'UAT' : 'Production',
+                integrationMode,
+                environment: (service.baseUrl || '').includes('uat') ? 'UAT' : (config.environment || 'Production'),
                 serviceName: service.service.name,
                 lastUpdated: service.updatedAt
             };
@@ -130,6 +139,14 @@ class EsewaClient {
     // Test connection
     async testConnection() {
         try {
+            if (this.#config.integrationMode === 'TOKEN_BASED') {
+                return {
+                    connected: true,
+                    message: 'Token-based eSewa routes are ready for inbound requests',
+                    integrationMode: 'TOKEN_BASED',
+                    timestamp: new Date().toISOString()
+                };
+            }
             // Try to make a test API call
             const response = await this.#api.get('/epay/transactions', {
                 headers: {
@@ -156,6 +173,7 @@ class EsewaClient {
     // Process payment
     async processPayment(paymentData) {
         try {
+            this.#requireOutboundCredentials();
             const { amount, transactionId, productName, successUrl, failureUrl } = paymentData;
 
             if (!amount || !transactionId || !productName) {
@@ -202,6 +220,7 @@ class EsewaClient {
     // Verify payment
     async verifyPayment(transactionId) {
         try {
+            this.#requireOutboundCredentials();
             const response = await this.#api.get(`/epay/transactions/${transactionId}`, {
                 headers: {
                     'Authorization': `Bearer ${this.#config.clientId}:${this.#config.clientSecret}`
@@ -237,6 +256,12 @@ class EsewaClient {
         return crypto.createHmac('sha256', this.#config.clientSecret)
             .update(message)
             .digest('base64');
+    }
+
+    #requireOutboundCredentials() {
+        if (!this.#config.clientId || !this.#config.clientSecret || !this.#config.merchantCode) {
+            throw new Error('Outbound eSewa web/mobile checkout requires client_id, client_secret, and merchant_code');
+        }
     }
 
     // Get transaction status

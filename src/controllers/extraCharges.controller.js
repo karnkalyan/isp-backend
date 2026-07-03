@@ -59,6 +59,7 @@ async function createOneTimeCharge(req, res, next) {
       isTaxable,
       isTscApplicable,
       forPackageCreation,
+      isRenewal,
       applicablePackageIds = []
     } = req.body;
 
@@ -85,6 +86,7 @@ async function createOneTimeCharge(req, res, next) {
         description,
         amount: amount !== undefined && amount !== null && amount !== '' ? parseFloat(amount) : null,
         forPackageCreation: Boolean(forPackageCreation),
+        isRenewal: Boolean(isRenewal),
         code: cleanCode,
         isTaxable: Boolean(isTaxable),
         isTscApplicable: Boolean(isTscApplicable),
@@ -122,7 +124,10 @@ async function createOneTimeCharge(req, res, next) {
       const billingClients = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
       for (const { code, client } of billingClients) {
         try {
-          const itemResponse = await client.item.create(itemPayload);
+          const providerPayload = code === SERVICE_CODES.NEPURIX
+            ? { ...itemPayload, IsTSCApplied: record.isTscApplicable }
+            : itemPayload;
+          const itemResponse = await client.item.create(providerPayload);
           syncResponses[code] = itemResponse;
         } catch (syncErr) {
           console.warn(`[WARNING] ${code} sync failed or skipped:`, syncErr.message);
@@ -175,7 +180,7 @@ async function updateOneTimeCharge(req, res, next) {
       select: { referenceId: true }
     });
 
-    const { name, description, amount, ispId, isTaxable, isTscApplicable, forPackageCreation, applicablePackageIds = [] } = req.body;
+    const { name, description, amount, ispId, isTaxable, isTscApplicable, forPackageCreation, isRenewal, applicablePackageIds = [] } = req.body;
     const updated = await req.prisma.OneTimeCharge.update({
       where: { id },
       data: {
@@ -185,6 +190,7 @@ async function updateOneTimeCharge(req, res, next) {
         isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
         amount: amount !== undefined ? (amount !== null && amount !== '' ? parseFloat(amount) : null) : undefined,
         forPackageCreation: forPackageCreation !== undefined ? Boolean(forPackageCreation) : undefined,
+        isRenewal: isRenewal !== undefined ? Boolean(isRenewal) : undefined,
         ispId: ispId !== undefined ? Number(ispId) : undefined,
         updatedAt: new Date()
       }
@@ -217,7 +223,10 @@ async function updateOneTimeCharge(req, res, next) {
       const billingClients = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
       for (const { code, client } of billingClients) {
         try {
-          const itemResponse = await client.item.update(getReferenceId.referenceId, itemPayload);
+          const providerPayload = code === SERVICE_CODES.NEPURIX
+            ? { ...itemPayload, IsTSCApplied: updated.isTscApplicable }
+            : itemPayload;
+          const itemResponse = await client.item.update(getReferenceId.referenceId, providerPayload);
           console.log(`[SUCCESS] Item Updated in ${code}:`, itemResponse);
         } catch (syncErr) {
           console.warn(`[WARNING] ${code} sync failed or skipped:`, syncErr.message);
@@ -306,6 +315,7 @@ async function syncOneTimeCharges(req, res, next) {
             description: item.Description || existing.description,
             amount: item.SalesRate !== undefined ? parseFloat(item.SalesRate) : existing.amount,
             isTaxable: item.IsTaxable !== undefined ? Boolean(item.IsTaxable) : existing.isTaxable,
+            isTscApplicable: item.IsTSCApplied !== undefined ? Boolean(item.IsTSCApplied) : existing.isTscApplicable,
             updatedAt: new Date()
           }
         });
@@ -319,6 +329,7 @@ async function syncOneTimeCharges(req, res, next) {
             description: item.Description || '',
             amount: item.SalesRate !== undefined ? parseFloat(item.SalesRate) : 0,
             isTaxable: item.IsTaxable !== undefined ? Boolean(item.IsTaxable) : true,
+            isTscApplicable: item.IsTSCApplied !== undefined ? Boolean(item.IsTSCApplied) : false,
             ispId,
             isActive: true,
             isDeleted: false,

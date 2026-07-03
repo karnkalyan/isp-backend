@@ -1,5 +1,7 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
+const crypto = require('crypto');
+const axios = require('axios');
 
 /**
  * Compute expiry date from a base date + duration string.
@@ -581,7 +583,11 @@ const getCustomerContext = async (req, requestId) => {
     orConditions.push({ id: parsedId });
   }
   orConditions.push({ customerUniqueId: String(requestId) });
-  orConditions.push({ phoneNumber: String(requestId) });
+  orConditions.push({ lead: { phoneNumber: String(requestId) } });
+  orConditions.push({ lead: { secondaryContactNumber: String(requestId) } });
+  orConditions.push({ lead: { email: String(requestId) } });
+  orConditions.push({ portalUser: { email: String(requestId) } });
+  orConditions.push({ connectionUsers: { some: { username: String(requestId), isDeleted: false } } });
 
   // 3. Fetch Customer
   const customer = await req.prisma.customer.findFirst({
@@ -602,7 +608,7 @@ const getCustomerContext = async (req, requestId) => {
           referenceId: true,
           oneTimeCharges: {
             where: { isDeleted: false },
-            select: { id: true, name: true, amount: true, referenceId: true }
+            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
           }
         }
       }
@@ -637,9 +643,9 @@ const getCustomerContext = async (req, requestId) => {
     packagePrice = 0;
   }
 
-  let otcItems = isRechargeable
-    ? []
-    : (pkg.oneTimeCharges || []).map(o => ({
+  let otcItems = (pkg.oneTimeCharges || [])
+    .filter(o => !isRechargeable || o.isRenewal)
+    .map(o => ({
       id: o.id,
       name: o.name || "addon",
       referenceId: o.referenceId || null,
@@ -650,13 +656,15 @@ const getCustomerContext = async (req, requestId) => {
   }
 
   const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
-  const totalAmount = packagePrice + otcTotal;
+  // The configured initial/renewal totals already include tax and applicable
+  // invoice items. Never add the item breakdown a second time.
+  const totalAmount = packagePrice;
 
   const aggregatedItems = [
     {
       type: "package",
       name: pkg.packageName || "Base Package",
-      amount: packagePrice,
+      amount: Math.max(0, packagePrice - otcTotal),
     },
     ...otcItems.map(it => ({
       type: "oneTime",
@@ -738,6 +746,15 @@ const processPayment = async (req, res, next) => {
       customer, pkg, totalAmount, aggregatedItems,
       fullName, otcItems, packagePrice
     } = context;
+
+    if (req.body.amount !== undefined && Number(req.body.amount) !== Number(totalAmount)) {
+      return res.status(400).json({
+        request_id: String(requestId),
+        response_code: 1,
+        response_message: "AMOUNT_MISMATCH",
+        amount: totalAmount
+      });
+    }
 
     // 2. Find Active Subscription
     const subscription = await req.prisma.customerSubscription.findFirst({
@@ -1033,7 +1050,7 @@ const confirmPayment = async (req, res) => {
       : Number(pkg.price || 0);
     const packagePrice = isRechargeable ? renewalAmount : newPackageAmount;
 
-    const otcItems = isRechargeable ? [] : pkg.oneTimeCharges.map(o => ({
+    const otcItems = pkg.oneTimeCharges.filter(o => !isRechargeable || o.isRenewal).map(o => ({
       id: o.id, name: o.name, referenceId: o.referenceId, amount: Number(o.amount || 0)
     }));
 
@@ -1156,4 +1173,143 @@ const checkStatus = async (req, res) => {
   });
 };
 
-module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry };
+const getEpayConfig = async (prisma, ispId) => {
+  const service = await prisma.iSPService.findFirst({
+    where: { ispId, service: { code: SERVICE_CODES.ESEWA }, isActive: true, isEnabled: true, isDeleted: false },
+    include: { credentials: { where: { isActive: true, isDeleted: false } } }
+  });
+  if (!service) throw new Error('eSewa service is not enabled');
+  const credentials = Object.fromEntries(service.credentials.map(item => [item.key, item.value]));
+  const config = service.config && typeof service.config === 'object' ? service.config : {};
+  if (config.epayEnabled === false) throw new Error('eSewa ePay v2 is disabled');
+  const production = String(config.environment || '').toLowerCase() === 'production';
+  return {
+    productCode: credentials.merchant_code || config.productCode || 'EPAYTEST',
+    secretKey: credentials.epay_secret_key || config.epaySecretKey || (production ? '' : '8gBm/:&EnhH.1/q'),
+    formUrl: production
+      ? 'https://epay.esewa.com.np/api/epay/main/v2/form'
+      : 'https://rc-epay.esewa.com.np/api/epay/main/v2/form',
+    statusUrl: production
+      ? 'https://esewa.com.np/api/epay/transaction/status/'
+      : 'https://rc.esewa.com.np/api/epay/transaction/status/'
+  };
+};
+
+const signEpayFields = (payload, signedFieldNames, secretKey) => {
+  const message = signedFieldNames.split(',').map(field => `${field}=${payload[field]}`).join(',');
+  return crypto.createHmac('sha256', secretKey).update(message).digest('base64');
+};
+
+const initiateEpayRenewal = async (req, res, next) => {
+  try {
+    const customerId = Number(req.user?.customerId);
+    if (!customerId) return res.status(403).json({ error: 'This login is not linked to a customer' });
+
+    const customer = await req.prisma.customer.findFirst({
+      where: { id: customerId, ispId: req.ispId, isDeleted: false },
+      include: {
+        subscribedPkg: { include: { oneTimeCharges: { where: { isDeleted: false, isRenewal: true } } } },
+        customerSubscriptions: { where: { isActive: true }, orderBy: { createdAt: 'desc' }, take: 1 }
+      }
+    });
+    if (!customer?.subscribedPkg || !customer.customerSubscriptions[0]) {
+      return res.status(400).json({ error: 'Customer has no active renewable package' });
+    }
+
+    const pkg = customer.subscribedPkg;
+    const amount = customer.isFree ? 0 : Number(pkg.renewAmountWithTax ?? pkg.price ?? 0);
+    if (amount <= 0) return res.status(400).json({ error: 'Renewal amount must be greater than zero' });
+    const epay = await getEpayConfig(req.prisma, req.ispId);
+    if (!epay.secretKey) return res.status(400).json({ error: 'Configure the eSewa ePay secret key for production' });
+
+    const transactionUuid = `ISP-${customer.id}-${Date.now()}`;
+    const requestedReturnUrl = String(req.body?.returnUrl || '').trim();
+    const allowedOrigin = String(process.env.FRONTEND_URL || req.headers.origin || 'http://localhost:3000').replace(/\/$/, '');
+    const returnUrl = requestedReturnUrl.startsWith(`${allowedOrigin}/`)
+      ? requestedReturnUrl.replace(/[?#].*$/, '')
+      : `${allowedOrigin}/customer/billing`;
+    const signedFieldNames = 'total_amount,transaction_uuid,product_code';
+    const fields = {
+      amount: amount.toFixed(2), tax_amount: '0', total_amount: amount.toFixed(2),
+      transaction_uuid: transactionUuid, product_code: epay.productCode,
+      product_service_charge: '0', product_delivery_charge: '0',
+      success_url: returnUrl, failure_url: `${returnUrl}?esewa=failure`,
+      signed_field_names: signedFieldNames
+    };
+    fields.signature = signEpayFields(fields, signedFieldNames, epay.secretKey);
+
+    await req.prisma.eSewaTokenPayment.create({
+      data: {
+        ispId: req.ispId, customerId: customer.id,
+        customerUniqueId: customer.customerUniqueId || `CUST-${customer.id}`,
+        requestId: transactionUuid, amount, status: 'PENDING',
+        packageDetails: { packageId: pkg.id, packageName: pkg.packageName, source: 'EPAY_V2' }
+      }
+    });
+    res.json({ success: true, formUrl: epay.formUrl, fields, testCredentials: { ids: ['9711111111', '9711111112', '9711111113', '9711111114'], password: 'Nepal@123', token: '123456' } });
+  } catch (error) { next(error); }
+};
+
+const completeEpayRenewal = async (req, res, next) => {
+  try {
+    const customerId = Number(req.user?.customerId);
+    if (!customerId) return res.status(403).json({ error: 'This login is not linked to a customer' });
+    const encoded = String(req.body?.data || '').replace(/ /g, '+');
+    if (!encoded) return res.status(400).json({ error: 'eSewa response data is required' });
+    let response;
+    try { response = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')); }
+    catch { return res.status(400).json({ error: 'Invalid eSewa response data' }); }
+
+    const payment = await req.prisma.eSewaTokenPayment.findFirst({
+      where: { requestId: response.transaction_uuid, customerId, ispId: req.ispId },
+      include: { customer: { include: { subscribedPkg: { include: { oneTimeCharges: { where: { isDeleted: false, isRenewal: true } } } } } } }
+    });
+    if (!payment) return res.status(404).json({ error: 'Payment request not found' });
+    if (payment.status === 'COMPLETED') return res.json({ success: true, alreadyCompleted: true, referenceCode: payment.referenceCode });
+
+    const epay = await getEpayConfig(req.prisma, req.ispId);
+    const expectedSignature = signEpayFields(response, response.signed_field_names, epay.secretKey);
+    const signatureValid = expectedSignature.length === String(response.signature || '').length && crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(String(response.signature || '')));
+    if (!signatureValid) return res.status(400).json({ error: 'Invalid eSewa response signature' });
+
+    const statusResponse = await axios.get(epay.statusUrl, { params: { product_code: epay.productCode, total_amount: payment.amount, transaction_uuid: payment.requestId }, timeout: 15000 });
+    if (statusResponse.data?.status !== 'COMPLETE' || Number(statusResponse.data?.total_amount) !== Number(payment.amount)) {
+      return res.status(409).json({ error: `Payment is not complete (${statusResponse.data?.status || 'UNKNOWN'})` });
+    }
+
+    const pkg = payment.customer.subscribedPkg;
+    const subscription = await req.prisma.customerSubscription.findFirst({ where: { customerId, isActive: true }, orderBy: { createdAt: 'desc' } });
+    if (!pkg || !subscription) return res.status(400).json({ error: 'Active subscription or package not found' });
+    let planStart = subscription.planEnd && new Date(subscription.planEnd) > new Date() ? new Date(subscription.planEnd) : new Date();
+    const planEnd = computeExpiryFromBase(planStart, pkg.packageDuration);
+    const renewalItems = pkg.oneTimeCharges.map(item => ({ itemName: item.name || 'Renewal Item', referenceId: item.referenceId, itemPrice: Number(item.amount || 0) }));
+    const itemTotal = renewalItems.reduce((sum, item) => sum + item.itemPrice, 0);
+
+    const order = await req.prisma.$transaction(async tx => {
+      await tx.customerSubscription.update({ where: { id: subscription.id }, data: { isActive: false } });
+      const newSubscription = await tx.customerSubscription.create({ data: { customerId, package: pkg.id, planStart, planEnd, isTrial: false, isActive: true, isInvoicing: true, extensionCount: 0, graceDaysBalance: 0, compensationDays: 0 } });
+      const createdOrder = await tx.customerOrderManagement.create({
+        data: {
+          customerId, subscriptionId: newSubscription.id, package: pkg.id,
+          orderDate: new Date(), packageStart: planStart, packageEnd: planEnd,
+          totalAmount: payment.amount, isPaid: true, isActive: true,
+          paymentId: 'ESEWA_EPAY_V2',
+          items: { create: [{ itemName: pkg.packageName || 'Package Renewal', referenceId: pkg.referenceId, itemPrice: Math.max(0, payment.amount - itemTotal) }, ...renewalItems] }
+        }
+      });
+      await tx.customer.update({ where: { id: customerId }, data: { isRechargeable: true, status: 'active', onboardStatus: 'fully_onboarded' } });
+      await tx.eSewaTokenPayment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', paidAt: new Date(), eSewaTransactionCode: response.transaction_code, referenceCode: statusResponse.data.ref_id || response.transaction_code, orderId: String(createdOrder.id) } });
+      return createdOrder;
+    });
+    try {
+      const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+      const users = await req.prisma.connectionUser.findMany({ where: { customerId, isDeleted: false, isActive: true }, select: { username: true } });
+      for (const user of users) await radius.updateExpiration(user.username, planEnd);
+    } catch (radiusError) {
+      console.warn('[eSewa ePay] Renewal completed but RADIUS expiration sync failed:', radiusError.message);
+    }
+    res.json({ success: true, orderId: order.id, referenceCode: statusResponse.data.ref_id || response.transaction_code, planEnd });
+  } catch (error) { next(error); }
+};
+
+module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry, initiateEpayRenewal, completeEpayRenewal };

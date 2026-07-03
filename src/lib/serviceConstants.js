@@ -58,10 +58,10 @@ module.exports = {
             { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
         ],
         ESEWA: [
-            { credentialType: 'api_key', key: 'client_id', label: 'Client ID', required: true },
-            { credentialType: 'api_key', key: 'client_secret', label: 'Client Secret', isEncrypted: true, required: true },
-            { credentialType: 'api_key', key: 'merchant_code', label: 'Merchant Code', required: true },
-            { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
+            { credentialType: 'api_key', key: 'client_id', label: 'Client ID (Web/Mobile only)', required: false },
+            { credentialType: 'api_key', key: 'client_secret', label: 'Client Secret (Web/Mobile only)', isEncrypted: true, required: false },
+            { credentialType: 'api_key', key: 'merchant_code', label: 'Merchant Code (Web/Mobile only)', required: false },
+            { credentialType: 'api_key', key: 'base_url', label: 'Base URL (Web/Mobile only)', required: false }
         ],
         KHALTI: [
             { credentialType: 'api_key', key: 'public_key', label: 'Public Key', required: true },
@@ -178,8 +178,9 @@ module.exports = {
         },
         ESEWA: {
             defaultApiVersion: 'v1',
-            requiresBaseUrl: true,
-            testEndpoint: '/epay/transactions'
+            requiresBaseUrl: false,
+            integrationMode: 'TOKEN_BASED',
+            testEndpoint: '/api/esewa/inquiry/:request_id'
         },
         KHALTI: {
             defaultApiVersion: 'v2',

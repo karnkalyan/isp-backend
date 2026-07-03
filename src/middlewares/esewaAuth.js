@@ -24,12 +24,22 @@ const esewaAuth = async (req, res, next) => {
       });
     }
 
-    // Determine ISP ID
-    const host = req.get('host') || '';
-    let ispId = 1; // Default
-    
-    if (host.includes('namaste')) ispId = 1;
-    else if (host.includes('kisan')) ispId = 2;
+    // Bearer tokens carry the owning eSewa configuration/ISP id. This keeps
+    // multi-tenant requests independent from hostnames and hardcoded ISP ids.
+    let token = null;
+    let decodedWithoutVerify = null;
+    if (authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+      decodedWithoutVerify = jwt.decode(token);
+      if (!decodedWithoutVerify?.esewaConfigId) {
+        return res.status(401).json({ response_code: 1, response_message: 'Invalid token format' });
+      }
+    }
+    const headerIspId = Number(req.headers['x-isp-id']);
+    const ispId = Number(decodedWithoutVerify?.esewaConfigId || headerIspId);
+    if (!ispId) {
+      return res.status(401).json({ response_code: 1, response_message: 'Unable to resolve eSewa ISP configuration' });
+    }
     
     console.log(`ISP ID: ${ispId}`);
 
@@ -51,11 +61,9 @@ const esewaAuth = async (req, res, next) => {
     const authMethod = esewaConfig.authMethod || 'BEARER';
 
     if (authMethod === 'BEARER' && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7).trim();
       console.log(`Token length: ${token.length} chars`);
       
       // 1. First, try to decode without verification
-      const decodedWithoutVerify = jwt.decode(token);
       if (!decodedWithoutVerify) {
         console.log('❌ Token is not a valid JWT format');
         return res.status(401).json({
@@ -69,7 +77,7 @@ const esewaAuth = async (req, res, next) => {
       
       // 2. Check if token exists in database FIRST
       const tokenRecord = await prisma.eSewaAccessToken.findFirst({
-        where: { token: token }
+        where: { token: token, esewaConfigId: ispId, isRevoked: false }
       });
       
       if (!tokenRecord) {

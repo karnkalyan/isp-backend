@@ -312,7 +312,8 @@ class ServiceController {
   async configureServiceForISP(req, res) {
     try {
       const ispId = req.ispId;
-      const { serviceCode, baseUrl, apiVersion, config, isActive } = req.body;
+      const { serviceCode, apiVersion, isActive } = req.body;
+      let { baseUrl, config } = req.body;
 
       if (!ispId) {
         return res.status(400).json({ success: false, error: 'ISP ID not found in request.' });
@@ -4048,6 +4049,25 @@ class ServiceController {
             }
           }
         });
+      }
+
+      if (serviceCode === SERVICE_CODES.ESEWA) {
+        const suppliedConfig = config && typeof config === 'object' ? config : {};
+        const isProduction = String(suppliedConfig.environment || '').toLowerCase() === 'production';
+        baseUrl = baseUrl || (isProduction ? 'https://epay.esewa.com.np' : 'https://rc-epay.esewa.com.np');
+        const demoConfig = isProduction ? {} : {
+          productCode: 'EPAYTEST',
+          epaySecretKey: '8gBm/:&EnhH.1/q'
+        };
+        config = {
+          integrationMode: 'TOKEN_BASED',
+          environment: isProduction ? 'production' : 'uat',
+          tokenEnabled: true,
+          epayEnabled: true,
+          timeout: 30000,
+          ...demoConfig,
+          ...suppliedConfig
+        };
       }
 
       if (status === 'failed') {

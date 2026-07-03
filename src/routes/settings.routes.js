@@ -11,6 +11,9 @@ module.exports = (prisma) => {
     router.get('/radius-pools', auth, checkPermission('settings_read'), settingsController.listRadiusPools);
     router.post('/radius-pools', auth, checkPermission('settings_update'), settingsController.upsertRadiusPool);
     router.delete('/radius-pools/:value', auth, checkPermission('settings_update'), settingsController.deleteRadiusPool);
+    router.post('/esewa/base64', auth, checkPermission('settings_update'), settingsController.generateEsewaBase64);
+    router.get('/esewa/config', auth, checkPermission('settings_read'), settingsController.getEsewaConfiguration);
+    router.put('/esewa/config', auth, checkPermission('settings_update'), settingsController.saveEsewaConfiguration);
     router.post('/', auth, checkPermission('settings_update'), settingsController.updateSetting);
     router.post('/batch', auth, checkPermission('settings_update'), settingsController.batchUpdateSettings);
 

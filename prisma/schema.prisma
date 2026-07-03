@@ -380,6 +380,7 @@ model OneTimeCharge {
   description        String?
   amount             Float?
   forPackageCreation Boolean        @default(false)
+  isRenewal          Boolean        @default(false)
   ispId              Int?
   isActive           Boolean        @default(true)
   isDeleted          Boolean        @default(false)
@@ -1132,27 +1133,27 @@ model CustomerSubscription {
 }
 
 model CustomerOrderManagement {
-  id             Int                  @id @default(autoincrement())
-  customerId     Int
-  customer       Customer             @relation(fields: [customerId], references: [id], map: "customer_order_customer_fkey")
-  subscriptionId Int
-  subscription   CustomerSubscription @relation(fields: [subscriptionId], references: [id], map: "customer_order_subscription_fkey")
-  package        Int?
-  packagePrice   PackagePrice?        @relation("PackageOrders", fields: [package], references: [id], map: "customer_order_package_fkey")
-  orderDate      DateTime             @default(now())
-  packageStart   DateTime
-  packageEnd     DateTime
-  totalAmount    Float
-  items          OrderDetail[]
-  isPaid         Boolean              @default(false)
-  isActive       Boolean              @default(true)
-  isDeleted      Boolean              @default(false)
-  invoiceId      String?
-  paymentId      String?
-  fiscalYearId   Int?
+  id              Int                  @id @default(autoincrement())
+  customerId      Int
+  customer        Customer             @relation(fields: [customerId], references: [id], map: "customer_order_customer_fkey")
+  subscriptionId  Int
+  subscription    CustomerSubscription @relation(fields: [subscriptionId], references: [id], map: "customer_order_subscription_fkey")
+  package         Int?
+  packagePrice    PackagePrice?        @relation("PackageOrders", fields: [package], references: [id], map: "customer_order_package_fkey")
+  orderDate       DateTime             @default(now())
+  packageStart    DateTime
+  packageEnd      DateTime
+  totalAmount     Float
+  items           OrderDetail[]
+  isPaid          Boolean              @default(false)
+  isActive        Boolean              @default(true)
+  isDeleted       Boolean              @default(false)
+  invoiceId       String?
+  paymentId       String?
+  fiscalYearId    Int?
   paymentMethodId Int?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 }
 
 model OrderDetail {
@@ -1572,15 +1573,15 @@ model RolePermission {
 }
 
 model BranchInvoiceRange {
-  id         Int      @id @default(autoincrement())
-  branchId   Int
-  rangeStart Int
-  rangeEnd   Int
-  current    Int
+  id           Int      @id @default(autoincrement())
+  branchId     Int
+  rangeStart   Int
+  rangeEnd     Int
+  current      Int
   fiscalYearId Int?
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
 
   @@index([branchId])
   @@map("branch_invoice_ranges")
@@ -1899,32 +1900,32 @@ model TicketComment {
 }
 
 model Ticket {
-  id           Int             @id @default(autoincrement())
-  ticketNumber String          @unique
-  title        String
-  description  String?         @db.Text
-  status       Ticket_status   @default(OPEN)
-  priority     Ticket_priority @default(MEDIUM)
-  category     String?
-  customerId   Int?
-  assignedToId Int?
-  createdById  Int?
-  ispId        Int
-  branchId     Int?
-  resolution   String?         @db.Text
-  resolvedAt   DateTime?
-  isDeleted    Boolean         @default(false)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime
-  leadId       Int?
-  ticketTypeId Int?
-  departmentId Int?
-  contactName  String?
-  contactPhone String?
-  contactEmail String?
-  responseDueAt DateTime?
-  resolutionDueAt DateTime?
-  closeDueAt DateTime?
+  id               Int             @id @default(autoincrement())
+  ticketNumber     String          @unique
+  title            String
+  description      String?         @db.Text
+  status           Ticket_status   @default(OPEN)
+  priority         Ticket_priority @default(MEDIUM)
+  category         String?
+  customerId       Int?
+  assignedToId     Int?
+  createdById      Int?
+  ispId            Int
+  branchId         Int?
+  resolution       String?         @db.Text
+  resolvedAt       DateTime?
+  isDeleted        Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime
+  leadId           Int?
+  ticketTypeId     Int?
+  departmentId     Int?
+  contactName      String?
+  contactPhone     String?
+  contactEmail     String?
+  responseDueAt    DateTime?
+  resolutionDueAt  DateTime?
+  closeDueAt       DateTime?
   firstRespondedAt DateTime?
 
   customer   Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -1949,15 +1950,15 @@ model Ticket {
 }
 
 model TicketType {
-  id           Int      @id @default(autoincrement())
+  id           Int               @id @default(autoincrement())
   ispId        Int
   name         String
   code         String
   description  String?
   departmentId Int?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
   slaPolicies  TicketSlaPolicy[]
 
   @@unique([ispId, code])
@@ -2432,18 +2433,18 @@ model Vendor {
 // mail.controller.js, so it must remain represented in Prisma to prevent
 // `prisma db push` from treating the existing production table as unmanaged.
 model MailMessage {
-  id              Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   ispId           Int
   userId          Int
-  folder          String   @db.VarChar(32)
+  folder          String    @db.VarChar(32)
   imapUid         Int?
-  fromEmail       String?  @db.VarChar(255)
-  toEmails        String?  @db.Text
-  subject         String?  @db.VarChar(500)
-  body            String?  @db.LongText
-  messageId       String?  @db.VarChar(255)
-  attachmentsJson String?  @db.LongText
-  isRead          Boolean? @default(false)
+  fromEmail       String?   @db.VarChar(255)
+  toEmails        String?   @db.Text
+  subject         String?   @db.VarChar(500)
+  body            String?   @db.LongText
+  messageId       String?   @db.VarChar(255)
+  attachmentsJson String?   @db.LongText
+  isRead          Boolean?  @default(false)
   createdAt       DateTime? @default(now())
 
   @@index([ispId, userId, folder], map: "mail_messages_isp_user_folder_idx")
@@ -2457,7 +2458,7 @@ model BranchRequest {
   branchId    Int
   customerId  Int
   type        String   @db.VarChar(50) // 'DISCOUNT' or 'PACKAGE_CHANGE'
-  status      String   @db.VarChar(50) @default("PENDING") // 'PENDING', 'APPROVED', 'REJECTED'
+  status      String   @default("PENDING") @db.VarChar(50) // 'PENDING', 'APPROVED', 'REJECTED'
   details     String   @db.LongText // JSON with details (e.g. { packageId, discountAmount, etc. })
   reason      String?  @db.Text
   requestedBy Int
@@ -2465,10 +2466,9 @@ model BranchRequest {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  branch      Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade, map: "branch_request_branch_fkey")
-  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "branch_request_customer_fkey")
-  isp         ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "branch_request_isp_fkey")
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade, map: "branch_request_branch_fkey")
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "branch_request_customer_fkey")
+  isp      ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "branch_request_isp_fkey")
 
   @@map("branch_requests")
 }
-

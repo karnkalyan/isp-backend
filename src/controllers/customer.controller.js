@@ -1752,6 +1752,20 @@ async function provisionCustomer(req, res, next) {
                 break;
               }
               case SERVICE_CODES.RADIUS:
+                if (data.nasId) {
+                  const selectedNas = await prisma.nas.findFirst({
+                    where: { id: Number(data.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
+                  });
+                  if (!selectedNas) throw new Error('Selected NAS is not available');
+                  data.attributes = { ...(data.attributes || {}), 'NAS-IP-Address': selectedNas.nasname };
+                } else {
+                  const availableNas = await prisma.nas.findMany({
+                    where: { ispId: req.ispId, isActive: true, isDeleted: false },
+                    orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }]
+                  });
+                  const fallbackNas = availableNas.find(nas => nas.isDefault) || (availableNas.length === 1 ? availableNas[0] : null);
+                  if (fallbackNas) data.attributes = { ...(data.attributes || {}), 'NAS-IP-Address': fallbackNas.nasname };
+                }
                 if (testSubscription?.packagePrice) {
                   const radiusGroupName =
                     testSubscription.packagePrice.packagePlanDetails?.planCode ||
@@ -1765,6 +1779,12 @@ async function provisionCustomer(req, res, next) {
                   data.attributes || {},
                   data.groups || []
                 );
+                await client.createRadcheck({
+                  username: data.username,
+                  attribute: 'Simultaneous-Use',
+                  op: ':=',
+                  value: '1'
+                });
                 break;
               case SERVICE_CODES.NETTV:
                 result = await client.createSubscriber(data);
@@ -1997,6 +2017,9 @@ async function listCustomers(req, res, next) {
         { lead: { lastName: { contains: search } } },
         { lead: { email: { contains: search } } },
         { lead: { phoneNumber: { contains: search } } },
+        { lead: { secondaryContactNumber: { contains: search } } },
+        { portalUser: { email: { contains: search } } },
+        { connectionUsers: { some: { username: { contains: search }, isDeleted: false } } },
         { customerUniqueId: { contains: search } }
       ];
     }
@@ -2749,7 +2772,7 @@ const subscribePackage = async (req, res, next) => {
             referenceId: true,
             oneTimeCharges: {
               where: { isDeleted: false },
-              select: { id: true, name: true, amount: true, referenceId: true }
+              select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
             }
           }
         }
@@ -2774,9 +2797,9 @@ const subscribePackage = async (req, res, next) => {
       packagePrice = 0;
     }
 
-    let otcItems = isRechargeable
-      ? []
-      : (pkg.oneTimeCharges || []).map(o => ({
+    let otcItems = (pkg.oneTimeCharges || [])
+      .filter(o => !isRechargeable || o.isRenewal)
+      .map(o => ({
         id: o.id,
         name: o.name || "addon",
         referenceId: o.referenceId || null,
@@ -2787,9 +2810,7 @@ const subscribePackage = async (req, res, next) => {
     }
 
     const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
-    const totalAmount = (!isRechargeable && pkg.initialTotalWithTax !== null && pkg.initialTotalWithTax !== undefined && !customer.isFree)
-      ? packagePrice
-      : (customer.isFree ? 0 : packagePrice + otcTotal);
+    const totalAmount = customer.isFree ? 0 : packagePrice;
 
     if (!createOrder) {
       return res.json({

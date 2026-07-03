@@ -3,7 +3,9 @@ const {
   paymentInquiry,
   processPayment,
   // confirmPayment, 
-  checkStatus 
+  checkStatus,
+  initiateEpayRenewal,
+  completeEpayRenewal
 } = require('../controllers/esewa.controller');
 const { getAccessToken } = require('../controllers/esewaAuth.controller');
 
@@ -36,6 +38,10 @@ module.exports = (prisma) => {
 
   // D. Status Check (Reconciliation)
   router.post('/status', esewaAuth, checkStatus);
+
+  // Customer-initiated ePay v2 renewal routes (separate from inbound token payment).
+  router.post('/epay/initiate', isAuthenticated(prisma), initiateEpayRenewal);
+  router.post('/epay/complete', isAuthenticated(prisma), completeEpayRenewal);
 
   return router;
 };

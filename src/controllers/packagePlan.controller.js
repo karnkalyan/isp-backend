@@ -89,12 +89,13 @@ async function generateRadiusAttributes(plan) {
   }
 
   // 3. Nokia QoS override attributes
-  if (nasList.includes('nokia')) {
+  const hasNokiaProfile = vendorProfiles.some(profile => String(profile.vendor || '').toLowerCase() === 'nokia');
+  if (nasList.includes('nokia') || hasNokiaProfile) {
     const egressRate = downKbps || upKbps;
     const ingressRate = upKbps || downKbps;
     replyAttrs.push(
-      { attribute: 'Alc-Subscriber-Qos-Override', op: '=', value: `E:Q:1:pir=${egressRate},cir=${egressRate}` },
-      { attribute: 'Alc-Subscriber-Qos-Override', op: '=', value: `I:P:1:pir=${ingressRate},cir=${ingressRate},cbs=-1,mbs=-1` }
+      { attribute: 'Alc-Subscriber-Qos-Override', op: '+=', value: `E:Q:1:pir=${egressRate},cir=${egressRate}` },
+      { attribute: 'Alc-Subscriber-Qos-Override', op: '+=', value: `I:Q:1:pir=${ingressRate},cir=${ingressRate}` }
     );
   }
 

@@ -1,0 +1,2 @@
+ALTER TABLE `OneTimeCharge`
+  ADD COLUMN `isRenewal` BOOLEAN NOT NULL DEFAULT false;

@@ -44,6 +44,8 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
             description: original.description,
             amount: parseFloat(amount),
             isTaxable: original.isTaxable,
+            isTscApplicable: original.isTscApplicable,
+            isRenewal: original.isRenewal,
             forPackageCreation: false,
             ispId,
             isActive: true,
@@ -78,7 +80,10 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
                 SalesRate: newRecord.amount || 0,
                 IsBOM: false
               };
-              await client.item.create(itemPayload);
+              const providerPayload = code === SERVICE_CODES.NEPURIX
+                ? { ...itemPayload, IsTSCApplied: newRecord.isTscApplicable }
+                : itemPayload;
+              await client.item.create(providerPayload);
             } catch (syncErr) {
               console.warn(`[WARNING] ${code} sync failed for new custom addon charge:`, syncErr.message);
             }

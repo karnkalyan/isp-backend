@@ -397,7 +397,10 @@ async function renewSubscription(req, res, next) {
 
         const pkgPrice = await prisma.packagePrice.findUnique({
             where: { id: Number(packageId) },
-            include: { packagePlanDetails: { select: { planName: true } } }
+            include: {
+                packagePlanDetails: { select: { planName: true } },
+                oneTimeCharges: { where: { isDeleted: false, isRenewal: true } }
+            }
         });
 
         if (!pkgPrice) return res.status(404).json({ error: 'Package Price not found' });
@@ -522,8 +525,19 @@ async function renewSubscription(req, res, next) {
             });
 
             // Create order for renewal
+            const renewalItems = customer.isFree ? [] : pkgPrice.oneTimeCharges.map(item => ({
+                itemName: item.name || 'Renewal Item',
+                referenceId: item.referenceId,
+                itemPrice: Number(item.amount || 0)
+            }));
+            const renewalItemsTotal = renewalItems.reduce((sum, item) => sum + item.itemPrice, 0);
             const orderItems = [
-              { itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal', referenceId: pkgPrice.referenceId, itemPrice: customer.isFree ? 0 : pkgPrice.price }
+              {
+                  itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal',
+                  referenceId: pkgPrice.referenceId,
+                  itemPrice: customer.isFree ? 0 : Math.max(0, expectedAmount - renewalItemsTotal)
+              },
+              ...renewalItems
             ];
 
             await tx.customerOrderManagement.create({

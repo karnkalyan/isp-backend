@@ -139,6 +139,107 @@ async function batchUpdateSettings(req, res, next) {
     }
 }
 
+/**
+ * Encode the plaintext credentials required by eSewa's access-token request.
+ * Values are intentionally not persisted or logged.
+ */
+async function generateEsewaBase64(req, res, next) {
+    try {
+        if (!isSystemAdmin(req)) {
+            return res.status(403).json({ error: 'Only system administrators can generate eSewa credentials.' });
+        }
+
+        const password = typeof req.body?.password === 'string' ? req.body.password : '';
+        const clientSecret = typeof req.body?.clientSecret === 'string' ? req.body.clientSecret : '';
+
+        if (!password || !clientSecret) {
+            return res.status(400).json({ error: 'password and clientSecret are required' });
+        }
+        if (Buffer.byteLength(password, 'utf8') < 8) {
+            return res.status(400).json({ error: 'Password must be at least 8 bytes long' });
+        }
+        const secretLength = Buffer.byteLength(clientSecret, 'utf8');
+        if (secretLength < 32 || secretLength > 64) {
+            return res.status(400).json({ error: 'Client secret must be between 32 and 64 bytes long' });
+        }
+
+        return res.json({
+            passwordBase64: Buffer.from(password, 'utf8').toString('base64'),
+            clientSecretBase64: Buffer.from(clientSecret, 'utf8').toString('base64')
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getEsewaConfiguration(req, res, next) {
+    try {
+        const [tokenConfig, service] = await Promise.all([
+            req.prisma.eSewaConfiguration.findUnique({ where: { ispId: req.ispId } }),
+            req.prisma.iSPService.findFirst({
+                where: { ispId: req.ispId, service: { code: 'ESEWA' }, isDeleted: false },
+                select: { config: true, isActive: true, isEnabled: true }
+            })
+        ]);
+        const serviceConfig = service?.config && typeof service.config === 'object' ? service.config : {};
+        res.json({
+            tokenEnabled: Boolean(tokenConfig?.isActive),
+            epayEnabled: serviceConfig.epayEnabled !== false,
+            username: tokenConfig?.username || 'esewa-client',
+            passwordConfigured: Boolean(tokenConfig?.passwordHash),
+            clientSecretConfigured: Boolean(tokenConfig?.clientSecret),
+            serviceEnabled: Boolean(service?.isActive && service?.isEnabled)
+        });
+    } catch (err) { next(err); }
+}
+
+async function saveEsewaConfiguration(req, res, next) {
+    try {
+        if (!isSystemAdmin(req)) {
+            return res.status(403).json({ error: 'Only system administrators can configure eSewa.' });
+        }
+        const { tokenEnabled, epayEnabled, username, password, clientSecret } = req.body || {};
+        const cleanUsername = String(username || 'esewa-client').trim();
+        const existing = await req.prisma.eSewaConfiguration.findUnique({ where: { ispId: req.ispId } });
+        if (tokenEnabled && !existing && (!password || !clientSecret)) {
+            return res.status(400).json({ error: 'Password and client secret are required when enabling token payment for the first time' });
+        }
+        if (clientSecret) {
+            const length = Buffer.byteLength(String(clientSecret), 'utf8');
+            if (length < 32 || length > 64) return res.status(400).json({ error: 'Client secret must be between 32 and 64 bytes long' });
+        }
+        if (password && Buffer.byteLength(String(password), 'utf8') < 8) {
+            return res.status(400).json({ error: 'Password must be at least 8 bytes long' });
+        }
+
+        const service = await req.prisma.iSPService.findFirst({
+            where: { ispId: req.ispId, service: { code: 'ESEWA' }, isDeleted: false }
+        });
+        if (!service) return res.status(400).json({ error: 'Enable eSewa in the service catalog first' });
+        const currentServiceConfig = service.config && typeof service.config === 'object' ? service.config : {};
+
+        await req.prisma.$transaction(async tx => {
+            await tx.iSPService.update({
+                where: { id: service.id },
+                data: { config: { ...currentServiceConfig, integrationMode: 'TOKEN_BASED', tokenEnabled: Boolean(tokenEnabled), epayEnabled: Boolean(epayEnabled) } }
+            });
+            const data = {
+                username: cleanUsername,
+                isActive: Boolean(tokenEnabled),
+                authMethod: 'BEARER',
+                ...(password ? { passwordHash: await bcrypt.hash(String(password), 10) } : {}),
+                ...(clientSecret ? { clientSecret: String(clientSecret) } : {})
+            };
+            if (existing) {
+                await tx.eSewaConfiguration.update({ where: { ispId: req.ispId }, data });
+            } else if (password && clientSecret) {
+                await tx.eSewaConfiguration.create({ data: { ispId: req.ispId, ...data } });
+            }
+        });
+        res.json({ success: true, tokenEnabled: Boolean(tokenEnabled), epayEnabled: Boolean(epayEnabled), username: cleanUsername });
+    } catch (err) { next(err); }
+}
+
 const RADIUS_POOLS_KEY = (ispId) => `isp:${ispId}:radiusPools`;
 
 function normalizePool(input) {
@@ -220,7 +321,11 @@ module.exports = {
     getSettings,
     updateSetting,
     batchUpdateSettings,
+    generateEsewaBase64,
+    getEsewaConfiguration,
+    saveEsewaConfiguration,
     listRadiusPools,
     upsertRadiusPool,
     deleteRadiusPool
 };
+const bcrypt = require('bcrypt');
