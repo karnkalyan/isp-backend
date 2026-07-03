@@ -3918,6 +3918,65 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
   }
 }
 
+async function bindCustomerRadiusMac(req, res, next) {
+  const customerId = Number(req.params.id);
+  const username = String(req.body?.username || '').trim();
+  const macAddress = String(req.body?.macAddress || '').trim().toUpperCase().replace(/-/g, ':');
+
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    return res.status(400).json({ error: 'Invalid customer ID' });
+  }
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(macAddress)) {
+    return res.status(400).json({ error: 'A valid MAC address is required' });
+  }
+
+  try {
+    const connectionUser = await req.prisma.connectionUser.findFirst({
+      where: {
+        customerId,
+        username,
+        ispId: req.ispId,
+        isDeleted: false,
+        customer: { ispId: req.ispId, isDeleted: false }
+      },
+      select: { id: true, username: true }
+    });
+    if (!connectionUser) {
+      return res.status(404).json({ error: 'Connection user not found for this customer' });
+    }
+
+    const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+    const checks = await radius.getRadcheckByUsername(username);
+    const bindings = (Array.isArray(checks) ? checks : []).filter(
+      (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+    );
+
+    if (bindings.length > 0) {
+      await Promise.all(bindings.map((entry) => radius.updateRadcheck(entry.id, {
+        value: macAddress,
+        op: '=='
+      })));
+    } else {
+      await radius.createRadcheck({
+        username,
+        attribute: 'Calling-Station-Id',
+        op: '==',
+        value: macAddress
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `MAC ${macAddress} bound to ${username}`,
+      data: { username, macAddress, action: bindings.length > 0 ? 'updated' : 'created' }
+    });
+  } catch (error) {
+    console.error('bindCustomerRadiusMac error:', error);
+    return next(error);
+  }
+}
+
 async function reprovisionRadius(req, res, next) {
   const prisma = req.prisma;
   const customerId = Number(req.params.id);
@@ -4864,6 +4923,7 @@ module.exports = {
   updateCustomerDevice,
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
+  bindCustomerRadiusMac,
   changePortalPassword,
   changeConnectionUserPassword,
   reprovisionRadius,

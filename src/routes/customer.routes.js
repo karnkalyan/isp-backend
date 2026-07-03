@@ -27,6 +27,7 @@ const {
   updateCustomerDevice,
   deleteCustomerDevice,
   getCustomerRadiusAuthLogs,
+  bindCustomerRadiusMac,
   changePortalPassword,
   changeConnectionUserPassword,
   reprovisionRadius,
@@ -135,6 +136,7 @@ module.exports = (prisma) => {
   router.post('/disconnect/:username', checkPermission('customer_update'), disconnectLatestSession);
   router.get('/:id', checkPermission('customer_read'), getCustomerById);
   router.get('/:id/radius/auth-logs', checkPermission('customer_read'), getCustomerRadiusAuthLogs);
+  router.put('/:id/radius/bind-mac', checkPermission('customer_update'), bindCustomerRadiusMac);
   router.put('/:id', checkPermission('customer_update'), updateCustomer);
   router.delete('/:id', checkPermission('customer_delete'), deleteCustomer);
   // Action endpoints
