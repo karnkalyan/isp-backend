@@ -3280,10 +3280,11 @@ async function resetMac(req, res, next) {
     const { newMacAddress } = req.body;
     if (!newMacAddress) return res.status(400).json({ error: "newMacAddress is required" });
 
-    const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-    if (!macRegex.test(newMacAddress)) {
+    const compactMac = String(newMacAddress).trim().replace(/[^0-9A-Fa-f]/g, '');
+    if (!/^[0-9A-Fa-f]{12}$/.test(compactMac)) {
       return res.status(400).json({ error: "Invalid MAC address format" });
     }
+    const normalizedMacAddress = compactMac.match(/.{2}/g).join(':').toUpperCase();
 
     const customer = await req.prisma.customer.findFirst({
       where: { id: customerId, isDeleted: false, ispId: req.ispId }
@@ -3299,14 +3300,14 @@ async function resetMac(req, res, next) {
     if (device) {
       updatedDevice = await req.prisma.customerDevice.update({
         where: { id: device.id },
-        data: { macAddress: newMacAddress }
+        data: { macAddress: normalizedMacAddress }
       });
     } else {
       updatedDevice = await req.prisma.customerDevice.create({
         data: {
           customerId,
           deviceType: 'ONT',
-          macAddress: newMacAddress,
+          macAddress: normalizedMacAddress,
           provisioningStatus: 'pending'
         }
       });
@@ -3809,10 +3810,16 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
     for (const user of customer.connectionUsers) {
       const username = user.username;
       
-      const [postAuth, radAcct] = await Promise.all([
+      const [postAuth, radAcct, radChecks] = await Promise.all([
         client.getRadpostauthByUsername(username).catch(() => []),
-        client.getRadacctByUsername(username).catch(() => [])
+        client.getRadacctByUsername(username).catch(() => []),
+        client.getRadcheckByUsername(username).catch(() => [])
       ]);
+      const macBinding = (Array.isArray(radChecks) ? radChecks : []).find(
+        (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+      );
+      const normalizedBoundMac = macBinding?.value ? findMacAddress(String(macBinding.value)) : null;
+      const boundMac = normalizedBoundMac === 'N/A' ? null : normalizedBoundMac;
 
       // Sort and take only the latest Access-Accept and latest Access-Reject
       const sortedPostAuth = [...postAuth].sort((a, b) => new Date(b.authdate).getTime() - new Date(a.authdate).getTime());
@@ -3861,7 +3868,8 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           nasIp,
           nasPort,
           reply: log.reply,
-          reason: log.class || reason
+          reason: log.class || reason,
+          boundMac
         };
       });
 
@@ -3879,7 +3887,8 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           nasIp: session.nasipaddress || 'N/A',
           nasPort: session.nasportid || 'N/A',
           reply: 'Accounting',
-          reason: session.acctterminatecause || (session.acctstoptime ? 'Session stopped' : 'Session active')
+          reason: session.acctterminatecause || (session.acctstoptime ? 'Session stopped' : 'Session active'),
+          boundMac
         })));
       }
 
@@ -3895,7 +3904,8 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
           nasIp: 'N/A',
           nasPort: 'N/A',
           reply: 'N/A',
-          reason: 'No Radius post-auth or accounting records found'
+          reason: 'No Radius post-auth or accounting records found',
+          boundMac
         });
       }
     }
@@ -3922,12 +3932,13 @@ async function bindCustomerRadiusMac(req, res, next) {
   const customerId = Number(req.params.id);
   const username = String(req.body?.username || '').trim();
   const macAddress = String(req.body?.macAddress || '').trim().toUpperCase().replace(/-/g, ':');
+  const shouldBind = req.body?.bind !== false;
 
   if (!Number.isInteger(customerId) || customerId <= 0) {
     return res.status(400).json({ error: 'Invalid customer ID' });
   }
   if (!username) return res.status(400).json({ error: 'Username is required' });
-  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(macAddress)) {
+  if (shouldBind && !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(macAddress)) {
     return res.status(400).json({ error: 'A valid MAC address is required' });
   }
 
@@ -3952,7 +3963,9 @@ async function bindCustomerRadiusMac(req, res, next) {
       (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
     );
 
-    if (bindings.length > 0) {
+    if (!shouldBind) {
+      await Promise.all(bindings.map((entry) => radius.deleteRadcheck(entry.id)));
+    } else if (bindings.length > 0) {
       await Promise.all(bindings.map((entry) => radius.updateRadcheck(entry.id, {
         value: macAddress,
         op: '=='
@@ -3968,8 +3981,12 @@ async function bindCustomerRadiusMac(req, res, next) {
 
     return res.json({
       success: true,
-      message: `MAC ${macAddress} bound to ${username}`,
-      data: { username, macAddress, action: bindings.length > 0 ? 'updated' : 'created' }
+      message: shouldBind ? `MAC ${macAddress} bound to ${username}` : `MAC binding removed from ${username}`,
+      data: {
+        username,
+        macAddress: shouldBind ? macAddress : null,
+        action: shouldBind ? (bindings.length > 0 ? 'updated' : 'created') : 'removed'
+      }
     });
   } catch (error) {
     console.error('bindCustomerRadiusMac error:', error);
