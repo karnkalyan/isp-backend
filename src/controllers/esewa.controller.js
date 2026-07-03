@@ -814,6 +814,14 @@ const processPayment = async (req, res, next) => {
       }))
     ];
 
+    const esewaPaymentMethod = await req.prisma.billingPaymentMethod.findFirst({
+      where: {
+        ispId: req.ispId,
+        code: 'ESEWA',
+        isEnabled: true
+      }
+    });
+
     // 5. Database Transaction - Handle everything in one transaction
     const result = await req.prisma.$transaction(async tx => {
       // A. Upsert payment record (create or update if exists)
@@ -887,6 +895,8 @@ const processPayment = async (req, res, next) => {
           isActive: true,
           isDeleted: false,
           isPaid: true,
+          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentMethodId: esewaPaymentMethod?.id || null,
           items: {
             create: orderItemsData.map(it => ({
               itemName: it.itemName,
@@ -932,16 +942,21 @@ const processPayment = async (req, res, next) => {
             const radiusExpiryStr = formatRadiusExpiration(packageEndDate);
 
             let radReplies = [];
-            try { radReplies = await radius.radreply.list(); } catch (e) { console.warn("Radius list fail", e); }
+            try {
+              radReplies = await radius.getRadreply();
+              if (!Array.isArray(radReplies)) radReplies = [];
+            } catch (e) {
+              console.warn("Radius list fail", e.message || e);
+            }
 
             for (const username of usernames) {
               try {
                 const existing = radReplies.find(r => r.username === username && String(r.attribute).toLowerCase() === "expiration");
                 if (existing && existing.id) {
-                  await radius.radreply.update(existing.id, { value: radiusExpiryStr });
+                  await radius.updateRadreply(existing.id, { value: radiusExpiryStr });
                   radiusProvisioned.push({ username, action: "updated", value: radiusExpiryStr, id: existing.id });
                 } else {
-                  await radius.radreply.create({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
+                  await radius.createRadreply({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
                   radiusProvisioned.push({ username, action: "created", value: radiusExpiryStr });
                 }
               } catch (rErr) {
@@ -957,17 +972,22 @@ const processPayment = async (req, res, next) => {
       console.warn("Radius provisioning overall failed:", rAllErr.message);
     }
 
-    // 7. Tshul Sales Invoice
+    // 7. Accounting integration. Tshul and Nepurix are mutually exclusive:
+    // initialize only the active/default provider selected by ServiceFactory.
     let tshulInvoice = null;
+    let nepurixInvoice = null;
+    let accountingProvider = null;
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, req.ispId);
-      if (tshul) {
+      const [billingService] = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
+      if (billingService) {
+        accountingProvider = billingService.code;
         const customerReferenceId = customer.customerUniqueId || `CUST-${customer.id}`;
-        // ... Tshul logic (implied as before) ...
-        console.log('[DEBUG] Tshul client obtained for customer:', customerReferenceId);
+        // Invoice synchronization is provider-specific and can be added here.
+        // Do not initialize the other accounting provider in this payment flow.
+        console.log(`[DEBUG] ${billingService.code} client obtained for customer:`, customerReferenceId);
       }
-    } catch (tshulErr) {
-      console.warn('[WARNING] Tshul sync failed or skipped:', tshulErr.message);
+    } catch (billingErr) {
+      console.warn('[WARNING] Accounting sync failed or skipped:', billingErr.message);
     }
 
     // 8. Success Response
@@ -985,7 +1005,9 @@ const processPayment = async (req, res, next) => {
         },
         payment_reference: `ORD-${createdOrder.id}`,
         radiusProvisioned,
-        tshulInvoice
+        accountingProvider,
+        tshulInvoice,
+        nepurixInvoice
       }
     });
 
@@ -1054,6 +1076,10 @@ const confirmPayment = async (req, res) => {
       id: o.id, name: o.name, referenceId: o.referenceId, amount: Number(o.amount || 0)
     }));
 
+    const esewaPaymentMethod = await prisma.billingPaymentMethod.findFirst({
+      where: { ispId, code: 'ESEWA', isEnabled: true }
+    });
+
     // Start DB Transaction for Subscription Update and Order Creation
     const createdOrder = await prisma.$transaction(async (tx) => {
       const subscription = await tx.customerSubscription.findFirst({
@@ -1099,6 +1125,8 @@ const confirmPayment = async (req, res) => {
           totalAmount: Number(amount),
           orderDate: new Date(),
           isPaid: true,
+          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentMethodId: esewaPaymentMethod?.id || null,
           transactionCode: transaction_code,
           items: {
             create: [
@@ -1116,28 +1144,28 @@ const confirmPayment = async (req, res) => {
       if (radius) {
         const users = await prisma.connectionUser.findMany({ where: { customerId: customer.id, isDeleted: false } });
         const expiryStr = formatRadiusExpiration(createdOrder.packageEnd);
+        const replyResult = await radius.getRadreply();
+        const radReplies = Array.isArray(replyResult) ? replyResult : [];
 
         for (const user of users) {
           // Logic for updating/creating Radius Expiration
-          const radReplies = await radius.radreply.list();
-          const existing = radReplies.find(r => r.username === user.username && r.attribute.toLowerCase() === "expiration");
+          const existing = radReplies.find(r => r.username === user.username && String(r.attribute).toLowerCase() === "expiration");
           if (existing) {
-            await radius.radreply.update(existing.id, { value: expiryStr });
+            await radius.updateRadreply(existing.id, { value: expiryStr });
           } else {
-            await radius.radreply.create({ username: user.username, attribute: "Expiration", op: ":=", value: expiryStr });
+            await radius.createRadreply({ username: user.username, attribute: "Expiration", op: ":=", value: expiryStr });
           }
         }
       }
     } catch (re) { console.error("Radius Fail:", re.message); }
 
-    // --- Post-Transaction: Tshul Invoice ---
+    // --- Post-Transaction: Selected Accounting Provider ---
     try {
-      const tshul = await ServiceFactory.getClient(SERVICE_CODES.TSHUL, ispId);
-      if (tshul) {
-        // Your Tshul Logic here (as seen in your provided code)
-        console.log('[DEBUG] Tshul client obtained for confirmation');
+      const [billingService] = await ServiceFactory.getActiveBillingClients(ispId, prisma);
+      if (billingService) {
+        console.log(`[DEBUG] ${billingService.code} client obtained for confirmation`);
       }
-    } catch (te) { console.error("Tshul Fail:", te.message); }
+    } catch (billingError) { console.error("Accounting provider fail:", billingError.message); }
 
     // Return Success to eSewa
     res.json({
@@ -1288,12 +1316,16 @@ const completeEpayRenewal = async (req, res, next) => {
     const order = await req.prisma.$transaction(async tx => {
       await tx.customerSubscription.update({ where: { id: subscription.id }, data: { isActive: false } });
       const newSubscription = await tx.customerSubscription.create({ data: { customerId, package: pkg.id, planStart, planEnd, isTrial: false, isActive: true, isInvoicing: true, extensionCount: 0, graceDaysBalance: 0, compensationDays: 0 } });
+      const esewaPaymentMethod = await tx.billingPaymentMethod.findFirst({
+        where: { ispId: req.ispId, code: 'ESEWA', isEnabled: true }
+      });
       const createdOrder = await tx.customerOrderManagement.create({
         data: {
           customerId, subscriptionId: newSubscription.id, package: pkg.id,
           orderDate: new Date(), packageStart: planStart, packageEnd: planEnd,
           totalAmount: payment.amount, isPaid: true, isActive: true,
-          paymentId: 'ESEWA_EPAY_V2',
+          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentMethodId: esewaPaymentMethod?.id || null,
           items: { create: [{ itemName: pkg.packageName || 'Package Renewal', referenceId: pkg.referenceId, itemPrice: Math.max(0, payment.amount - itemTotal) }, ...renewalItems] }
         }
       });
