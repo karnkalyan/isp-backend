@@ -16,13 +16,13 @@ const DEFAULT_SERVICES = [
         category: "AUTHENTICATION",
         iconUrl: "/icons/radius.svg"
     },
-    // {
-    //     name: "eSewa",
-    //     code: "ESEWA",
-    //     description: "Digital payment gateway",
-    //     category: "PAYMENT",
-    //     iconUrl: "/icons/esewa.svg"
-    // },
+    {
+        name: "eSewa",
+        code: "ESEWA",
+        description: "eSewa token payment and ePay v2 gateway",
+        category: "PAYMENT",
+        iconUrl: "/icons/esewa.svg"
+    },
     // {
     //     name: "Khalti",
     //     code: "KHALTI",

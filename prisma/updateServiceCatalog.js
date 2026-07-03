@@ -3,7 +3,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
-const accountingServices = [
+const serviceCatalogEntries = [
   {
     name: 'TShul Billing',
     code: 'TSHUL',
@@ -17,11 +17,18 @@ const accountingServices = [
     description: 'Nepurix accounting and invoicing integration',
     category: 'BILLING',
     iconUrl: '/icons/nepurix.svg'
+  },
+  {
+    name: 'eSewa',
+    code: 'ESEWA',
+    description: 'eSewa token payment and ePay v2 gateway',
+    category: 'PAYMENT',
+    iconUrl: '/icons/esewa.svg'
   }
 ];
 
 async function main() {
-  for (const service of accountingServices) {
+  for (const service of serviceCatalogEntries) {
     await prisma.service.upsert({
       where: { code: service.code },
       update: { ...service, isActive: true, isDeleted: false },

@@ -10,7 +10,8 @@ async function main() {
   // Production-safe catalog upserts: never delete ISP configuration or credentials.
   for (const service of [
     { name: 'TShul Billing', code: 'TSHUL', description: 'TShul accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/tshul.svg' },
-    { name: 'Nepurix Accounting', code: 'NEPURIX', description: 'Nepurix accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/nepurix.svg' }
+    { name: 'Nepurix Accounting', code: 'NEPURIX', description: 'Nepurix accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/nepurix.svg' },
+    { name: 'eSewa', code: 'ESEWA', description: 'eSewa token payment and ePay v2 gateway', category: 'PAYMENT', iconUrl: '/icons/esewa.svg' }
   ]) {
     await prisma.service.upsert({
       where: { code: service.code },
