@@ -55,6 +55,14 @@ class SSHSession {
 
             let buffer = '';
             let timer = null;
+            let confirmationSent = false;
+            const scheduleFinish = () => {
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    this.stream.removeListener('data', onData);
+                    resolve(buffer);
+                }, waitMs);
+            };
 
             const onData = (data) => {
                 const chunk = data.toString('utf8');
@@ -65,12 +73,14 @@ class SSHSession {
                 // Huawei Style: ---- More ( Press 'Q' to break ) ----
                 if (chunk.includes('---- More')) {
                     this.stream.write(' '); // Space to scroll
+                    scheduleFinish();
                     return;
                 }
 
                 // Cisco/Generic Style: --More--
                 if (chunk.includes('--More--')) {
                     this.stream.write(' '); // Space to scroll
+                    scheduleFinish();
                     return;
                 }
 
@@ -79,26 +89,27 @@ class SSHSession {
                 // Huawei: command options prompt { <cr>|... }
                 if (chunk.includes('{ <cr>')) {
                     this.stream.write('\r\n');
+                    scheduleFinish();
                     return;
                 }
 
                 // Generic Confirmation: (y/n)
-                if (chunk.toLowerCase().includes('(y/n)')) {
-                    this.stream.write('y\r\n');
+                if (!confirmationSent && (buffer.toLowerCase().includes('(y/n)') || buffer.toLowerCase().includes('[y/n]'))) {
+                    confirmationSent = true;
+                    this.stream.write('y\r');
+                    scheduleFinish();
                     return;
                 }
 
                 // Reset timer on every data chunk to ensure we capture full output
-                clearTimeout(timer);
-                timer = setTimeout(() => {
-                    this.stream.removeListener('data', onData);
-                    // Return raw buffer; caller (Driver) parses it
-                    resolve(buffer);
-                }, waitMs);
+                scheduleFinish();
             };
 
             this.stream.on('data', onData);
-            this.stream.write(cmd + '\r\n');
+            // Huawei confirmation prompts can consume the LF from CRLF as the
+            // default "n" response. Send CR only for commands known to ask.
+            this.stream.write(cmd + (/^load file tftp\s/i.test(cmd) ? '\r' : '\r\n'));
+            scheduleFinish();
         });
     }
 

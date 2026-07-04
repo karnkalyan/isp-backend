@@ -45,7 +45,7 @@ async function extendSubscription(req, res, next) {
     
     try {
         const role = String(req.user?.role || '').toLowerCase();
-        const isAdmin = role === 'admin' || role === 'isp_admin' || role === 'administrator' || role.startsWith('global ');
+        const isAdmin = ['admin', 'isp_admin', 'administrator', 'super_admin', 'global admin', 'global_admin'].includes(role);
         const subscription = await prisma.customerSubscription.findFirst({
             where: { 
                 customerId: Number(customerId), 

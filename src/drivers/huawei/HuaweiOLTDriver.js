@@ -320,9 +320,13 @@ class HuaweiOLTDriver {
         this.validateCliToken(filename, 'filename');
         return this.runSession(async (send) => {
             const command = `load file tftp ${host} ${filename}`;
-            const output = await send(command);
+            const output = await send(command, 5000);
+            if (/failure:|user cancelled|loading\([^)]*\) failed/i.test(output)) {
+                throw new Error(`OLT file transfer failed: ${output.replace(/\s+/g, ' ').trim()}`);
+            }
             const oltFilename = String(filename).toLowerCase();
             const file = await this.checkFileWithSend(send, oltFilename);
+            if (!file.found) throw new Error(`OLT reported transfer completion, but '${oltFilename}' was not found in flash`);
             return {
                 command,
                 result: output.trim(),

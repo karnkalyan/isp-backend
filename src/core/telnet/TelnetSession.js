@@ -303,6 +303,7 @@ class TelnetSession extends EventEmitter {
             let buffer = '';
             let timer = null;
             let settled = false;
+            let confirmationSent = false;
             // Track if we're waiting for a response after an interactive handler
             let waitingForInteractiveResponse = false;
 
@@ -391,9 +392,10 @@ class TelnetSession extends EventEmitter {
                     return;
                 }
 
-                if (/\(y\/n\)/i.test(chunk) || /\[y\/n\]/i.test(chunk)) {
+                if (!confirmationSent && (/\(y\/n\)/i.test(buffer) || /\[y\/n\]/i.test(buffer))) {
+                    confirmationSent = true;
                     clearTimeout(timer);
-                    this.socket.write('y\r\n');
+                    this.socket.write('y\r');
                     waitingForInteractiveResponse = true;
                     scheduleTimer(waitMs);
                     return;
@@ -423,7 +425,7 @@ class TelnetSession extends EventEmitter {
             this.socket.on('error', onError);
 
             // Send the command
-            this.socket.write(cmd + '\r\n');
+            this.socket.write(cmd + (/^load file tftp\s/i.test(cmd) ? '\r' : '\r\n'));
 
             // Initial timer — if nothing arrives at all
             scheduleTimer(waitMs);
