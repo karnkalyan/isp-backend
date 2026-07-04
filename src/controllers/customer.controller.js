@@ -2640,6 +2640,9 @@ async function updateCustomer(req, res, next) {
               const radius = await RadiusClient.create(req.ispId);
               for (const cu of pppUsers) {
                 await radius.updateExpiration(cu.username, expiryDate);
+                await radius.disconnectAllSessions(cu.username).catch((err) => {
+                  console.warn(`[RADIUS UPDATE] disconnect failed for ${cu.username}: ${err.message}`);
+                });
               }
             } catch (e) {
               console.error('Radius sync failed during manual status update:', e.message);
@@ -2969,7 +2972,8 @@ async function changeUsername(req, res, next) {
     }
 
     const customer = await req.prisma.customer.findFirst({
-      where: { id: customerId, isDeleted: false, ispId: req.ispId }
+      where: { id: customerId, isDeleted: false, ispId: req.ispId },
+      include: { connectionUsers: { where: { isDeleted: false, isActive: true } } }
     });
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
@@ -3347,10 +3351,58 @@ async function resetMac(req, res, next) {
       });
     }
 
+    let radiusSynced = false;
+    let radiusMessage = null;
+    try {
+      const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+      const replies = await radius.getRadreply();
+      const allReplies = Array.isArray(replies) ? replies : [];
+
+      for (const connectionUser of customer.connectionUsers) {
+        const legacyChecks = await radius.getRadcheckByUsername(connectionUser.username).catch(() => []);
+        const legacyBindings = (Array.isArray(legacyChecks) ? legacyChecks : []).filter(entry =>
+          String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+        );
+        await Promise.all(legacyBindings.map(entry => radius.deleteRadcheck(entry.id)));
+
+        const bindings = allReplies.filter(entry =>
+          entry.username === connectionUser.username &&
+          String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+        );
+        if (bindings.length) {
+          await Promise.all(bindings.map(entry => radius.updateRadreply(entry.id, {
+            op: ':=',
+            value: normalizedMacAddress
+          })));
+        } else {
+          await radius.createRadreply({
+            username: connectionUser.username,
+            attribute: 'Calling-Station-Id',
+            op: ':=',
+            value: normalizedMacAddress
+          });
+        }
+        await radius.disconnectAllSessions(connectionUser.username).catch((disconnectError) => {
+          console.warn(`[RADIUS MAC] MAC updated but disconnect failed for ${connectionUser.username}: ${disconnectError.message}`);
+        });
+      }
+      radiusSynced = true;
+    } catch (radiusError) {
+      radiusMessage = radiusError.message || 'RADIUS MAC update failed';
+      console.error('Radius MAC sync failed during customer MAC update:', radiusMessage);
+    }
+
     return res.json({
       success: true,
-      message: "MAC address updated successfully (database only)",
-      data: { oldMacAddress: device?.macAddress || null, newMacAddress: updatedDevice.macAddress }
+      message: radiusSynced
+        ? "MAC address updated successfully in customer and RADIUS"
+        : "MAC address updated in customer, but RADIUS sync failed",
+      data: {
+        oldMacAddress: device?.macAddress || null,
+        newMacAddress: updatedDevice.macAddress,
+        radiusSynced,
+        radiusMessage
+      }
     });
   } catch (err) {
     console.error("resetMac error:", err);
@@ -3839,18 +3891,18 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
 
     const ontDevice = customer.devices?.find(d => d.deviceType === 'ONT') || customer.devices?.[0] || null;
     const deviceMac = ontDevice?.macAddress || ontDevice?.mac || null;
+    const allRadReplies = await client.getRadreply().catch(() => []);
 
     const allLogs = [];
     for (const user of customer.connectionUsers) {
       const username = user.username;
       
-      const [postAuth, radAcct, radChecks] = await Promise.all([
+      const [postAuth, radAcct] = await Promise.all([
         client.getRadpostauthByUsername(username).catch(() => []),
-        client.getRadacctByUsername(username).catch(() => []),
-        client.getRadcheckByUsername(username).catch(() => [])
+        client.getRadacctByUsername(username).catch(() => [])
       ]);
-      const macBinding = (Array.isArray(radChecks) ? radChecks : []).find(
-        (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+      const macBinding = (Array.isArray(allRadReplies) ? allRadReplies : []).find(
+        (entry) => entry.username === username && String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
       );
       const normalizedBoundMac = macBinding?.value ? findMacAddress(String(macBinding.value)) : null;
       const boundMac = normalizedBoundMac === 'N/A' ? null : normalizedBoundMac;
@@ -3992,26 +4044,36 @@ async function bindCustomerRadiusMac(req, res, next) {
     }
 
     const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
-    const checks = await radius.getRadcheckByUsername(username);
-    const bindings = (Array.isArray(checks) ? checks : []).filter(
+    const [replies, legacyChecks] = await Promise.all([
+      radius.getRadreply(),
+      radius.getRadcheckByUsername(username).catch(() => [])
+    ]);
+    const bindings = (Array.isArray(replies) ? replies : []).filter(
+      (entry) => entry.username === username && String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+    );
+    const legacyBindings = (Array.isArray(legacyChecks) ? legacyChecks : []).filter(
       (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
     );
+    await Promise.all(legacyBindings.map((entry) => radius.deleteRadcheck(entry.id)));
 
     if (!shouldBind) {
-      await Promise.all(bindings.map((entry) => radius.deleteRadcheck(entry.id)));
+      await Promise.all(bindings.map((entry) => radius.deleteRadreply(entry.id)));
     } else if (bindings.length > 0) {
-      await Promise.all(bindings.map((entry) => radius.updateRadcheck(entry.id, {
+      await Promise.all(bindings.map((entry) => radius.updateRadreply(entry.id, {
         value: macAddress,
-        op: '=='
+        op: ':='
       })));
     } else {
-      await radius.createRadcheck({
+      await radius.createRadreply({
         username,
         attribute: 'Calling-Station-Id',
-        op: '==',
+        op: ':=',
         value: macAddress
       });
     }
+    await radius.disconnectAllSessions(username).catch((disconnectError) => {
+      console.warn(`[RADIUS MAC] Binding updated but disconnect failed for ${username}: ${disconnectError.message}`);
+    });
 
     return res.json({
       success: true,

@@ -108,12 +108,14 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
  * Format date for RADIUS Expiration attribute
  */
 function formatRadiusExpiration(date) {
-  const day = String(date.getDate()).padStart(2, '0');
+  const expirationDate = date instanceof Date ? date : new Date(date);
+  const pad = value => String(value).padStart(2, '0');
+  const day = pad(expirationDate.getDate());
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const month = monthNames[date.getMonth()];
-  const year = date.getFullYear();
-  return `${day} ${month} ${year} 23:59:59.000`;
+  const month = monthNames[expirationDate.getMonth()];
+  const year = expirationDate.getFullYear();
+  return `${day} ${month} ${year} ${pad(expirationDate.getHours())}:${pad(expirationDate.getMinutes())}:${pad(expirationDate.getSeconds())}`;
 }
 
 
@@ -984,6 +986,9 @@ const processPayment = async (req, res, next) => {
                   await radius.createRadreply({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
                   radiusProvisioned.push({ username, action: "created", value: radiusExpiryStr });
                 }
+                await radius.disconnectAllSessions(username).catch((disconnectError) => {
+                  console.warn(`[RADIUS] Session disconnect failed for ${username}:`, disconnectError.message);
+                });
               } catch (rErr) {
                 radiusProvisioned.push({ username, action: "error", error: rErr.message });
               }
@@ -1186,6 +1191,9 @@ const confirmPayment = async (req, res) => {
           } else {
             await radius.createRadreply({ username: user.username, attribute: "Expiration", op: ":=", value: expiryStr });
           }
+          await radius.disconnectAllSessions(user.username).catch((disconnectError) => {
+            console.warn(`[RADIUS] Session disconnect failed for ${user.username}:`, disconnectError.message);
+          });
         }
       }
     } catch (re) { console.error("Radius Fail:", re.message); }
@@ -1369,7 +1377,12 @@ const completeEpayRenewal = async (req, res, next) => {
     try {
       const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
       const users = await req.prisma.connectionUser.findMany({ where: { customerId, isDeleted: false, isActive: true }, select: { username: true } });
-      for (const user of users) await radius.updateExpiration(user.username, planEnd);
+      for (const user of users) {
+        await radius.updateExpiration(user.username, planEnd);
+        await radius.disconnectAllSessions(user.username).catch((disconnectError) => {
+          console.warn(`[RADIUS] Session disconnect failed for ${user.username}:`, disconnectError.message);
+        });
+      }
     } catch (radiusError) {
       console.warn('[eSewa ePay] Renewal completed but RADIUS expiration sync failed:', radiusError.message);
     }

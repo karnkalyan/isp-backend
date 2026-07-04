@@ -2,6 +2,25 @@ const { computeExpiryFromBase } = require('../utils/dateHelper');
 const RadiusClient = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 
+async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expiration, context) {
+    const users = (connectionUsers || []).filter(user => user?.username && user.isDeleted !== true && user.isActive !== false);
+    if (!users.length) return;
+
+    try {
+        const radius = await RadiusClient.create(ispId);
+        for (const user of users) {
+            await radius.updateExpiration(user.username, expiration);
+            try {
+                await radius.disconnectAllSessions(user.username);
+            } catch (disconnectError) {
+                console.warn(`Radius expiration updated but session disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
+            }
+        }
+    } catch (error) {
+        console.error(`Radius sync failed during ${context}:`, error.message);
+    }
+}
+
 function getRenewalBase(subscription, now = new Date()) {
     const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
     const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
@@ -122,16 +141,8 @@ async function extendSubscription(req, res, next) {
                 }
             });
 
-            // Sync with Radius if needed
-            for (const cu of subscription.customer.connectionUsers) {
-                try {
-                    const radius = await RadiusClient.create(req.ispId);
-                    await radius.updateExpiration(cu.username, newPlanEnd);
-                } catch (e) {
-                    console.error('Radius sync failed during extension:', e.message);
-                }
-            }
         });
+        await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, newPlanEnd, `${type} extension`);
 
         res.json({ success: true, newPlanEnd, type });
     } catch (err) {
@@ -163,21 +174,14 @@ async function togglePause(req, res, next) {
             if (subscription.isPaused) return res.status(400).json({ error: 'Already paused' });
             if (new Date(subscription.planEnd) <= new Date()) return res.status(400).json({ error: 'Expired subscriptions cannot be paused' });
             
+            const pausedAt = new Date();
             await prisma.$transaction(async (tx) => {
                 await tx.customerSubscription.update({
                     where: { id: subscription.id },
-                    data: { isPaused: true, pauseDate: new Date() }
+                    data: { isPaused: true, pauseDate: pausedAt }
                 });
-
-                // Set Radius expiry to now to block access
-                for (const cu of subscription.customer.connectionUsers) {
-                    try {
-                        const radius = await RadiusClient.create(req.ispId);
-                        await radius.updateExpiration(cu.username, new Date());
-                        await radius.sendCoA(cu.username, { action: 'disconnect' }).catch(() => null);
-                    } catch (e) {}
-                }
             });
+            await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, pausedAt, 'service pause');
         } else if (action === 'play') {
             if (!subscription.isPaused) return res.status(400).json({ error: 'Not paused' });
 
@@ -192,14 +196,8 @@ async function togglePause(req, res, next) {
                     where: { id: subscription.id },
                     data: { isPaused: false, pauseDate: null, planEnd: newPlanEnd }
                 });
-
-                for (const cu of subscription.customer.connectionUsers) {
-                    try {
-                        const radius = await RadiusClient.create(req.ispId);
-                        await radius.updateExpiration(cu.username, newPlanEnd);
-                    } catch (e) {}
-                }
             });
+            await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, newPlanEnd, 'service resume');
         }
 
 
@@ -412,14 +410,7 @@ async function payOrder(req, res, next) {
         }).catch(() => []);
 
         if (subscription && pppUsers.length) {
-            for (const connection of pppUsers) {
-                try {
-                    const radius = await RadiusClient.create(req.ispId);
-                    await radius.updateExpiration(connection.username, subscription.planEnd);
-                } catch (e) {
-                    console.error('Radius sync failed during payment approval:', e.message);
-                }
-            }
+            await syncRadiusExpirationAndDisconnect(req.ispId, pppUsers, subscription.planEnd, 'payment approval');
         }
 
         res.json(updatedOrder);
@@ -637,14 +628,7 @@ async function renewSubscription(req, res, next) {
         }).catch(() => []);
 
         if (pppUsers.length > 0) {
-            for (const connection of pppUsers) {
-                try {
-                    const radius = await RadiusClient.create(req.ispId);
-                    await radius.updateExpiration(connection.username, planEnd);
-                } catch (e) {
-                    console.error('Radius sync failed during renewal:', e.message);
-                }
-            }
+            await syncRadiusExpirationAndDisconnect(req.ispId, pppUsers, planEnd, 'subscription renewal');
         }
 
         // Trigger Recharge Successful Email & SMS notifications

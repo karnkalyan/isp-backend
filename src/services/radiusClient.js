@@ -764,16 +764,24 @@ class RadiusClient {
    */
   async updateExpiration(username, date) {
     try {
-      const radcheck = await this.getRadcheckByUsername(username);
-      const expirationEntry = radcheck.find(e => e.attribute === 'Expiration');
-      
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const formattedDate = `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+      const expirationDate = date instanceof Date ? date : new Date(date);
+      if (Number.isNaN(expirationDate.getTime())) throw new Error('Invalid expiration date');
 
-      if (expirationEntry) {
-        return await this.updateRadcheck(expirationEntry.id, { value: formattedDate });
+      const radreply = await this.getRadreply();
+      const expirationEntries = (Array.isArray(radreply) ? radreply : []).filter(entry =>
+        entry.username === username && String(entry.attribute || '').toLowerCase() === 'expiration'
+      );
+
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const pad = value => String(value).padStart(2, '0');
+      const formattedDate = `${pad(expirationDate.getDate())} ${months[expirationDate.getMonth()]} ${expirationDate.getFullYear()} ${pad(expirationDate.getHours())}:${pad(expirationDate.getMinutes())}:${pad(expirationDate.getSeconds())}`;
+
+      if (expirationEntries.length) {
+        return await Promise.all(expirationEntries.map(entry =>
+          this.updateRadreply(entry.id, { op: ':=', value: formattedDate })
+        ));
       } else {
-        return await this.createRadcheck({
+        return await this.createRadreply({
           username,
           attribute: 'Expiration',
           op: ':=',
