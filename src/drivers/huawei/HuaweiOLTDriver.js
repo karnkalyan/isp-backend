@@ -241,7 +241,8 @@ class HuaweiOLTDriver {
             line_profile_id,
             service_profile_id,
             description = "",
-            vlans = []
+            vlans = [],
+            load_file = null
         } = data;
 
         return this.runSession(async (send) => {
@@ -271,6 +272,10 @@ class HuaweiOLTDriver {
                             result: (await send(spCmd)).trim()
                         });
                     }
+                }
+
+                if (load_file) {
+                    results.ont_load = await this.loadOntWithSend(send, frame, slot, port, ont_id, load_file);
                 }
 
                 return results;
@@ -306,6 +311,40 @@ class HuaweiOLTDriver {
 
             throw new Error(`Unsupported board type: ${boardType}`);
         });
+    }
+
+    async loadFileFromTftp(data) {
+        const { tftp_host, tftpHost, filename } = data || {};
+        const host = tftp_host || tftpHost;
+        this.validateCliToken(host, 'TFTP server IP');
+        this.validateCliToken(filename, 'filename');
+        return this.runSession(async (send) => {
+            const output = await send(`load file tftp ${host} ${filename}`);
+            return { command: `load file tftp ${host} ${filename}`, result: output.trim() };
+        });
+    }
+
+    async loadOnt(data) {
+        const { frame, slot, port, ont_id, ontId, filename } = data || {};
+        return this.runSession((send) => this.loadOntWithSend(send, frame, slot, port, ont_id ?? ontId, filename));
+    }
+
+    async loadOntWithSend(send, frame, slot, port, ontId, filename) {
+        [frame, slot, port, ontId].forEach((value, index) => {
+            if (!Number.isInteger(Number(value)) || Number(value) < 0) {
+                throw new Error(`Invalid ${['frame', 'slot', 'port', 'ONT ID'][index]}`);
+            }
+        });
+        this.validateCliToken(filename, 'filename');
+        const command = `ont load ${frame}/${slot}/${port} ${ontId} ${filename}`;
+        const output = await send(command);
+        return { command, result: output.trim() };
+    }
+
+    validateCliToken(value, label) {
+        if (!value || !/^[A-Za-z0-9._:-]+$/.test(String(value))) {
+            throw new Error(`Invalid ${label}`);
+        }
     }
 
     async deleteOnt(data) {

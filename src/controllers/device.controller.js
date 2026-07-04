@@ -8,8 +8,8 @@ const executeDeviceAction = async (req, res) => {
         const { action, params = {} } = req.body;
 
         // Fetch device from DB
-        const device = await req.prisma.oLT.findUnique({
-            where: { id: deviceId }
+        const device = await req.prisma.oLT.findFirst({
+            where: { id: deviceId, ispId: req.ispId, isDeleted: false }
         });
 
         if (!device) {

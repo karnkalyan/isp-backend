@@ -29,7 +29,10 @@ const {
   createOltProfile,
   updateOltProfile,
   deleteOltProfile,
-  getAvailablePorts
+  getAvailablePorts,
+  getOltLoadFiles,
+  createOltLoadFile,
+  deleteOltLoadFile
 } = require('../controllers/olt.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -93,6 +96,10 @@ module.exports = (prisma) => {
   router.post('/:id/profiles', checkPermission('olt_update'), createOltProfile);
   router.put('/:id/profiles/:profileId', checkPermission('olt_update'), updateOltProfile);
   router.delete('/:id/profiles/:profileId', checkPermission('olt_update'), deleteOltProfile);
+
+  router.get('/:id/load-files', checkPermission('olt_read'), getOltLoadFiles);
+  router.post('/:id/load-files', checkPermission('olt_update'), createOltLoadFile);
+  router.delete('/:id/load-files/:fileId', checkPermission('olt_update'), deleteOltLoadFile);
 
   // Get available ports for VLAN/Profile assignment
   router.get('/:id/available-ports', checkPermission('olt_read'), getAvailablePorts);

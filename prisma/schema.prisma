@@ -779,14 +779,28 @@ model OLT {
   terminalSessions           TerminalSession[]
   terminalCommands           TerminalCommand[]
 
-  oltProfiles OLTProfile[]
-  oltVlans    OLTVLAN[]
+  oltProfiles  OLTProfile[]
+  oltVlans     OLTVLAN[]
+  oltLoadFiles OLTLoadFile[]
 
   @@unique([ispId, ipAddress], name: "olt_ip_unique")
   @@index([sshHost])
   @@index([status])
   @@index([lastConnected])
   @@index([branchId])
+}
+
+model OLTLoadFile {
+  id        Int      @id @default(autoincrement())
+  oltId     Int
+  tftpHost  String   @db.VarChar(191)
+  filename  String   @db.VarChar(191)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  olt OLT @relation(fields: [oltId], references: [id], onDelete: Cascade, map: "olt_load_file_olt_fkey")
+
+  @@index([oltId])
 }
 
 model ServiceBoard {

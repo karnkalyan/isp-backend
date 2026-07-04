@@ -29,7 +29,7 @@ CREATE TABLE `billing_payment_methods` (
 
 ALTER TABLE `CustomerOrderManagement` ADD COLUMN `fiscalYearId` INTEGER NULL, ADD COLUMN `paymentMethodId` INTEGER NULL;
 ALTER TABLE `branch_invoice_ranges` ADD COLUMN `fiscalYearId` INTEGER NULL;
-ALTER TABLE `Branch` ADD COLUMN `receiptRequired` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `branches` ADD COLUMN `receiptRequired` BOOLEAN NOT NULL DEFAULT false;
 
 INSERT INTO `billing_payment_methods` (`ispId`, `name`, `code`, `description`, `isEnabled`, `isDefault`, `createdAt`, `updatedAt`)
 SELECT `id`, 'Cash', 'CASH', 'Cash payment', true, true, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3) FROM `ISP`;

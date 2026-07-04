@@ -75,7 +75,8 @@ async function listOlts(req, res, next) {
               status: 'active'
             }
           },
-          oltProfiles: true,  // 👈 Added: include all OLT profiles
+          oltProfiles: true,
+          oltLoadFiles: { orderBy: { createdAt: 'asc' } },
           _count: {
             select: {
               onts: { where: { isDeleted: false } }
@@ -153,6 +154,10 @@ async function listOlts(req, res, next) {
         qosProfile: profile.qosProfile
       }));
 
+      const loadFiles = olt.oltLoadFiles.map(file => ({
+        id: file.id.toString(), tftpHost: file.tftpHost, filename: file.filename
+      }));
+
       return {
         id: olt.id.toString(),
         name: olt.name,
@@ -171,7 +176,8 @@ async function listOlts(req, res, next) {
         activeSubscribers: olt.onts.filter(o => o.status === 'online').length,
         serviceBoards,
         vlans,      // 👈 Added
-        profiles    // 👈 Added
+        profiles,
+        loadFiles
       };
     });
 
@@ -4078,6 +4084,47 @@ async function getActiveSessions(req, res, next) {
   }
 }
 
+async function requireOwnedOlt(req, id) {
+  const branchFilter = await getBranchFilter(req);
+  return req.prisma.oLT.findFirst({
+    where: { id, ispId: req.ispId, isDeleted: false, ...branchFilter },
+    select: { id: true }
+  });
+}
+
+async function getOltLoadFiles(req, res, next) {
+  try {
+    const oltId = Number(req.params.id);
+    if (!Number.isInteger(oltId) || !(await requireOwnedOlt(req, oltId))) return res.status(404).json({ error: 'OLT not found' });
+    const data = await req.prisma.oLTLoadFile.findMany({ where: { oltId }, orderBy: { createdAt: 'asc' } });
+    return res.json({ success: true, data: data.map(file => ({ ...file, id: String(file.id), oltId: String(file.oltId) })) });
+  } catch (err) { return next(err); }
+}
+
+async function createOltLoadFile(req, res, next) {
+  try {
+    const oltId = Number(req.params.id);
+    const tftpHost = String(req.body.tftpHost || '').trim();
+    const filename = String(req.body.filename || '').trim();
+    if (!(await requireOwnedOlt(req, oltId))) return res.status(404).json({ error: 'OLT not found' });
+    if (!/^[A-Za-z0-9.:-]+$/.test(tftpHost) || !/^[A-Za-z0-9._:-]+$/.test(filename)) {
+      return res.status(400).json({ error: 'Enter a valid TFTP host and filename' });
+    }
+    const data = await req.prisma.oLTLoadFile.create({ data: { oltId, tftpHost, filename } });
+    return res.status(201).json({ success: true, data: { ...data, id: String(data.id), oltId: String(data.oltId) } });
+  } catch (err) { return next(err); }
+}
+
+async function deleteOltLoadFile(req, res, next) {
+  try {
+    const oltId = Number(req.params.id), fileId = Number(req.params.fileId);
+    if (!(await requireOwnedOlt(req, oltId))) return res.status(404).json({ error: 'OLT not found' });
+    const deleted = await req.prisma.oLTLoadFile.deleteMany({ where: { id: fileId, oltId } });
+    if (!deleted.count) return res.status(404).json({ error: 'Load file not found' });
+    return res.json({ success: true });
+  } catch (err) { return next(err); }
+}
+
 
 module.exports = {
   listOlts,
@@ -4109,5 +4156,8 @@ module.exports = {
   updateOltProfile,
   deleteOltProfile,
   getAvailablePorts,
-  getActiveSessions
+  getActiveSessions,
+  getOltLoadFiles,
+  createOltLoadFile,
+  deleteOltLoadFile
 };
