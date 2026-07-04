@@ -44,7 +44,7 @@ async function extendSubscription(req, res, next) {
     const { customerId, days, extendToDate, type } = req.body; // grace, compensation, admin_extension
     
     try {
-        const role = String(req.user?.role || '').toLowerCase();
+        const role = String(typeof req.user?.role === 'string' ? req.user.role : req.user?.role?.name || '').toLowerCase();
         const isAdmin = ['admin', 'isp_admin', 'administrator', 'super_admin', 'global admin', 'global_admin'].includes(role);
         const subscription = await prisma.customerSubscription.findFirst({
             where: { 
@@ -52,7 +52,8 @@ async function extendSubscription(req, res, next) {
                 isActive: true,
                 customer: { ispId: req.ispId, ...(req.branchId ? { branchId: req.branchId } : {}) }
             },
-            include: { customer: { include: { connectionUsers: true } } }
+            include: { customer: { include: { connectionUsers: true } } },
+            orderBy: { createdAt: 'desc' }
         });
 
         if (!subscription) return res.status(404).json({ error: 'Active subscription not found' });
@@ -73,6 +74,12 @@ async function extendSubscription(req, res, next) {
             }
             if (Number(subscription.graceDaysBalance || 0) > 0) {
                 return res.status(400).json({ error: 'Grace period has already been used for this subscription.' });
+            }
+            if (extendToDate) return res.status(400).json({ error: 'Grace uses the configured fixed duration, not a custom date.' });
+            const graceSetting = await prisma.iSPSettings.findFirst({ where: { ispId: req.ispId, key: 'maxStaffGraceDays' } });
+            const configuredGraceDays = Math.max(1, Number(graceSetting?.value || 3));
+            if (Number(days) !== configuredGraceDays) {
+                return res.status(400).json({ error: `Grace period must be exactly ${configuredGraceDays} days.` });
             }
         }
 
@@ -146,7 +153,8 @@ async function togglePause(req, res, next) {
                 isActive: true,
                 customer: { ispId: req.ispId, ...(req.branchId ? { branchId: req.branchId } : {}) }
             },
-            include: { customer: { include: { connectionUsers: true } } }
+            include: { customer: { include: { connectionUsers: true } } },
+            orderBy: { createdAt: 'desc' }
         });
 
         if (!subscription) return res.status(404).json({ error: 'Active subscription not found' });
@@ -195,7 +203,7 @@ async function togglePause(req, res, next) {
         }
 
 
-        res.json({ success: true, action });
+        res.json({ success: true, action, isPaused: action === 'pause' });
     } catch (err) {
         next(err);
     }
