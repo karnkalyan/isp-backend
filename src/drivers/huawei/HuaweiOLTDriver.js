@@ -325,7 +325,7 @@ class HuaweiOLTDriver {
                 throw new Error(`OLT file transfer failed: ${output.replace(/\s+/g, ' ').trim()}`);
             }
             const oltFilename = String(filename).toLowerCase();
-            const file = await this.checkFileWithSend(send, oltFilename);
+            const file = await this.waitForFile(send, oltFilename);
             if (!file.found) throw new Error(`OLT reported transfer completion, but '${oltFilename}' was not found in flash`);
             return {
                 command,
@@ -339,7 +339,7 @@ class HuaweiOLTDriver {
     async displayFile(data) {
         const filename = typeof data === 'string' ? data : data?.filename;
         this.validateCliToken(filename, 'filename');
-        return this.runSession((send) => this.checkFileWithSend(send, String(filename).toLowerCase()));
+        return this.runSession((send) => this.waitForFile(send, String(filename).toLowerCase()));
     }
 
     async loadOnt(data) {
@@ -355,7 +355,7 @@ class HuaweiOLTDriver {
         });
         this.validateCliToken(filename, 'filename');
         const oltFilename = String(filename).toLowerCase();
-        const file = await this.checkFileWithSend(send, oltFilename);
+        const file = await this.waitForFile(send, oltFilename);
         if (!file.found) {
             throw new Error(`ONT configuration file '${oltFilename}' was not found on the OLT`);
         }
@@ -375,7 +375,12 @@ class HuaweiOLTDriver {
         const location = output.match(/^\s*([A-Za-z0-9_-]+:)\s*$/m)?.[1] || null;
 
         if (!row) {
-            return { found: false, filename, command };
+            return {
+                found: false,
+                filename,
+                command,
+                busy: /command being executed|please retry later|loading\(backuping,rollbacking,duplicating/i.test(output)
+            };
         }
 
         return {
@@ -387,6 +392,19 @@ class HuaweiOLTDriver {
             location,
             command
         };
+    }
+
+    async waitForFile(send, filename, attempts = 8, intervalMs = 1500) {
+        const normalizedFilename = String(filename).toLowerCase();
+        let result = null;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            result = await this.checkFileWithSend(send, normalizedFilename);
+            if (result.found) return { ...result, verification_attempts: attempt };
+            if (attempt < attempts) {
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+            }
+        }
+        return { ...(result || {}), found: false, filename: normalizedFilename, verification_attempts: attempts };
     }
 
     validateCliToken(value, label) {
