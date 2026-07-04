@@ -1779,6 +1779,10 @@ async function provisionCustomer(req, res, next) {
                 break;
               }
               case SERVICE_CODES.RADIUS:
+                data.attributes = {
+                  ...(data.attributes || {}),
+                  Expiration: formatRadiusExpiration(testSubscription.planEnd)
+                };
                 if (data.nasId) {
                   const selectedNas = await prisma.nas.findFirst({
                     where: { id: Number(data.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
@@ -3356,26 +3360,25 @@ async function resetMac(req, res, next) {
       const allReplies = Array.isArray(replies) ? replies : [];
 
       for (const connectionUser of customer.connectionUsers) {
-        const legacyChecks = await radius.getRadcheckByUsername(connectionUser.username).catch(() => []);
-        const legacyBindings = (Array.isArray(legacyChecks) ? legacyChecks : []).filter(entry =>
+        const checks = await radius.getRadcheckByUsername(connectionUser.username).catch(() => []);
+        const bindings = (Array.isArray(checks) ? checks : []).filter(entry =>
           String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
         );
-        await Promise.all(legacyBindings.map(entry => radius.deleteRadcheck(entry.id)));
-
-        const bindings = allReplies.filter(entry =>
+        const staleReplyBindings = allReplies.filter(entry =>
           entry.username === connectionUser.username &&
           String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
         );
+        await Promise.all(staleReplyBindings.map(entry => radius.deleteRadreply(entry.id)));
         if (bindings.length) {
-          await Promise.all(bindings.map(entry => radius.updateRadreply(entry.id, {
-            op: ':=',
+          await Promise.all(bindings.map(entry => radius.updateRadcheck(entry.id, {
+            op: '==',
             value: normalizedMacAddress
           })));
         } else {
-          await radius.createRadreply({
+          await radius.createRadcheck({
             username: connectionUser.username,
             attribute: 'Calling-Station-Id',
-            op: ':=',
+            op: '==',
             value: normalizedMacAddress
           });
         }
@@ -3888,18 +3891,17 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
 
     const ontDevice = customer.devices?.find(d => d.deviceType === 'ONT') || customer.devices?.[0] || null;
     const deviceMac = ontDevice?.macAddress || ontDevice?.mac || null;
-    const allRadReplies = await client.getRadreply().catch(() => []);
-
     const allLogs = [];
     for (const user of customer.connectionUsers) {
       const username = user.username;
       
-      const [postAuth, radAcct] = await Promise.all([
+      const [postAuth, radAcct, radChecks] = await Promise.all([
         client.getRadpostauthByUsername(username).catch(() => []),
-        client.getRadacctByUsername(username).catch(() => [])
+        client.getRadacctByUsername(username).catch(() => []),
+        client.getRadcheckByUsername(username).catch(() => [])
       ]);
-      const macBinding = (Array.isArray(allRadReplies) ? allRadReplies : []).find(
-        (entry) => entry.username === username && String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
+      const macBinding = (Array.isArray(radChecks) ? radChecks : []).find(
+        (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
       );
       const normalizedBoundMac = macBinding?.value ? findMacAddress(String(macBinding.value)) : null;
       const boundMac = normalizedBoundMac === 'N/A' ? null : normalizedBoundMac;
@@ -4045,26 +4047,26 @@ async function bindCustomerRadiusMac(req, res, next) {
       radius.getRadreply(),
       radius.getRadcheckByUsername(username).catch(() => [])
     ]);
-    const bindings = (Array.isArray(replies) ? replies : []).filter(
+    const staleReplyBindings = (Array.isArray(replies) ? replies : []).filter(
       (entry) => entry.username === username && String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
     );
-    const legacyBindings = (Array.isArray(legacyChecks) ? legacyChecks : []).filter(
+    const bindings = (Array.isArray(legacyChecks) ? legacyChecks : []).filter(
       (entry) => String(entry.attribute || '').trim().toLowerCase() === 'calling-station-id'
     );
-    await Promise.all(legacyBindings.map((entry) => radius.deleteRadcheck(entry.id)));
+    await Promise.all(staleReplyBindings.map((entry) => radius.deleteRadreply(entry.id)));
 
     if (!shouldBind) {
-      await Promise.all(bindings.map((entry) => radius.deleteRadreply(entry.id)));
+      await Promise.all(bindings.map((entry) => radius.deleteRadcheck(entry.id)));
     } else if (bindings.length > 0) {
-      await Promise.all(bindings.map((entry) => radius.updateRadreply(entry.id, {
+      await Promise.all(bindings.map((entry) => radius.updateRadcheck(entry.id, {
         value: macAddress,
-        op: ':='
+        op: '=='
       })));
     } else {
-      await radius.createRadreply({
+      await radius.createRadcheck({
         username,
         attribute: 'Calling-Station-Id',
-        op: ':=',
+        op: '==',
         value: macAddress
       });
     }

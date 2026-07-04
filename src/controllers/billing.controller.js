@@ -1,4 +1,5 @@
 const { computeExpiryFromBase } = require('../utils/dateHelper');
+const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const { RadiusClient } = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 
@@ -13,7 +14,8 @@ async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expirat
         console.log('[BILLING RADIUS] Synchronization started', {
             ispId,
             context,
-            expiration: new Date(expiration).toISOString(),
+            expiration: formatRadiusExpiration(expiration),
+            timezone: 'Asia/Kathmandu',
             usernames: users.map(user => user.username)
         });
         const radius = await RadiusClient.create(ispId);
@@ -68,7 +70,7 @@ async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expirat
         console.error('[BILLING RADIUS] Synchronization failed', {
             ispId,
             context,
-            expiration: expiration instanceof Date ? expiration.toISOString() : expiration,
+            expiration: (() => { try { return formatRadiusExpiration(expiration); } catch { return expiration; } })(),
             error: error.message,
             responseStatus: error.responseStatus || null,
             responseData: error.responseData || null
@@ -272,7 +274,8 @@ async function togglePause(req, res, next) {
                 customerId: Number(customerId),
                 subscriptionId: subscription.id,
                 alreadyPaused: subscription.isPaused,
-                radiusExpiration: pausedAt.toISOString()
+                radiusExpiration: formatRadiusExpiration(pausedAt),
+                timezone: 'Asia/Kathmandu'
             });
         } else if (action === 'play') {
             if (!subscription.isPaused) return res.status(400).json({ error: 'Not paused' });

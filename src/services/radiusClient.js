@@ -720,18 +720,25 @@ class RadiusClient {
       };
       results.radcheck = await this.createRadcheck(radcheckData);
 
-      // 2. Create additional attributes in radreply if provided
+      // 2. Authentication constraints belong in radcheck; response attributes stay in radreply.
       if (Object.keys(attributes).length > 0) {
+        results.radcheckAttributes = [];
         results.radreply = [];
         for (const [attribute, value] of Object.entries(attributes)) {
-          const radreplyData = {
-            username: username,
-            attribute: attribute,
-            op: ':=',
-            value: String(value)
-          };
-          const replyResult = await this.createRadreply(radreplyData);
-          results.radreply.push(replyResult);
+          const normalizedAttribute = String(attribute).toLowerCase();
+          const isCheckAttribute = ['expiration', 'calling-station-id', 'nas-ip-address'].includes(normalizedAttribute);
+          if (isCheckAttribute) {
+            const checkResult = await this.createRadcheck({
+              username,
+              attribute,
+              op: normalizedAttribute === 'expiration' ? ':=' : '==',
+              value: String(value)
+            });
+            results.radcheckAttributes.push(checkResult);
+          } else {
+            const replyResult = await this.createRadreply({ username, attribute, op: ':=', value: String(value) });
+            results.radreply.push(replyResult);
+          }
         }
       }
 
@@ -770,40 +777,55 @@ class RadiusClient {
 
       console.log('[RADIUS EXPIRATION] Sync started', {
         username,
-        expiration: expirationDate.toISOString()
+        expiration: formatRadiusExpiration(expirationDate),
+        timezone: 'Asia/Kathmandu'
       });
 
-      const radreply = await this.getRadreply();
-      const expirationEntries = (Array.isArray(radreply) ? radreply : []).filter(entry =>
+      const [radcheck, radreply] = await Promise.all([
+        this.getRadcheckByUsername(username),
+        this.getRadreply().catch(() => [])
+      ]);
+      const expirationEntries = (Array.isArray(radcheck) ? radcheck : []).filter(entry =>
+        String(entry.attribute || '').toLowerCase() === 'expiration'
+      );
+      const staleReplyEntries = (Array.isArray(radreply) ? radreply : []).filter(entry =>
         entry.username === username && String(entry.attribute || '').toLowerCase() === 'expiration'
       );
+      await Promise.all(staleReplyEntries.map(entry => this.deleteRadreply(entry.id)));
+      if (staleReplyEntries.length) {
+        console.log('[RADIUS EXPIRATION] Removed stale radreply entries', {
+          username,
+          entryIds: staleReplyEntries.map(entry => entry.id)
+        });
+      }
 
       const formattedDate = formatRadiusExpiration(expirationDate);
 
       if (expirationEntries.length) {
         const result = await Promise.all(expirationEntries.map(entry =>
-          this.updateRadreply(entry.id, { op: ':=', value: formattedDate })
+          this.updateRadcheck(entry.id, { op: ':=', value: formattedDate })
         ));
-        console.log('[RADIUS EXPIRATION] Existing radreply updated', {
+        console.log('[RADIUS EXPIRATION] Existing radcheck updated', {
           username,
           entryIds: expirationEntries.map(entry => entry.id),
           value: formattedDate
         });
         return result;
       } else {
-        const result = await this.createRadreply({
+        const result = await this.createRadcheck({
           username,
           attribute: 'Expiration',
           op: ':=',
           value: formattedDate
         });
-        console.log('[RADIUS EXPIRATION] New radreply created', { username, value: formattedDate });
+        console.log('[RADIUS EXPIRATION] New radcheck created', { username, value: formattedDate });
         return result;
       }
     } catch (error) {
       console.error('[RADIUS EXPIRATION] Sync failed', {
         username,
-        expiration: date instanceof Date ? date.toISOString() : date,
+        expiration: (() => { try { return formatRadiusExpiration(date); } catch { return String(date); } })(),
+        timezone: 'Asia/Kathmandu',
         error: error.message,
         responseStatus: error.responseStatus || null,
         responseData: error.responseData || null

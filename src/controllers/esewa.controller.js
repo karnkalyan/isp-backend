@@ -2,7 +2,6 @@ const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
-const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 
 function getRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
@@ -954,26 +953,10 @@ const processPayment = async (req, res, next) => {
           const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
           if (radius) {
             const packageEndDate = createdOrder.packageEnd ? new Date(createdOrder.packageEnd) : expiryDateObj;
-            const radiusExpiryStr = formatRadiusExpiration(packageEndDate);
-
-            let radReplies = [];
-            try {
-              radReplies = await radius.getRadreply();
-              if (!Array.isArray(radReplies)) radReplies = [];
-            } catch (e) {
-              console.warn("Radius list fail", e.message || e);
-            }
-
             for (const username of usernames) {
               try {
-                const existing = radReplies.find(r => r.username === username && String(r.attribute).toLowerCase() === "expiration");
-                if (existing && existing.id) {
-                  await radius.updateRadreply(existing.id, { value: radiusExpiryStr });
-                  radiusProvisioned.push({ username, action: "updated", value: radiusExpiryStr, id: existing.id });
-                } else {
-                  await radius.createRadreply({ username, attribute: "Expiration", op: ":=", value: radiusExpiryStr });
-                  radiusProvisioned.push({ username, action: "created", value: radiusExpiryStr });
-                }
+                await radius.updateExpiration(username, packageEndDate);
+                radiusProvisioned.push({ username, action: "updated", value: packageEndDate });
                 await radius.disconnectAllSessions(username).catch((disconnectError) => {
                   console.warn(`[RADIUS] Session disconnect failed for ${username}:`, disconnectError.message);
                 });
@@ -1167,18 +1150,8 @@ const confirmPayment = async (req, res) => {
       const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
       if (radius) {
         const users = await prisma.connectionUser.findMany({ where: { customerId: customer.id, isDeleted: false } });
-        const expiryStr = formatRadiusExpiration(createdOrder.packageEnd);
-        const replyResult = await radius.getRadreply();
-        const radReplies = Array.isArray(replyResult) ? replyResult : [];
-
         for (const user of users) {
-          // Logic for updating/creating Radius Expiration
-          const existing = radReplies.find(r => r.username === user.username && String(r.attribute).toLowerCase() === "expiration");
-          if (existing) {
-            await radius.updateRadreply(existing.id, { value: expiryStr });
-          } else {
-            await radius.createRadreply({ username: user.username, attribute: "Expiration", op: ":=", value: expiryStr });
-          }
+          await radius.updateExpiration(user.username, createdOrder.packageEnd);
           await radius.disconnectAllSessions(user.username).catch((disconnectError) => {
             console.warn(`[RADIUS] Session disconnect failed for ${user.username}:`, disconnectError.message);
           });
