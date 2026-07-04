@@ -319,9 +319,23 @@ class HuaweiOLTDriver {
         this.validateCliToken(host, 'TFTP server IP');
         this.validateCliToken(filename, 'filename');
         return this.runSession(async (send) => {
-            const output = await send(`load file tftp ${host} ${filename}`);
-            return { command: `load file tftp ${host} ${filename}`, result: output.trim() };
+            const command = `load file tftp ${host} ${filename}`;
+            const output = await send(command);
+            const oltFilename = String(filename).toLowerCase();
+            const file = await this.checkFileWithSend(send, oltFilename);
+            return {
+                command,
+                result: output.trim(),
+                olt_filename: oltFilename,
+                file
+            };
         });
+    }
+
+    async displayFile(data) {
+        const filename = typeof data === 'string' ? data : data?.filename;
+        this.validateCliToken(filename, 'filename');
+        return this.runSession((send) => this.checkFileWithSend(send, String(filename).toLowerCase()));
     }
 
     async loadOnt(data) {
@@ -336,9 +350,39 @@ class HuaweiOLTDriver {
             }
         });
         this.validateCliToken(filename, 'filename');
-        const command = `ont load ${frame}/${slot}/${port} ${ontId} ${filename}`;
+        const oltFilename = String(filename).toLowerCase();
+        const file = await this.checkFileWithSend(send, oltFilename);
+        if (!file.found) {
+            throw new Error(`ONT configuration file '${oltFilename}' was not found on the OLT`);
+        }
+        const command = `ont load ${frame}/${slot}/${port} ${ontId} ${oltFilename}`;
         const output = await send(command);
-        return { command, result: output.trim() };
+        return { command, result: output.trim(), file };
+    }
+
+    async checkFileWithSend(send, filename) {
+        const command = `display file ${filename}`;
+        const output = await send(command);
+        const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const row = output.match(new RegExp(
+            `^\\s*(${escapedFilename})\\s+(\\d+)\\s+(\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2})?)\\s+(\\S+)\\s*$`,
+            'im'
+        ));
+        const location = output.match(/^\s*([A-Za-z0-9_-]+:)\s*$/m)?.[1] || null;
+
+        if (!row) {
+            return { found: false, filename, command };
+        }
+
+        return {
+            found: true,
+            filename: row[1],
+            size_bytes: Number(row[2]),
+            creation_time: row[3],
+            attribute: row[4],
+            location,
+            command
+        };
     }
 
     validateCliToken(value, label) {
