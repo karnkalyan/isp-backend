@@ -1,5 +1,5 @@
 const smsHelper = require('../utils/smsHelper');
-const RadiusClient = require('./radiusClient');
+const { RadiusClient } = require('./radiusClient');
 
 async function reconcilePausedRadiusUsers(prisma, ispId) {
   const pausedSubscriptions = await prisma.customerSubscription.findMany({

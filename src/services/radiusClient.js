@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
+const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const prisma = new PrismaClient();
 
 class RadiusClient {
@@ -777,9 +778,7 @@ class RadiusClient {
         entry.username === username && String(entry.attribute || '').toLowerCase() === 'expiration'
       );
 
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const pad = value => String(value).padStart(2, '0');
-      const formattedDate = `${pad(expirationDate.getDate())} ${months[expirationDate.getMonth()]} ${expirationDate.getFullYear()} ${pad(expirationDate.getHours())}:${pad(expirationDate.getMinutes())}:${pad(expirationDate.getSeconds())}`;
+      const formattedDate = formatRadiusExpiration(expirationDate);
 
       if (expirationEntries.length) {
         const result = await Promise.all(expirationEntries.map(entry =>

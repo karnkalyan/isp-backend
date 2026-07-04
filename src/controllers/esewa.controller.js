@@ -2,6 +2,7 @@ const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
+const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 
 function getRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
@@ -107,19 +108,6 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 /**
  * Format date for RADIUS Expiration attribute
  */
-function formatRadiusExpiration(date) {
-  const expirationDate = date instanceof Date ? date : new Date(date);
-  const pad = value => String(value).padStart(2, '0');
-  const day = pad(expirationDate.getDate());
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const month = monthNames[expirationDate.getMonth()];
-  const year = expirationDate.getFullYear();
-  return `${day} ${month} ${year} ${pad(expirationDate.getHours())}:${pad(expirationDate.getMinutes())}:${pad(expirationDate.getSeconds())}`;
-}
-
-
-
 // const inquiry = async (req, res, next) => {
 //   try {
 //     const requestId =

@@ -7,6 +7,7 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this line
+const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 
 function getSubscriptionRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
@@ -2559,7 +2560,7 @@ async function updateCustomer(req, res, next) {
 
         // Sync to Radius
         try {
-          const RadiusClient = require('../services/radiusClient');
+          const { RadiusClient } = require('../services/radiusClient');
           const radius = await RadiusClient.create(req.ispId);
 
           if (oldUsername) {
@@ -2583,11 +2584,7 @@ async function updateCustomer(req, res, next) {
             include: { packagePrice: { include: { packagePlanDetails: true } } }
           });
 
-          const expiryDate = subscription?.planEnd
-            ? new Date(subscription.planEnd).toLocaleDateString('en-GB', {
-                day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
-              }).replace(/,/g, '').replace(/ /g, ' ')
-            : null;
+          const expiryDate = subscription?.planEnd ? formatRadiusExpiration(subscription.planEnd) : null;
 
           const radiusGroupName =
             subscription?.packagePrice?.packagePlanDetails?.planCode ||
@@ -2635,7 +2632,7 @@ async function updateCustomer(req, res, next) {
             });
             const expiryDate = (status === 'active' && subscription) ? subscription.planEnd : new Date();
             
-            const RadiusClient = require('../services/radiusClient');
+            const { RadiusClient } = require('../services/radiusClient');
             try {
               const radius = await RadiusClient.create(req.ispId);
               for (const cu of pppUsers) {
@@ -4184,11 +4181,7 @@ async function reprovisionRadius(req, res, next) {
       include: { packagePrice: { include: { packagePlanDetails: true } } }
     });
 
-    const expiryDate = subscription?.planEnd
-      ? new Date(subscription.planEnd).toLocaleDateString('en-GB', {
-          day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
-        }).replace(/,/g, '').replace(/ /g, ' ')
-      : null;
+    const expiryDate = subscription?.planEnd ? formatRadiusExpiration(subscription.planEnd) : null;
 
     const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
 

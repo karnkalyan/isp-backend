@@ -1,5 +1,5 @@
 const { computeExpiryFromBase } = require('../utils/dateHelper');
-const RadiusClient = require('../services/radiusClient');
+const { RadiusClient } = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 
 async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expiration, context) {
