@@ -767,6 +767,11 @@ class RadiusClient {
       const expirationDate = date instanceof Date ? date : new Date(date);
       if (Number.isNaN(expirationDate.getTime())) throw new Error('Invalid expiration date');
 
+      console.log('[RADIUS EXPIRATION] Sync started', {
+        username,
+        expiration: expirationDate.toISOString()
+      });
+
       const radreply = await this.getRadreply();
       const expirationEntries = (Array.isArray(radreply) ? radreply : []).filter(entry =>
         entry.username === username && String(entry.attribute || '').toLowerCase() === 'expiration'
@@ -777,19 +782,33 @@ class RadiusClient {
       const formattedDate = `${pad(expirationDate.getDate())} ${months[expirationDate.getMonth()]} ${expirationDate.getFullYear()} ${pad(expirationDate.getHours())}:${pad(expirationDate.getMinutes())}:${pad(expirationDate.getSeconds())}`;
 
       if (expirationEntries.length) {
-        return await Promise.all(expirationEntries.map(entry =>
+        const result = await Promise.all(expirationEntries.map(entry =>
           this.updateRadreply(entry.id, { op: ':=', value: formattedDate })
         ));
+        console.log('[RADIUS EXPIRATION] Existing radreply updated', {
+          username,
+          entryIds: expirationEntries.map(entry => entry.id),
+          value: formattedDate
+        });
+        return result;
       } else {
-        return await this.createRadreply({
+        const result = await this.createRadreply({
           username,
           attribute: 'Expiration',
           op: ':=',
           value: formattedDate
         });
+        console.log('[RADIUS EXPIRATION] New radreply created', { username, value: formattedDate });
+        return result;
       }
     } catch (error) {
-      console.error(`Error updating expiration for user ${username}:`, error.message);
+      console.error('[RADIUS EXPIRATION] Sync failed', {
+        username,
+        expiration: date instanceof Date ? date.toISOString() : date,
+        error: error.message,
+        responseStatus: error.responseStatus || null,
+        responseData: error.responseData || null
+      });
       throw error;
     }
   }

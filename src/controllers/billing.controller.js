@@ -4,20 +4,75 @@ const { getBranchFilter } = require('../utils/branchHelper');
 
 async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expiration, context) {
     const users = (connectionUsers || []).filter(user => user?.username && user.isDeleted !== true && user.isActive !== false);
-    if (!users.length) return;
+    if (!users.length) {
+        console.warn('[BILLING RADIUS] No active connection users to synchronize', { ispId, context });
+        return;
+    }
 
     try {
+        console.log('[BILLING RADIUS] Synchronization started', {
+            ispId,
+            context,
+            expiration: new Date(expiration).toISOString(),
+            usernames: users.map(user => user.username)
+        });
         const radius = await RadiusClient.create(ispId);
         for (const user of users) {
             await radius.updateExpiration(user.username, expiration);
+            console.log('[BILLING RADIUS] Expiration synchronized', { context, username: user.username });
+            let sessionDisconnectAttempted = false;
+            let sessionDisconnectSucceeded = false;
             try {
-                await radius.disconnectAllSessions(user.username);
+                const sessionInfo = await radius.getSessionInfo(user.username);
+                const sessions = Array.isArray(sessionInfo)
+                    ? sessionInfo
+                    : Array.isArray(sessionInfo?.sessions)
+                        ? sessionInfo.sessions
+                        : Array.isArray(sessionInfo?.data)
+                            ? sessionInfo.data
+                            : Array.isArray(sessionInfo?.data?.sessions)
+                                ? sessionInfo.data.sessions
+                                : [];
+                const activeSessions = sessions.filter(session =>
+                    !session.acctstoptime && !session.acctStopTime && !session.stop_time
+                );
+                for (const session of activeSessions) {
+                    const sessionId = session.acctsessionid || session.acctSessionId || session.session_id || session.sessionId;
+                    if (!sessionId) continue;
+                    sessionDisconnectAttempted = true;
+                    await radius.disconnectBySessionId(sessionId);
+                    console.log('[BILLING RADIUS] Session disconnected by ID', {
+                        context,
+                        username: user.username,
+                        sessionId
+                    });
+                }
+                sessionDisconnectSucceeded = sessionDisconnectAttempted;
             } catch (disconnectError) {
-                console.warn(`Radius expiration updated but session disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
+                console.warn(`Session-ID disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
+            }
+            if (!sessionDisconnectSucceeded) {
+                try {
+                    await radius.disconnectAllSessions(user.username);
+                    console.log('[BILLING RADIUS] Username-wide disconnect completed', {
+                        context,
+                        username: user.username
+                    });
+                } catch (disconnectError) {
+                    console.warn(`Radius expiration updated but username disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
+                }
             }
         }
+        console.log('[BILLING RADIUS] Synchronization completed', { ispId, context });
     } catch (error) {
-        console.error(`Radius sync failed during ${context}:`, error.message);
+        console.error('[BILLING RADIUS] Synchronization failed', {
+            ispId,
+            context,
+            expiration: expiration instanceof Date ? expiration.toISOString() : expiration,
+            error: error.message,
+            responseStatus: error.responseStatus || null,
+            responseData: error.responseData || null
+        });
     }
 }
 
@@ -63,6 +118,13 @@ async function extendSubscription(req, res, next) {
     const { customerId, days, extendToDate, type } = req.body; // grace, compensation, admin_extension
     
     try {
+        console.log('[SUBSCRIPTION EXTENSION] Request received', {
+            customerId: Number(customerId),
+            ispId: req.ispId,
+            type,
+            days: days ?? null,
+            extendToDate: extendToDate || null
+        });
         const role = String(typeof req.user?.role === 'string' ? req.user.role : req.user?.role?.name || '').toLowerCase();
         const isAdmin = ['admin', 'isp_admin', 'administrator', 'super_admin', 'global admin', 'global_admin'].includes(role);
         const subscription = await prisma.customerSubscription.findFirst({
@@ -144,8 +206,21 @@ async function extendSubscription(req, res, next) {
         });
         await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, newPlanEnd, `${type} extension`);
 
+        console.log('[SUBSCRIPTION EXTENSION] Completed', {
+            customerId: Number(customerId),
+            subscriptionId: subscription.id,
+            type,
+            newPlanEnd: newPlanEnd.toISOString()
+        });
+
         res.json({ success: true, newPlanEnd, type });
     } catch (err) {
+        console.error('[SUBSCRIPTION EXTENSION] Failed', {
+            customerId: Number(customerId),
+            ispId: req.ispId,
+            type,
+            error: err.message
+        });
         next(err);
     }
 }
@@ -158,6 +233,14 @@ async function togglePause(req, res, next) {
     const { customerId, action } = req.body; // action: 'pause' or 'play'
 
     try {
+        console.log('[SUBSCRIPTION PAUSE/PLAY] Request received', {
+            customerId: Number(customerId),
+            ispId: req.ispId,
+            action
+        });
+        if (!['pause', 'play'].includes(action)) {
+            return res.status(400).json({ error: "Action must be 'pause' or 'play'" });
+        }
         const subscription = await prisma.customerSubscription.findFirst({
             where: { 
                 customerId: Number(customerId), 
@@ -171,17 +254,26 @@ async function togglePause(req, res, next) {
         if (!subscription) return res.status(404).json({ error: 'Active subscription not found' });
 
         if (action === 'pause') {
-            if (subscription.isPaused) return res.status(400).json({ error: 'Already paused' });
-            if (new Date(subscription.planEnd) <= new Date()) return res.status(400).json({ error: 'Expired subscriptions cannot be paused' });
+            if (!subscription.isPaused && new Date(subscription.planEnd) <= new Date()) {
+                return res.status(400).json({ error: 'Expired subscriptions cannot be paused' });
+            }
             
             const pausedAt = new Date();
-            await prisma.$transaction(async (tx) => {
-                await tx.customerSubscription.update({
-                    where: { id: subscription.id },
-                    data: { isPaused: true, pauseDate: pausedAt }
+            if (!subscription.isPaused) {
+                await prisma.$transaction(async (tx) => {
+                    await tx.customerSubscription.update({
+                        where: { id: subscription.id },
+                        data: { isPaused: true, pauseDate: pausedAt }
+                    });
                 });
-            });
+            }
             await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, pausedAt, 'service pause');
+            console.log('[SUBSCRIPTION PAUSE/PLAY] Pause synchronized', {
+                customerId: Number(customerId),
+                subscriptionId: subscription.id,
+                alreadyPaused: subscription.isPaused,
+                radiusExpiration: pausedAt.toISOString()
+            });
         } else if (action === 'play') {
             if (!subscription.isPaused) return res.status(400).json({ error: 'Not paused' });
 
@@ -198,11 +290,22 @@ async function togglePause(req, res, next) {
                 });
             });
             await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, newPlanEnd, 'service resume');
+            console.log('[SUBSCRIPTION PAUSE/PLAY] Resume synchronized', {
+                customerId: Number(customerId),
+                subscriptionId: subscription.id,
+                newPlanEnd: newPlanEnd.toISOString()
+            });
         }
 
 
         res.json({ success: true, action, isPaused: action === 'pause' });
     } catch (err) {
+        console.error('[SUBSCRIPTION PAUSE/PLAY] Failed', {
+            customerId: Number(customerId),
+            ispId: req.ispId,
+            action,
+            error: err.message
+        });
         next(err);
     }
 }

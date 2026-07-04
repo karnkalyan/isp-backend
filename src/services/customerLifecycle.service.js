@@ -1,9 +1,72 @@
 const smsHelper = require('../utils/smsHelper');
+const RadiusClient = require('./radiusClient');
+
+async function reconcilePausedRadiusUsers(prisma, ispId) {
+  const pausedSubscriptions = await prisma.customerSubscription.findMany({
+    where: {
+      isActive: true,
+      isPaused: true,
+      customer: { ispId, isDeleted: false }
+    },
+    select: {
+      customer: {
+        select: {
+          connectionUsers: {
+            where: { isDeleted: false, isActive: true },
+            select: { username: true }
+          }
+        }
+      }
+    }
+  });
+  const usernames = [...new Set(pausedSubscriptions.flatMap(subscription =>
+    subscription.customer.connectionUsers.map(user => user.username).filter(Boolean)
+  ))];
+  if (!usernames.length) return;
+
+  try {
+    const radius = await RadiusClient.create(ispId);
+    const pausedAt = new Date();
+    for (const username of usernames) {
+      await radius.updateExpiration(username, pausedAt);
+      let disconnectedBySessionId = false;
+      try {
+        const sessionInfo = await radius.getSessionInfo(username);
+        const sessions = Array.isArray(sessionInfo)
+          ? sessionInfo
+          : Array.isArray(sessionInfo?.sessions)
+            ? sessionInfo.sessions
+            : Array.isArray(sessionInfo?.data)
+              ? sessionInfo.data
+              : Array.isArray(sessionInfo?.data?.sessions)
+                ? sessionInfo.data.sessions
+                : [];
+        for (const session of sessions.filter(item => !item.acctstoptime && !item.acctStopTime && !item.stop_time)) {
+          const sessionId = session.acctsessionid || session.acctSessionId || session.session_id || session.sessionId;
+          if (!sessionId) continue;
+          await radius.disconnectBySessionId(sessionId);
+          disconnectedBySessionId = true;
+        }
+      } catch (error) {
+        console.warn(`[CUSTOMER LIFECYCLE] Session-ID disconnect failed for ${username}:`, error.message);
+      }
+      if (!disconnectedBySessionId) {
+        await radius.disconnectAllSessions(username).catch(error =>
+          console.warn(`[CUSTOMER LIFECYCLE] Username disconnect failed for ${username}:`, error.message)
+        );
+      }
+    }
+    console.log(`[CUSTOMER LIFECYCLE] Reconciled ${usernames.length} paused RADIUS user(s) for ISP ${ispId}`);
+  } catch (error) {
+    console.error(`[CUSTOMER LIFECYCLE] Paused RADIUS reconciliation failed for ISP ${ispId}:`, error.message);
+  }
+}
 
 async function runCustomerLifecycle(prisma) {
   const isps = await prisma.iSP.findMany({ select: { id: true } });
   const now = Date.now();
   for (const isp of isps) {
+    await reconcilePausedRadiusUsers(prisma, isp.id);
     const rows = await prisma.iSPSettings.findMany({ where: { ispId: isp.id, key: { in: ['expiredTerminateDays', 'expiredSoftDeleteDays'] } } });
     const values = Object.fromEntries(rows.map(row => [row.key, Math.max(0, Number(row.value) || 0)]));
     for (const [action, days] of [['terminate', values.expiredTerminateDays], ['delete', values.expiredSoftDeleteDays]]) {
