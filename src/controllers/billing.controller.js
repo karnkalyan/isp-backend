@@ -2,6 +2,26 @@ const { computeExpiryFromBase } = require('../utils/dateHelper');
 const RadiusClient = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 
+function getRenewalBase(subscription, now = new Date()) {
+    const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
+    const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
+    const adminDays = Math.max(0, Number(subscription?.adminExtensionDays || 0));
+    const deductibleDays = graceDays + adminDays;
+    const expiryBeforeExtension = new Date(planEnd);
+    expiryBeforeExtension.setDate(expiryBeforeExtension.getDate() - deductibleDays);
+    if (deductibleDays > 0) return expiryBeforeExtension;
+    return planEnd >= now ? planEnd : now;
+}
+
+async function getRenewalWindow(prisma, ispId, subscription) {
+    const now = new Date();
+    if (!subscription?.isTrial) return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
+    const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
+    const deductTrial = setting?.value === 'true';
+    const trialMs = Math.max(0, new Date(subscription.planEnd) - new Date(subscription.planStart));
+    return { planStart: now, trialDeductionDays: deductTrial ? Math.ceil(trialMs / 86400000) : 0 };
+}
+
 async function resolveActiveFiscalYear(prisma, ispId, fiscalYearId) {
     const now = new Date();
     return prisma.fiscalYear.findFirst({
@@ -21,7 +41,7 @@ async function resolveActiveFiscalYear(prisma, ispId, fiscalYearId) {
  */
 async function extendSubscription(req, res, next) {
     const prisma = req.prisma;
-    const { customerId, days, extendToDate, type } = req.body; // type: 'grace' or 'compensation'
+    const { customerId, days, extendToDate, type } = req.body; // grace, compensation, admin_extension
     
     try {
         const role = String(req.user?.role || '').toLowerCase();
@@ -30,7 +50,7 @@ async function extendSubscription(req, res, next) {
             where: { 
                 customerId: Number(customerId), 
                 isActive: true,
-                ...(req.branchId ? { customer: { branchId: req.branchId } } : {})
+                customer: { ispId: req.ispId, ...(req.branchId ? { branchId: req.branchId } : {}) }
             },
             include: { customer: { include: { connectionUsers: true } } }
         });
@@ -40,21 +60,33 @@ async function extendSubscription(req, res, next) {
             return res.status(403).json({ error: 'Only an administrator can extend a trial subscription.' });
         }
 
+        if (!['grace', 'compensation', 'admin_extension'].includes(type)) {
+            return res.status(400).json({ error: 'Invalid extension type' });
+        }
+        if (type === 'admin_extension' && !isAdmin) {
+            return res.status(403).json({ error: 'Only an administrator can apply an admin extension' });
+        }
         if (type === 'grace') {
             const now = new Date();
             if (subscription.planEnd && new Date(subscription.planEnd) > now) {
                 return res.status(400).json({ error: 'Grace period is not valid. Customer already has a valid subscription.' });
             }
+            if (Number(subscription.graceDaysBalance || 0) > 0) {
+                return res.status(400).json({ error: 'Grace period has already been used for this subscription.' });
+            }
         }
 
         // Normal staff can only extend by 3 days once and only as 'grace'
         if (!isAdmin) {
-            if (subscription.extensionCount >= 1) {
-                return res.status(403).json({ error: 'Staff can only extend once. Contact Admin for further extensions.' });
+            const graceSetting = await prisma.iSPSettings.findFirst({ where: { ispId: req.ispId, key: 'maxStaffGraceDays' } });
+            const maxGraceDays = Math.max(1, Number(graceSetting?.value || 3));
+            if (type === 'compensation') {
+                const setting = await prisma.iSPSettings.findFirst({ where: { ispId: req.ispId, key: 'allowStaffCompensation' } });
+                if (setting?.value !== 'true') return res.status(403).json({ error: 'Staff compensation is disabled.' });
+            } else if (type !== 'grace') {
+                return res.status(403).json({ error: 'Only administrators can apply this extension type.' });
             }
-            if (Number(days) !== 3) {
-                return res.status(403).json({ error: 'Staff can only extend by exactly 3 days.' });
-            }
+            if (!Number.isInteger(Number(days)) || Number(days) < 1 || Number(days) > maxGraceDays) return res.status(403).json({ error: `Extension must be between 1 and ${maxGraceDays} days.` });
         }
 
         let newPlanEnd;
@@ -63,6 +95,10 @@ async function extendSubscription(req, res, next) {
         } else {
             newPlanEnd = new Date(subscription.planEnd);
             newPlanEnd.setDate(newPlanEnd.getDate() + Number(days));
+        }
+
+        if (isNaN(newPlanEnd.getTime()) || newPlanEnd <= new Date(subscription.planEnd)) {
+            return res.status(400).json({ error: 'Extension must move the expiry date forward' });
         }
 
         const extensionDays = Math.ceil((newPlanEnd - new Date(subscription.planEnd)) / (1000 * 60 * 60 * 24));
@@ -74,7 +110,8 @@ async function extendSubscription(req, res, next) {
                     planEnd: newPlanEnd,
                     extensionCount: { increment: 1 },
                     graceDaysBalance: type === 'grace' ? { increment: extensionDays } : undefined,
-                    compensationDays: type === 'compensation' ? { increment: extensionDays } : undefined
+                    compensationDays: type === 'compensation' ? { increment: extensionDays } : undefined,
+                    adminExtensionDays: type === 'admin_extension' ? { increment: extensionDays } : undefined
                 }
             });
 
@@ -107,7 +144,7 @@ async function togglePause(req, res, next) {
             where: { 
                 customerId: Number(customerId), 
                 isActive: true,
-                ...(req.branchId ? { customer: { branchId: req.branchId } } : {})
+                customer: { ispId: req.ispId, ...(req.branchId ? { branchId: req.branchId } : {}) }
             },
             include: { customer: { include: { connectionUsers: true } } }
         });
@@ -116,6 +153,7 @@ async function togglePause(req, res, next) {
 
         if (action === 'pause') {
             if (subscription.isPaused) return res.status(400).json({ error: 'Already paused' });
+            if (new Date(subscription.planEnd) <= new Date()) return res.status(400).json({ error: 'Expired subscriptions cannot be paused' });
             
             await prisma.$transaction(async (tx) => {
                 await tx.customerSubscription.update({
@@ -128,6 +166,7 @@ async function togglePause(req, res, next) {
                     try {
                         const radius = await RadiusClient.create(req.ispId);
                         await radius.updateExpiration(cu.username, new Date());
+                        await radius.sendCoA(cu.username, { action: 'disconnect' }).catch(() => null);
                     } catch (e) {}
                 }
             });
@@ -489,17 +528,10 @@ async function renewSubscription(req, res, next) {
             }
         }
         
-        let planStart = new Date(subscription.planEnd);
-        if (!subscription.isTrial && planStart < new Date()) {
-            planStart = new Date();
-        }
-
-        let planEnd = computeExpiryFromBase(planStart, pkgPrice.packageDuration);
-        
-        // Deduct Grace Days
-        if (subscription.graceDaysBalance > 0) {
-            planEnd.setDate(planEnd.getDate() - subscription.graceDaysBalance);
-        }
+        const renewalWindow = await getRenewalWindow(prisma, req.ispId, subscription);
+        const planStart = renewalWindow.planStart;
+        const planEnd = computeExpiryFromBase(planStart, pkgPrice.packageDuration);
+        if (renewalWindow.trialDeductionDays > 0) planEnd.setDate(planEnd.getDate() - renewalWindow.trialDeductionDays);
 
         const newSub = await prisma.$transaction(async (tx) => {
             // End old sub
@@ -521,6 +553,7 @@ async function renewSubscription(req, res, next) {
                     extensionCount: 0,
                     graceDaysBalance: 0,
                     compensationDays: 0,
+                    adminExtensionDays: 0,
                 }
             });
 

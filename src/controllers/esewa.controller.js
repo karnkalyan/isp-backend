@@ -3,6 +3,25 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
 
+function getRenewalBase(subscription, now = new Date()) {
+  const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
+  const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
+  const adminDays = Math.max(0, Number(subscription?.adminExtensionDays || 0));
+  const deductibleDays = graceDays + adminDays;
+  const expiryBeforeExtension = new Date(planEnd);
+  expiryBeforeExtension.setDate(expiryBeforeExtension.getDate() - deductibleDays);
+  if (deductibleDays > 0) return expiryBeforeExtension;
+  return planEnd >= now ? planEnd : now;
+}
+
+async function getRenewalWindow(prisma, ispId, subscription) {
+  const now = new Date();
+  if (!subscription?.isTrial) return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
+  const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
+  const trialMs = Math.max(0, new Date(subscription.planEnd) - new Date(subscription.planStart));
+  return { planStart: now, trialDeductionDays: setting?.value === 'true' ? Math.ceil(trialMs / 86400000) : 0 };
+}
+
 /**
  * Compute expiry date from a base date + duration string.
  */
@@ -797,9 +816,11 @@ const processPayment = async (req, res, next) => {
     }
 
     // 4. Prepare Order Data
-    const previousPlanEnd = subscription.planEnd ? new Date(subscription.planEnd) : new Date();
+    const renewalWindow = await getRenewalWindow(req.prisma, req.ispId, subscription);
+    const renewalBase = renewalWindow.planStart;
     const durationStr = String(pkg.packageDuration || "1 month");
-    const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr);
+    const expiryDateObj = computeExpiryFromBase(renewalBase, durationStr);
+    if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
     const orderItemsData = [
       {
@@ -865,9 +886,13 @@ const processPayment = async (req, res, next) => {
       const updatedSubData = {
         planEnd: expiryDateObj,
         isTrial: false,
-        isInvoicing: true
+        isInvoicing: true,
+        extensionCount: 0,
+        graceDaysBalance: 0,
+        compensationDays: 0,
+        adminExtensionDays: 0
       };
-      if (subscription.isTrial) updatedSubData.planStart = previousPlanEnd;
+      if (subscription.isTrial) updatedSubData.planStart = renewalBase;
 
       const updatedSubscription = await tx.customerSubscription.update({
         where: { id: subscription.id },
@@ -888,7 +913,7 @@ const processPayment = async (req, res, next) => {
           customer: { connect: { id: customer.id } },
           subscription: { connect: { id: updatedSubscription.id } },
           packagePrice: { connect: { id: pkg.id } },
-          packageStart: previousPlanEnd,
+          packageStart: renewalBase,
           packageEnd: updatedSubscription.planEnd,
           totalAmount,
           orderDate: new Date(),
@@ -1089,8 +1114,10 @@ const confirmPayment = async (req, res) => {
 
       if (!subscription) throw new Error("No active subscription found");
 
-      const previousPlanEnd = subscription.planEnd ? new Date(subscription.planEnd) : new Date();
-      const expiryDateObj = computeExpiryFromBase(previousPlanEnd, String(pkg.packageDuration || "1 month"));
+      const renewalWindow = await getRenewalWindow(tx, ispId, subscription);
+      const renewalBase = renewalWindow.planStart;
+      const expiryDateObj = computeExpiryFromBase(renewalBase, String(pkg.packageDuration || "1 month"));
+      if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
       // Update Subscription
       const updatedSubscription = await tx.customerSubscription.update({
@@ -1099,7 +1126,11 @@ const confirmPayment = async (req, res) => {
           planEnd: expiryDateObj,
           isTrial: false,
           isInvoicing: true,
-          ...(subscription.isTrial ? { planStart: previousPlanEnd } : {})
+          extensionCount: 0,
+          graceDaysBalance: 0,
+          compensationDays: 0,
+          adminExtensionDays: 0,
+          ...(subscription.isTrial ? { planStart: renewalBase } : {})
         }
       });
 
@@ -1120,7 +1151,7 @@ const confirmPayment = async (req, res) => {
           customerId: customer.id,
           subscriptionId: updatedSubscription.id,
           packagePriceId: pkg.id,
-          packageStart: previousPlanEnd,
+          packageStart: renewalBase,
           packageEnd: updatedSubscription.planEnd,
           totalAmount: Number(amount),
           orderDate: new Date(),
@@ -1308,14 +1339,16 @@ const completeEpayRenewal = async (req, res, next) => {
     const pkg = payment.customer.subscribedPkg;
     const subscription = await req.prisma.customerSubscription.findFirst({ where: { customerId, isActive: true }, orderBy: { createdAt: 'desc' } });
     if (!pkg || !subscription) return res.status(400).json({ error: 'Active subscription or package not found' });
-    let planStart = subscription.planEnd && new Date(subscription.planEnd) > new Date() ? new Date(subscription.planEnd) : new Date();
+    const renewalWindow = await getRenewalWindow(req.prisma, req.ispId, subscription);
+    const planStart = renewalWindow.planStart;
     const planEnd = computeExpiryFromBase(planStart, pkg.packageDuration);
+    if (renewalWindow.trialDeductionDays > 0) planEnd.setDate(planEnd.getDate() - renewalWindow.trialDeductionDays);
     const renewalItems = pkg.oneTimeCharges.map(item => ({ itemName: item.name || 'Renewal Item', referenceId: item.referenceId, itemPrice: Number(item.amount || 0) }));
     const itemTotal = renewalItems.reduce((sum, item) => sum + item.itemPrice, 0);
 
     const order = await req.prisma.$transaction(async tx => {
       await tx.customerSubscription.update({ where: { id: subscription.id }, data: { isActive: false } });
-      const newSubscription = await tx.customerSubscription.create({ data: { customerId, package: pkg.id, planStart, planEnd, isTrial: false, isActive: true, isInvoicing: true, extensionCount: 0, graceDaysBalance: 0, compensationDays: 0 } });
+      const newSubscription = await tx.customerSubscription.create({ data: { customerId, package: pkg.id, planStart, planEnd, isTrial: false, isActive: true, isInvoicing: true, extensionCount: 0, graceDaysBalance: 0, compensationDays: 0, adminExtensionDays: 0 } });
       const esewaPaymentMethod = await tx.billingPaymentMethod.findFirst({
         where: { ispId: req.ispId, code: 'ESEWA', isEnabled: true }
       });

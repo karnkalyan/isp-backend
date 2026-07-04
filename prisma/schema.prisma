@@ -1126,24 +1126,25 @@ model ExistingISP {
 
 // ==================== SUBSCRIPTION & ORDER MODELS ====================
 model CustomerSubscription {
-  id               Int                       @id @default(autoincrement())
-  customerId       Int
-  customer         Customer                  @relation(fields: [customerId], references: [id], map: "customer_subscription_customer_fkey")
-  package          Int
-  packagePrice     PackagePrice              @relation(fields: [package], references: [id], map: "customer_subscription_package_fkey")
-  isTrial          Boolean                   @default(false)
-  planStart        DateTime
-  planEnd          DateTime
-  isPaused         Boolean                   @default(false)
-  pauseDate        DateTime?
-  extensionCount   Int                       @default(0)
-  graceDaysBalance Int                       @default(0)
-  compensationDays Int                       @default(0)
-  isActive         Boolean                   @default(true)
-  isInvoicing      Boolean                   @default(true)
-  orders           CustomerOrderManagement[]
-  createdAt        DateTime                  @default(now())
-  updatedAt        DateTime                  @updatedAt
+  id                 Int                       @id @default(autoincrement())
+  customerId         Int
+  customer           Customer                  @relation(fields: [customerId], references: [id], map: "customer_subscription_customer_fkey")
+  package            Int
+  packagePrice       PackagePrice              @relation(fields: [package], references: [id], map: "customer_subscription_package_fkey")
+  isTrial            Boolean                   @default(false)
+  planStart          DateTime
+  planEnd            DateTime
+  isPaused           Boolean                   @default(false)
+  pauseDate          DateTime?
+  extensionCount     Int                       @default(0)
+  graceDaysBalance   Int                       @default(0)
+  compensationDays   Int                       @default(0)
+  adminExtensionDays Int                       @default(0)
+  isActive           Boolean                   @default(true)
+  isInvoicing        Boolean                   @default(true)
+  orders             CustomerOrderManagement[]
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
 }
 
 model CustomerOrderManagement {

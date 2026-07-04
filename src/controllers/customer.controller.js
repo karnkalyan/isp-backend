@@ -7,6 +7,25 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this line
+
+function getSubscriptionRenewalBase(subscription, now = new Date()) {
+  const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
+  const deductibleDays = Math.max(0, Number(subscription?.graceDaysBalance || 0)) + Math.max(0, Number(subscription?.adminExtensionDays || 0));
+  if (deductibleDays > 0) {
+    const originalExpiry = new Date(planEnd);
+    originalExpiry.setDate(originalExpiry.getDate() - deductibleDays);
+    return originalExpiry;
+  }
+  return planEnd >= now ? planEnd : now;
+}
+
+async function getSubscriptionRenewalWindow(prisma, ispId, subscription) {
+  const now = new Date();
+  if (!subscription?.isTrial) return { planStart: getSubscriptionRenewalBase(subscription, now), trialDeductionDays: 0 };
+  const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
+  const trialMs = Math.max(0, new Date(subscription.planEnd) - new Date(subscription.planStart));
+  return { planStart: now, trialDeductionDays: setting?.value === 'true' ? Math.ceil(trialMs / 86400000) : 0 };
+}
 // ----------------------------------------------------------------------
 // Multer configuration
 // ----------------------------------------------------------------------
@@ -2839,9 +2858,11 @@ const subscribePackage = async (req, res, next) => {
       });
     }
 
-    const previousPlanEnd = subscription.planEnd ? new Date(subscription.planEnd) : new Date();
+    const renewalWindow = await getSubscriptionRenewalWindow(req.prisma, req.ispId, subscription);
+    const previousPlanEnd = renewalWindow.planStart;
     const durationStr = String(pkg.packageDuration || "1 month");
     const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr);
+    if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
     const orderItemsData = [
       {
@@ -2860,7 +2881,11 @@ const subscribePackage = async (req, res, next) => {
       const updatedSubData = {
         planEnd: expiryDateObj,
         isTrial: false,
-        isInvoicing: true
+        isInvoicing: true,
+        extensionCount: 0,
+        graceDaysBalance: 0,
+        compensationDays: 0,
+        adminExtensionDays: 0
       };
       if (subscription.isTrial) {
         updatedSubData.planStart = previousPlanEnd;
