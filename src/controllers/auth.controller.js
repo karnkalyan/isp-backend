@@ -74,29 +74,75 @@ async function issueTokensAndSetCookies(req, res, user, rememberMe = true) {
 
 // --- CONTROLLER FUNCTIONS ---
 
-// Standard email/password login
+const LOGIN_USER_INCLUDE = {
+  role: { include: { permissions: true } },
+  userBranches: { include: { branch: true } },
+  branch: true
+};
+
+function getPhoneLoginCandidates(identifier) {
+  const digits = String(identifier || '').replace(/\D/g, '');
+  if (digits.length < 7) return [];
+
+  const localNumber = digits.length > 10 ? digits.slice(-10) : digits;
+  return [...new Set([
+    String(identifier).trim(),
+    digits,
+    localNumber,
+    `977${localNumber}`,
+    `+977${localNumber}`
+  ])];
+}
+
+async function findUserByLoginIdentifier(identifier) {
+  const normalized = String(identifier || '').trim().toLowerCase();
+  if (!normalized) return null;
+
+  const directEmails = [normalized];
+  if (!normalized.includes('@')) directEmails.push(`${normalized.replace(/\s+/g, '')}@customer.local`);
+
+  const directUser = await prisma.user.findFirst({
+    where: { email: { in: [...new Set(directEmails)] }, isDeleted: false },
+    include: LOGIN_USER_INCLUDE
+  });
+  if (directUser) return directUser;
+
+  const phoneCandidates = getPhoneLoginCandidates(normalized);
+  const customerAliases = [
+    { connectionUsers: { some: { username: normalized, isDeleted: false } } }
+  ];
+  if (phoneCandidates.length) {
+    customerAliases.push({ lead: { phoneNumber: { in: phoneCandidates } } });
+    customerAliases.push({ lead: { secondaryContactNumber: { in: phoneCandidates } } });
+  }
+
+  const customers = await prisma.customer.findMany({
+    where: { isDeleted: false, OR: customerAliases },
+    select: { id: true }
+  });
+  if (!customers.length) return null;
+
+  // Refuse ambiguous aliases (for example, a phone shared by multiple customers).
+  const portalUsers = await prisma.user.findMany({
+    where: {
+      customerId: { in: customers.map(customer => customer.id) },
+      isDeleted: false
+    },
+    include: LOGIN_USER_INCLUDE,
+    take: 2
+  });
+  return portalUsers.length === 1 ? portalUsers[0] : null;
+}
+
+// Email, portal username, Radius username, or customer phone login.
 async function login(req, res) {
   const { email, password, rememberMe } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+  if (!email || !password) return res.status(400).json({ error: 'Login identifier and password are required.' });
 
-  const user = await prisma.user.findUnique({ 
-    where: { email },
-    include: {
-      role: {
-        include: {
-          permissions: true
-        }
-      },
-      userBranches: {
-        include: {
-          branch: true
-        }
-      },
-      branch: true // Currently selected or default branch
-    }
-  });
-  if (!user || user.isDeleted) return res.status(401).json({ error: 'Invalid credentials.' });
+  const user = await findUserByLoginIdentifier(email);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials.' });
 
+  // Alias logins never use the ConnectionUser/Radius password.
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return res.status(401).json({ error: 'Invalid credentials.' });
 

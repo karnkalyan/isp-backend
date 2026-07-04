@@ -1382,6 +1382,13 @@ function toCustomerLoginEmail(username) {
   return isValidEmail(normalized) ? normalized : `${normalized}@customer.local`;
 }
 
+function isValidPortalLoginIdentifier(value) {
+  const normalized = normalizeCustomerLoginUsername(value);
+  if (!normalized) return false;
+  if (normalized.includes('@')) return isValidEmail(normalized);
+  return /^[a-z0-9._+-]{2,100}$/.test(normalized);
+}
+
 function getCustomerPortalLoginEmail(customer) {
   const leadEmail = normalizeCustomerLoginUsername(customer?.lead?.email);
   if (leadEmail && isValidEmail(leadEmail)) return leadEmail;
@@ -2999,6 +3006,10 @@ async function changePortalPassword(req, res, next) {
 
     const { email: requestedEmail, newPassword } = req.body;
 
+    if (requestedEmail && !isValidPortalLoginIdentifier(requestedEmail)) {
+      return res.status(400).json({ error: "Enter a valid portal username or email address" });
+    }
+
     if (newPassword && newPassword.trim().length < 4) {
       return res.status(400).json({ error: "Password must be at least 4 characters long" });
     }
@@ -3021,10 +3032,8 @@ async function changePortalPassword(req, res, next) {
         updateData.passwordHash = await bcrypt.hash(newPassword, 10);
       }
       if (requestedEmail) {
-        const normalizedEmail = normalizeCustomerLoginUsername(requestedEmail);
-        if (!isValidEmail(normalizedEmail)) {
-          return res.status(400).json({ error: "Invalid email format" });
-        }
+        const normalizedEmail = toCustomerLoginEmail(requestedEmail);
+        if (!normalizedEmail) return res.status(400).json({ error: "Portal email/username is required" });
         const existing = await req.prisma.user.findFirst({
           where: {
             email: normalizedEmail,
@@ -3049,11 +3058,8 @@ async function changePortalPassword(req, res, next) {
       if (!newPassword) {
         return res.status(400).json({ error: "Password is required to create a new portal account" });
       }
-      let email = requestedEmail ? normalizeCustomerLoginUsername(requestedEmail) : getCustomerPortalLoginEmail(customer);
-      if (!email) return res.status(400).json({ error: "Unable to build portal login email" });
-      if (!isValidEmail(email)) {
-        return res.status(400).json({ error: "Invalid email format" });
-      }
+      let email = requestedEmail ? toCustomerLoginEmail(requestedEmail) : getCustomerPortalLoginEmail(customer);
+      if (!email) return res.status(400).json({ error: "Unable to build portal login email/username" });
       const existing = await req.prisma.user.findUnique({ where: { email } });
       if (existing && existing.isDeleted === false) {
         return res.status(409).json({ error: "Portal login email is already used by another user" });
@@ -3104,6 +3110,9 @@ async function changePortalPassword(req, res, next) {
       data: {
         id: updatedUser.id,
         email: updatedUser.email,
+        loginIdentifier: updatedUser.email.endsWith('@customer.local')
+          ? updatedUser.email.slice(0, -'@customer.local'.length)
+          : updatedUser.email,
         name: updatedUser.name,
         status: updatedUser.status,
         createdAt: updatedUser.createdAt,
