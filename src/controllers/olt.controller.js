@@ -1648,7 +1648,7 @@ async function syncOntsFromOlt(req, res, next) {
       }
 
       for (const ontData of allOnts) {
-        if (!ontData.ont_id || !ontData.fsp) {
+        if (ontData.ont_id === undefined || ontData.ont_id === null || !ontData.fsp) {
           console.warn('Skipping invalid ONT data:', ontData);
           continue;
         }
@@ -1688,7 +1688,8 @@ async function syncOntsFromOlt(req, res, next) {
           oltId,
           ispId: req.ispId,
           branchId: olt.branchId || null,
-          lastSync: new Date()
+          lastSync: new Date(),
+          isDeleted: false
         };
 
         const pairKey = `${ontRecord.ontId}-${ontRecord.servicePort}`;
@@ -2040,7 +2041,7 @@ async function syncOntsBasicFromOlt(req, res, next) {
 
         for (const ontData of allOnts) {
           // Skip invalid ONT data
-          if (!ontData.ont_id || !ontData.fsp) {
+          if (ontData.ont_id === undefined || ontData.ont_id === null || !ontData.fsp) {
             console.warn('Skipping invalid ONT data:', ontData);
             continue;
           }
@@ -2116,13 +2117,13 @@ async function syncOntsBasicFromOlt(req, res, next) {
             rawData: ontData,
             oltId,
             ispId: req.ispId,
-            lastSync: new Date()
+            lastSync: new Date(),
+            isDeleted: false
           };
           // Try to find existing ONT by serial number first, then by ontId+fsp
           let existing = await prisma.oNT.findFirst({
             where: {
               oltId,
-              isDeleted: false,
               OR: [
                 { serialNumber: ontRecord.serialNumber },
                 {
