@@ -275,7 +275,7 @@ class HuaweiOLTDriver {
                 }
 
                 if (load_file) {
-                    results.ont_load = await this.loadOntWithSend(send, frame, slot, port, ont_id, load_file);
+                    results.ont_load = await this.loadOntWithSend(send, frame, slot, port, ont_id, load_file, serial);
                 }
 
                 return results;
@@ -344,10 +344,10 @@ class HuaweiOLTDriver {
 
     async loadOnt(data) {
         const { frame, slot, port, ont_id, ontId, filename } = data || {};
-        return this.runSession((send) => this.loadOntWithSend(send, frame, slot, port, ont_id ?? ontId, filename));
+        return this.runSession((send) => this.loadOntWithSend(send, frame, slot, port, ont_id ?? ontId, filename, data?.serial));
     }
 
-    async loadOntWithSend(send, frame, slot, port, ontId, filename) {
+    async loadOntWithSend(send, frame, slot, port, ontId, filename, serial = null) {
         [frame, slot, port, ontId].forEach((value, index) => {
             if (!Number.isInteger(Number(value)) || Number(value) < 0) {
                 throw new Error(`Invalid ${['frame', 'slot', 'port', 'ONT ID'][index]}`);
@@ -359,9 +359,40 @@ class HuaweiOLTDriver {
         if (!file.found) {
             throw new Error(`ONT configuration file '${oltFilename}' was not found on the OLT`);
         }
+
+        const online = await this.waitForOntOnline(send, frame, slot, port, ontId, serial);
+        if (!online.online) {
+            throw new Error(`ONT ${ontId} on ${frame}/${slot}/${port} did not come online before loading '${oltFilename}'`);
+        }
+
         const command = `ont load ${frame}/${slot}/${port} ${ontId} ${oltFilename}`;
         const output = await send(command);
-        return { command, result: output.trim(), file };
+        if (/\bfailure\s*:/i.test(output) || /\b(error|failed)\b/i.test(output)) {
+            throw new Error(`ONT configuration load failed: ${output.replace(/\s+/g, ' ').trim()}`);
+        }
+        return { command, result: output.trim(), file, online_check: online };
+    }
+
+    async waitForOntOnline(send, frame, slot, port, ontId, serial = null, attempts = 15, intervalMs = 2000) {
+        let lastOutput = '';
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const command = serial
+                ? `display ont info by-sn ${serial}`
+                : `display ont info ${frame}/${slot} ${port} ${ontId}`;
+            lastOutput = await send(command);
+            const runState = lastOutput.match(/Run\s+state\s*:\s*([^\r\n]+)/i)?.[1]?.trim() || null;
+            if (runState && /^online\b/i.test(runState)) {
+                return { online: true, run_state: runState, attempts: attempt, command };
+            }
+            if (attempt < attempts) {
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+            }
+        }
+        return {
+            online: false,
+            run_state: lastOutput.match(/Run\s+state\s*:\s*([^\r\n]+)/i)?.[1]?.trim() || null,
+            attempts
+        };
     }
 
     async checkFileWithSend(send, filename) {
