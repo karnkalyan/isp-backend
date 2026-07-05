@@ -2285,6 +2285,42 @@ async function getCustomerById(req, res, next) {
       return res.status(404).json({ error: "Customer not found" });
     }
 
+    // Package creation stores its configured add-ons in the explicit join
+    // table. Attach those definitions to every order so profile billing can
+    // show the same itemized amounts, tax and TSC rules as the invoice.
+    const packageIds = [...new Set((customer.orders || []).map(order => order.package).filter(Boolean))];
+    const packageLinks = packageIds.length
+      ? await req.prisma.packageonetimecharges.findMany({ where: { A: { in: packageIds } } })
+      : [];
+    const chargeIds = [...new Set(packageLinks.map(link => link.B))];
+    const packageCharges = chargeIds.length
+      ? await req.prisma.OneTimeCharge.findMany({ where: { id: { in: chargeIds }, isDeleted: false }, orderBy: { id: 'asc' } })
+      : [];
+    const chargeById = new Map(packageCharges.map(charge => [charge.id, charge]));
+    const chargesByPackage = new Map();
+    for (const link of packageLinks) {
+      const charge = chargeById.get(link.B);
+      if (!charge) continue;
+      const charges = chargesByPackage.get(link.A) || [];
+      charges.push(charge);
+      chargesByPackage.set(link.A, charges);
+    }
+    const firstOrderIdByPackage = new Map();
+    for (const order of customer.orders || []) {
+      if (!order.package) continue;
+      const current = firstOrderIdByPackage.get(order.package);
+      if (current === undefined || order.id < current) firstOrderIdByPackage.set(order.package, order.id);
+    }
+    customer.orders = (customer.orders || []).map(order => {
+      const isRenewalOrder = firstOrderIdByPackage.has(order.package) && order.id !== firstOrderIdByPackage.get(order.package);
+      return {
+        ...order,
+        isRenewalOrder,
+        packageItems: (chargesByPackage.get(order.package) || order.packagePrice?.oneTimeCharges || [])
+          .filter(item => !isRenewalOrder || item.isRenewal)
+      };
+    });
+
     // Enrich serviceDetails with VLAN objects
     await enrichServiceDetailsWithVlans(req.prisma, customer);
 
