@@ -1514,13 +1514,14 @@ async function upsertRadiusPassword(ispId, username, password) {
 }
 
 async function getRealtimeNetworkStatus(prisma, customer) {
+  let primaryDevice = null;
   let ontRealtimeStatus = 'offline';
   let radiusRealtimeStatus = 'offline';
   let radiusAccounting = null;
 
   try {
     const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(prisma, customer);
-    const primaryDevice = tr069Devices.find((device) => device.serialNumber) || null;
+    primaryDevice = tr069Devices.find((device) => device.serialNumber) || null;
     
     if (primaryDevice && primaryDevice.serialNumber) {
       const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, customer.ispId).catch(() => null);
