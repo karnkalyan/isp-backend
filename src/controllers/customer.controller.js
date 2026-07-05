@@ -3859,6 +3859,7 @@ async function deleteCustomerDevice(req, res, next) {
     }
 
     let oltDeletion = null;
+    let ont = null;
     if (String(device.deviceType || '').toUpperCase() === 'ONT') {
       const oltId = Number(device.customer?.serviceDetails?.[0]?.oltId || device.customer?.oltId);
       if (!oltId) return res.status(409).json({ error: 'Cannot remove ONT: customer has no associated OLT' });
@@ -3870,7 +3871,7 @@ async function deleteCustomerDevice(req, res, next) {
           ? [...printedSerial.slice(0, 4)].map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase() + printedSerial.slice(4)
           : printedSerial;
       const serialCandidates = [...new Set([printedSerial, encodedSerial].filter(Boolean))];
-      const ont = await prisma.oNT.findFirst({
+      ont = await prisma.oNT.findFirst({
         where: { oltId, isDeleted: false, serialNumber: { in: serialCandidates } },
         include: { ontDetails: true }
       });
@@ -3911,6 +3912,17 @@ async function deleteCustomerDevice(req, res, next) {
       await tx.customerDevice.delete({
         where: { id: deviceId }
       });
+
+      // Mark corresponding ONT as deleted in synchronized OLT inventory
+      if (ont) {
+        await tx.oNT.update({
+          where: { id: ont.id },
+          data: {
+            isDeleted: true,
+            updatedAt: new Date()
+          }
+        });
+      }
 
       // 2. Unassign corresponding InventoryItem if it exists and is assigned to this customer
       if (device.serialNumber) {

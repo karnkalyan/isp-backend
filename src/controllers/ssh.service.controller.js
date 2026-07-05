@@ -572,6 +572,21 @@ const deleteOnt = async (req, res) => {
             });
         }
 
+        // Mark the ONT as deleted in the database
+        const servicePortStr = `${frame}/${slot}/${port}`;
+        await prisma.oNT.updateMany({
+            where: {
+                oltId: oltId,
+                servicePort: servicePortStr,
+                ontId: String(ont_id),
+                isDeleted: false
+            },
+            data: {
+                isDeleted: true,
+                updatedAt: new Date()
+            }
+        });
+
         res.json({
             success: true,
             message: `Deleted ${service_port_indices.length} service ports and ONT ${ont_id}`,
