@@ -53,6 +53,35 @@ const executeDeviceAction = async (req, res) => {
         // Close connection
         driver.ssh.close();
 
+        // If action is deleteOnt, mark the ONT as deleted in the database
+        if (action === 'deleteOnt') {
+            try {
+                const { frame, slot, port, ont_id, serial } = params;
+                const servicePortStr = (frame !== undefined && slot !== undefined && port !== undefined) ? `${frame}/${slot}/${port}` : null;
+                const whereClause = {
+                    oltId: deviceId,
+                    isDeleted: false
+                };
+                if (servicePortStr && ont_id !== undefined && ont_id !== null) {
+                    whereClause.servicePort = servicePortStr;
+                    whereClause.ontId = String(ont_id);
+                } else if (serial) {
+                    whereClause.serialNumber = String(serial);
+                }
+                if (whereClause.servicePort || whereClause.serialNumber) {
+                    await req.prisma.oNT.updateMany({
+                        where: whereClause,
+                        data: {
+                            isDeleted: true,
+                            updatedAt: new Date()
+                        }
+                    });
+                }
+            } catch (dbErr) {
+                console.error('Failed to mark ONT as deleted in DB:', dbErr.message);
+            }
+        }
+
         res.json({
             success: true,
             data: result
