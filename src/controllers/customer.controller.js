@@ -8,6 +8,7 @@ const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this line
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
+const getDriver = require('../drivers');
 
 function getSubscriptionRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
@@ -3770,11 +3771,66 @@ async function deleteCustomerDevice(req, res, next) {
 
   try {
     const device = await prisma.customerDevice.findFirst({
-      where: { id: deviceId, customerId, customer: { ispId: req.ispId } }
+      where: { id: deviceId, customerId, customer: { ispId: req.ispId } },
+      include: {
+        customer: {
+          select: {
+            oltId: true,
+            serviceDetails: { where: { oltId: { not: null } }, orderBy: { updatedAt: 'desc' }, take: 1 }
+          }
+        }
+      }
     });
 
     if (!device) {
       return res.status(404).json({ error: 'Device not found' });
+    }
+
+    let oltDeletion = null;
+    if (String(device.deviceType || '').toUpperCase() === 'ONT') {
+      const oltId = Number(device.customer?.serviceDetails?.[0]?.oltId || device.customer?.oltId);
+      if (!oltId) return res.status(409).json({ error: 'Cannot remove ONT: customer has no associated OLT' });
+
+      const printedSerial = String(device.ponSerial || device.serialNumber || '').trim().toUpperCase();
+      const encodedSerial = /^[0-9A-F]{16}$/.test(printedSerial)
+        ? printedSerial
+        : printedSerial.length >= 8
+          ? [...printedSerial.slice(0, 4)].map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase() + printedSerial.slice(4)
+          : printedSerial;
+      const serialCandidates = [...new Set([printedSerial, encodedSerial].filter(Boolean))];
+      const ont = await prisma.oNT.findFirst({
+        where: { oltId, isDeleted: false, serialNumber: { in: serialCandidates } },
+        include: { ontDetails: true }
+      });
+      if (!ont) return res.status(409).json({ error: `Cannot remove ONT: ${printedSerial || 'serial'} was not found in the synchronized OLT inventory` });
+
+      const [frame, slot, port] = String(ont.servicePort || '').split('/').map(Number);
+      const ontId = Number(ont.ontId);
+      if ([frame, slot, port, ontId].some(value => !Number.isInteger(value) || value < 0)) {
+        return res.status(409).json({ error: 'Cannot remove ONT: invalid frame/slot/port or ONT ID in OLT inventory' });
+      }
+      const rawServicePorts = ont.ontDetails?.servicePorts;
+      const servicePortRows = Array.isArray(rawServicePorts) ? rawServicePorts : [];
+      const servicePortIndices = servicePortRows
+        .map(row => Number(row?.index ?? row?.servicePortIndex ?? row?.service_port))
+        .filter(value => Number.isInteger(value) && value >= 0);
+      const oltDevice = await prisma.oLT.findFirst({ where: { id: oltId, ispId: req.ispId, isDeleted: false } });
+      if (!oltDevice) return res.status(404).json({ error: 'Associated OLT was not found' });
+
+      const driver = getDriver(oltDevice);
+      try {
+        await driver.connect();
+        oltDeletion = await driver.deleteOnt({
+          frame,
+          slot,
+          port,
+          ont_id: ontId,
+          serial: printedSerial,
+          service_port_indices: servicePortIndices
+        });
+      } finally {
+        if (driver.ssh) driver.ssh.close();
+      }
     }
 
     // Perform database operations in transaction to guarantee consistency
@@ -3817,7 +3873,7 @@ async function deleteCustomerDevice(req, res, next) {
       await logAudit(tx, req.user.id, 'CUSTOMER_DEVICE_DELETE', { customerId, deviceId, serialNumber: device.serialNumber }, req);
     });
 
-    return res.json({ success: true, message: 'Device deleted successfully' });
+    return res.json({ success: true, message: 'Device deleted successfully', oltDeletion });
   } catch (err) {
     console.error("deleteCustomerDevice error:", err);
     return next(err);
