@@ -292,6 +292,43 @@ async function listDevices(req, res, next) {
   }
 }
 
+async function getRadiusCredentialsBySerial(req, res, next) {
+  try {
+    const serialNumber = String(req.params.serialNumber || '').trim();
+    if (!serialNumber) return res.status(400).json({ error: 'Serial number is required' });
+
+    const tr069Device = await req.prisma.tr069Device.findFirst({
+      where: { serialNumber, ispId: req.ispId, isDeleted: false },
+      select: { leadId: true }
+    });
+    const customer = await req.prisma.customer.findFirst({
+      where: {
+        ispId: req.ispId,
+        isDeleted: false,
+        OR: [
+          { devices: { some: { OR: [{ serialNumber }, { ponSerial: serialNumber }] } } },
+          ...(tr069Device?.leadId ? [{ leadId: tr069Device.leadId }] : [])
+        ]
+      },
+      select: {
+        id: true,
+        customerUniqueId: true,
+        connectionUsers: {
+          where: { isDeleted: false, isActive: true },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { username: true, password: true }
+        }
+      }
+    });
+    const credential = customer?.connectionUsers?.[0];
+    if (!credential) return res.status(404).json({ error: 'No active RADIUS credentials found for this device customer' });
+    return res.json({ success: true, data: { ...credential, customerId: customer.customerUniqueId } });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 // Get device by serial number
 async function getDeviceBySerial(req, res, next) {
   try {
@@ -544,6 +581,7 @@ module.exports = {
   syncDevices,
   syncDevice,
   listDevices,
+  getRadiusCredentialsBySerial,
   getDeviceBySerial,
   linkLead,
   unlinkLead,

@@ -6,6 +6,7 @@ const {
   syncDevices,
   syncDevice,
   listDevices,
+  getRadiusCredentialsBySerial,
   getDeviceBySerial,
   linkLead,
   unlinkLead,
@@ -39,6 +40,12 @@ module.exports = (prisma) => {
     '/',
     checkPermission('services_read'),
     listDevices
+  );
+
+  router.get(
+    '/:serialNumber/radius-credentials',
+    checkPermission('services_manage'),
+    getRadiusCredentialsBySerial
   );
 
   // Get device by serial number

@@ -1589,7 +1589,13 @@ async function getRealtimeNetworkStatus(prisma, customer) {
 
   try {
     const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(prisma, customer);
-    primaryDevice = tr069Devices.find((device) => device.serialNumber) || null;
+    const assignedSerials = new Set((customer?.devices || [])
+      .flatMap(device => [device.serialNumber, device.ponSerial])
+      .filter(Boolean)
+      .map(serial => String(serial).trim().toUpperCase()));
+    primaryDevice = tr069Devices.find(device => assignedSerials.has(String(device.serialNumber || '').trim().toUpperCase()))
+      || (assignedSerials.size === 0 ? tr069Devices.find(device => device.serialNumber) : null)
+      || null;
     
     if (primaryDevice && primaryDevice.serialNumber) {
       const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, customer.ispId).catch(() => null);

@@ -943,13 +943,25 @@ async function listInvoices(req, res, next) {
             where.isPaid = true;
         } else if (status === 'pending') {
             where.isPaid = false;
+            where.packageEnd = { gte: new Date() };
+        } else if (status === 'overdue') {
+            where.isPaid = false;
+            where.packageEnd = { lt: new Date() };
         }
 
         if (search) {
+            const normalizedSearch = String(search).trim();
+            const invoiceNumber = normalizedSearch.match(/^INV-0*(\d+)$/i)?.[1];
             where.OR = [
-                { invoiceId: { contains: search } },
+                { invoiceId: { contains: normalizedSearch } },
+                ...(invoiceNumber ? [
+                    { invoiceId: { contains: invoiceNumber } },
+                    { id: Number(invoiceNumber) }
+                ] : []),
                 { customer: { lead: { firstName: { contains: search } } } },
-                { customer: { lead: { lastName: { contains: search } } } }
+                { customer: { lead: { lastName: { contains: search } } } },
+                { customer: { customerUniqueId: { contains: normalizedSearch } } },
+                { packagePrice: { packageName: { contains: normalizedSearch } } }
             ];
         }
 
