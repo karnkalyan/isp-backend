@@ -425,7 +425,7 @@ async function resyncPackagePrice(req, res, next) {
 
 async function createBulkPackagePrices(req, res, next) {
   try {
-    const { planId, prices } = req.body;
+    const { planId, packageName, prices } = req.body;
     const ispId = Number(req.ispId);
 
     if (!planId || !Array.isArray(prices) || prices.length === 0) {
@@ -471,7 +471,7 @@ async function createBulkPackagePrices(req, res, next) {
             initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
             renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
             isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
-            packageName: `${plan.planName} - ${duration}`,
+            packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
             isActive: isActive !== false,
             isOnline: isOnline === true,
             isDeleted: false,
@@ -499,7 +499,7 @@ async function createBulkPackagePrices(req, res, next) {
           initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
           renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
           isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
-          packageName: `${plan.planName} - ${duration}`,
+          packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
           isActive: isActive !== false,
           isOnline: isOnline === true,
           ispId: ispId,
