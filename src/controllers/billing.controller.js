@@ -992,6 +992,31 @@ async function listInvoices(req, res, next) {
             : [];
         const paymentMethodById = new Map(paymentMethods.map(method => [method.id, method]));
 
+        // Package creation currently persists add-on links through the explicit
+        // join model (A = package id, B = add-on id). Prisma's implicit relation
+        // does not resolve those legacy rows, so load the same relation used by
+        // the package-creation list and merge it into the invoice response.
+        const packageIds = [...new Set(orders.map(order => order.package).filter(Boolean))];
+        const legacyPackageLinks = packageIds.length
+            ? await prisma.packageonetimecharges.findMany({ where: { A: { in: packageIds } } })
+            : [];
+        const legacyChargeIds = [...new Set(legacyPackageLinks.map(link => link.B))];
+        const legacyCharges = legacyChargeIds.length
+            ? await prisma.OneTimeCharge.findMany({
+                where: { id: { in: legacyChargeIds }, isDeleted: false },
+                orderBy: { id: 'asc' }
+            })
+            : [];
+        const legacyChargeById = new Map(legacyCharges.map(charge => [charge.id, charge]));
+        const legacyChargesByPackage = new Map();
+        for (const link of legacyPackageLinks) {
+            const charge = legacyChargeById.get(link.B);
+            if (!charge) continue;
+            const current = legacyChargesByPackage.get(link.A) || [];
+            current.push(charge);
+            legacyChargesByPackage.set(link.A, current);
+        }
+
         // An add-on applies to the first package invoice regardless of isRenewal;
         // subsequent invoices only include add-ons explicitly marked for renewal.
         // Resolve this from order history instead of the customer's current
@@ -1024,7 +1049,10 @@ async function listInvoices(req, res, next) {
 
             const firstOrderId = firstOrderIdByPackage.get(`${order.customerId}:${order.package}`);
             const isRenewalInvoice = Boolean(firstOrderId && order.id !== firstOrderId);
-            const packageItems = (order.packagePrice?.oneTimeCharges || [])
+            const configuredAddons = legacyChargesByPackage.get(order.package)
+                || order.packagePrice?.oneTimeCharges
+                || [];
+            const packageItems = configuredAddons
                 .filter(item => !isRenewalInvoice || item.isRenewal);
 
             return {
