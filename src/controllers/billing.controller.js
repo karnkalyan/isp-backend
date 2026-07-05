@@ -978,6 +978,11 @@ async function listInvoices(req, res, next) {
             }),
             prisma.customerOrderManagement.count({ where })
         ]);
+        const paymentMethodIds = [...new Set(orders.map(order => order.paymentMethodId).filter(Boolean))];
+        const paymentMethods = paymentMethodIds.length
+            ? await prisma.billingPaymentMethod.findMany({ where: { id: { in: paymentMethodIds }, ispId: req.ispId }, select: { id: true, name: true, code: true } })
+            : [];
+        const paymentMethodById = new Map(paymentMethods.map(method => [method.id, method]));
 
         const formattedInvoices = orders.map(order => {
             const customerName = order.customer?.lead 
@@ -997,6 +1002,8 @@ async function listInvoices(req, res, next) {
                 status: order.isPaid ? 'paid' : (new Date(order.packageEnd) < new Date() ? 'overdue' : 'pending'),
                 packageName: order.packagePrice?.packagePlanDetails?.planName || 'Package Renewal',
                 isTscApplicable: order.packagePrice?.isTscApplicable || false,
+                paymentMethod: order.isPaid ? (paymentMethodById.get(order.paymentMethodId)?.name || order.paymentId || 'Payment') : null,
+                paymentMethodId: order.paymentMethodId || null,
                 items: order.items
             };
         });

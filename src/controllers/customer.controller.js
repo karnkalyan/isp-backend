@@ -1600,6 +1600,18 @@ async function getRealtimeNetworkStatus(prisma, customer) {
   };
 }
 
+async function attachPaymentMethodNames(prisma, ispId, orders = []) {
+  const ids = [...new Set(orders.map(order => order.paymentMethodId).filter(Boolean))];
+  if (!ids.length) return orders;
+  const methods = await prisma.billingPaymentMethod.findMany({
+    where: { id: { in: ids }, ispId },
+    select: { id: true, name: true }
+  });
+  const names = new Map(methods.map(method => [method.id, method.name]));
+  orders.forEach(order => { order.paymentMethodName = names.get(order.paymentMethodId) || null; });
+  return orders;
+}
+
 async function getCustomerProfile(req, res, next) {
   try {
     const customer = enrichCustomerDocumentFields(await findCustomerForAuthenticatedUser(req.prisma, req));
@@ -1613,6 +1625,7 @@ async function getCustomerProfile(req, res, next) {
     const { serials, tr069Devices } = await getCustomerOwnedDeviceSerials(req.prisma, customer);
     const primaryTr069Device = tr069Devices.find((device) => device.serialNumber) || null;
     const primaryDeviceSerial = primaryTr069Device?.serialNumber || null;
+    await attachPaymentMethodNames(req.prisma, customer.ispId, customer.orders);
     const activeSubscription = customer.customerSubscriptions.find((subscription) => subscription.isActive) || customer.customerSubscriptions[0] || null;
     const unpaidOrders = customer.orders.filter((order) => !order.isPaid);
     const outstandingAmount = unpaidOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
@@ -2093,6 +2106,8 @@ async function listCustomers(req, res, next) {
       }),
       req.prisma.customer.count({ where })
     ]);
+
+    await attachPaymentMethodNames(req.prisma, req.ispId, customer.orders);
 
     // Enrich serviceDetails with VLAN objects
     await enrichServiceDetailsWithVlans(req.prisma, customers);

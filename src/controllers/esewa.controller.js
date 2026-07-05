@@ -909,7 +909,7 @@ const processPayment = async (req, res, next) => {
           isActive: true,
           isDeleted: false,
           isPaid: true,
-          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentId: 'ESEWA_TOKEN',
           paymentMethodId: esewaPaymentMethod?.id || null,
           items: {
             create: orderItemsData.map(it => ({
@@ -1132,7 +1132,7 @@ const confirmPayment = async (req, res) => {
           totalAmount: Number(amount),
           orderDate: new Date(),
           isPaid: true,
-          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentId: 'ESEWA_TOKEN',
           paymentMethodId: esewaPaymentMethod?.id || null,
           transactionCode: transaction_code,
           items: {
@@ -1326,7 +1326,7 @@ const completeEpayRenewal = async (req, res, next) => {
           customerId, subscriptionId: newSubscription.id, package: pkg.id,
           orderDate: new Date(), packageStart: planStart, packageEnd: planEnd,
           totalAmount: payment.amount, isPaid: true, isActive: true,
-          paymentId: esewaPaymentMethod?.code || 'ESEWA',
+          paymentId: 'ESEWA_EPAY',
           paymentMethodId: esewaPaymentMethod?.id || null,
           items: { create: [{ itemName: pkg.packageName || 'Package Renewal', referenceId: pkg.referenceId, itemPrice: Math.max(0, payment.amount - itemTotal) }, ...renewalItems] }
         }
@@ -1351,4 +1351,51 @@ const completeEpayRenewal = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry, initiateEpayRenewal, completeEpayRenewal };
+const listTransactions = async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
+    const status = String(req.query.status || '').trim();
+    const search = String(req.query.search || '').trim();
+    const where = {
+      ispId: req.ispId,
+      ...(status && status !== 'ALL' ? { status } : {}),
+      ...(search ? {
+        OR: [
+          { requestId: { contains: search } },
+          { customerUniqueId: { contains: search } },
+          { eSewaTransactionCode: { contains: search } },
+          { referenceCode: { contains: search } }
+        ]
+      } : {})
+    };
+    const [transactions, total] = await Promise.all([
+      req.prisma.eSewaTokenPayment.findMany({
+        where,
+        include: {
+          customer: { include: { lead: { select: { firstName: true, lastName: true, phoneNumber: true, email: true } } } },
+          branch: { select: { id: true, name: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      req.prisma.eSewaTokenPayment.count({ where })
+    ]);
+    return res.json({
+      success: true,
+      transactions: transactions.map(payment => ({
+        ...payment,
+        gatewayMode: payment.packageDetails?.source === 'EPAY_V2' || String(payment.requestId).startsWith('ISP-') ? 'eSewa ePay' : 'eSewa Token',
+        customerName: `${payment.customer?.lead?.firstName || ''} ${payment.customer?.lead?.lastName || ''}`.trim() || payment.customerUniqueId,
+        customerPhone: payment.customer?.lead?.phoneNumber || null,
+        customerEmail: payment.customer?.lead?.email || null
+      })),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry, initiateEpayRenewal, completeEpayRenewal, listTransactions };

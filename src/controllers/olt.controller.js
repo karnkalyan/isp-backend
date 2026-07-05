@@ -39,17 +39,17 @@ async function listOlts(req, res, next) {
 
     if (status && status !== 'all') where.status = status;
     if (vendor && vendor !== 'all') where.vendor = vendor;
-    if (model) where.model = { contains: model, mode: 'insensitive' };
+    if (model) where.model = { contains: model };
 
     if (search) {
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { ipAddress: { contains: search, mode: 'insensitive' } },
-        { model: { contains: search, mode: 'insensitive' } },
-        { vendor: { contains: search, mode: 'insensitive' } },
-        { serialNumber: { contains: search, mode: 'insensitive' } },
-        { region: { contains: search, mode: 'insensitive' } },
-        { site: { contains: search, mode: 'insensitive' } }
+        { name: { contains: search } },
+        { ipAddress: { contains: search } },
+        { model: { contains: search } },
+        { vendor: { contains: search } },
+        { serialNumber: { contains: search } },
+        { region: { contains: search } },
+        { site: { contains: search } }
       ];
     }
 
