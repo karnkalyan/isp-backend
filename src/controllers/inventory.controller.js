@@ -201,7 +201,7 @@ async function listMyAssignedInventory(req, res, next) {
  */
 async function addInventoryItem(req, res, next) {
     try {
-        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, vendorId } = req.body;
+        const { type, name, serialNumber, model, ponSerialNumber, ponVendorIdIncluded, macAddress, branchId, qty, vendorId } = req.body;
         const normalizedType = normalizeInventoryType(type) || 'ONT';
         const ispId = req.ispId;
 
@@ -230,6 +230,7 @@ async function addInventoryItem(req, res, next) {
                     serialNumber,
                     model,
                     ponSerialNumber,
+                    ponVendorIdIncluded: ponVendorIdIncluded !== false,
                     macAddress: formatEponMacAddress(macAddress),
                     ispId,
                     branchId: targetBranchId,
@@ -270,7 +271,7 @@ async function addInventoryItem(req, res, next) {
 async function updateInventoryItem(req, res, next) {
     try {
         const { itemId } = req.params;
-        const { type, name, serialNumber, model, ponSerialNumber, macAddress, branchId, qty, condition, vendorId } = req.body;
+        const { type, name, serialNumber, model, ponSerialNumber, ponVendorIdIncluded, macAddress, branchId, qty, condition, vendorId } = req.body;
         const item = await req.prisma.InventoryItem.findUnique({
             where: { id: Number(itemId) }
         });
@@ -285,6 +286,7 @@ async function updateInventoryItem(req, res, next) {
             ...(serialNumber !== undefined && { serialNumber: serialNumber || null }),
             ...(model !== undefined && { model: model || null }),
             ...(ponSerialNumber !== undefined && { ponSerialNumber: ponSerialNumber || null }),
+            ...(ponVendorIdIncluded !== undefined && { ponVendorIdIncluded: Boolean(ponVendorIdIncluded) }),
             ...(macAddress !== undefined && { macAddress: macAddress ? formatEponMacAddress(macAddress) : null }),
             ...(condition !== undefined && { condition: condition || null }),
             ...(vendorId !== undefined && { vendorId: vendorId === null || vendorId === '' || vendorId === 'none' ? null : Number(vendorId) }),
@@ -863,6 +865,7 @@ async function assignInventoryItem(req, res, next) {
                     serialNumber: updated.serialNumber || '',
                     macAddress: updated.macAddress || '',
                     ponSerial: updated.ponSerialNumber || '',
+                    ponVendorIdIncluded: updated.ponVendorIdIncluded,
                     provisioningStatus: 'PENDING',
                     updatedAt: new Date()
                 }

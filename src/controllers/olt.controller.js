@@ -1386,10 +1386,10 @@ async function getOntsForOlt(req, res, next) {
     // Apply search filter
     if (search) {
       where.OR = [
-        { serialNumber: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-        { servicePort: { contains: search, mode: 'insensitive' } },
-        { ontId: { contains: search, mode: 'insensitive' } }
+        { serialNumber: { contains: search } },
+        { description: { contains: search } },
+        { servicePort: { contains: search } },
+        { ontId: { contains: search } }
       ];
     }
 

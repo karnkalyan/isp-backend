@@ -139,6 +139,46 @@ async function syncDevices(req, res, next) {
   }
 }
 
+// Sync one known TR-069 device without refreshing every ACS device.
+async function syncDevice(req, res, next) {
+  try {
+    const serialNumber = String(req.params.serialNumber || '').trim();
+    if (!serialNumber) return res.status(400).json({ error: 'Serial number is required' });
+    const localDevice = await req.prisma.tr069Device.findFirst({ where: { serialNumber, ispId: req.ispId, isDeleted: false } });
+    if (!localDevice) return res.status(404).json({ error: 'TR-069 device is not linked to this ISP' });
+
+    const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, req.ispId);
+    const device = await genieClient.getDeviceBySerial(serialNumber, {
+      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice'
+    });
+    if (!device) return res.status(404).json({ error: 'Device was not found in ACS' });
+
+    const oldNotes = parseDeviceNotes(localDevice.notes);
+    const username = extractFirstWanValue(device, 'WANPPPConnection', 'Username');
+    const ipAddress = extractFirstWanValue(device, 'WANIPConnection', 'ExternalIPAddress') || extractFirstWanValue(device, 'WANPPPConnection', 'ExternalIPAddress');
+    const updated = await req.prisma.tr069Device.update({
+      where: { id: localDevice.id },
+      data: {
+        oui: device._deviceId?._OUI || localDevice.oui,
+        productClass: device._deviceId?._ProductClass || localDevice.productClass,
+        manufacturer: device._deviceId?._Manufacturer || localDevice.manufacturer,
+        modelName: device._deviceId?._ModelName || localDevice.modelName,
+        status: isOnline(device._lastInform) ? 'online' : 'offline',
+        lastContact: device._lastInform ? new Date(device._lastInform) : localDevice.lastContact,
+        firmwareVersion: extractValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion') || localDevice.firmwareVersion,
+        ipAddress: ipAddress || localDevice.ipAddress,
+        notes: JSON.stringify({ ...oldNotes, username: username || oldNotes.username || null }),
+        isActive: true,
+        updatedAt: new Date()
+      }
+    });
+    return res.json({ success: true, message: `ACS device ${serialNumber} synchronized`, data: updated });
+  } catch (err) {
+    console.error('TR069 device sync error:', err);
+    return next(err);
+  }
+}
+
 // List all TR069 devices from local DB
 async function listDevices(req, res, next) {
   try {
@@ -502,6 +542,7 @@ function parseDeviceNotes(notes) {
 
 module.exports = {
   syncDevices,
+  syncDevice,
   listDevices,
   getDeviceBySerial,
   linkLead,

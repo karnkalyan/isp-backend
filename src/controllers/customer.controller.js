@@ -1109,6 +1109,7 @@ async function createCustomer(req, res, next) {
                 serialNumber: device.serialNumber,
                 macAddress: device.macAddress,
                 ponSerial: device.ponSerial,
+                ponVendorIdIncluded: device.ponVendorIdIncluded !== false,
                 provisioningStatus: 'pending',
               },
             });
@@ -1380,7 +1381,7 @@ function normalizeCustomerLoginUsername(username) {
 function toCustomerLoginEmail(username) {
   const normalized = normalizeCustomerLoginUsername(username);
   if (!normalized) return null;
-  return isValidEmail(normalized) ? normalized : `${normalized}@customer.local`;
+  return normalized;
 }
 
 function isValidPortalLoginIdentifier(value) {
@@ -1594,7 +1595,8 @@ async function getRealtimeNetworkStatus(prisma, customer) {
   return {
     ontRealtimeStatus,
     radiusRealtimeStatus,
-    radiusAccounting
+    radiusAccounting,
+    acsSerial: primaryDevice?.serialNumber || null
   };
 }
 
@@ -1645,7 +1647,8 @@ async function getCustomerProfile(req, res, next) {
         },
         ontRealtimeStatus: realtimeNet.ontRealtimeStatus,
         radiusRealtimeStatus: realtimeNet.radiusRealtimeStatus,
-        radiusAccounting: realtimeNet.radiusAccounting
+        radiusAccounting: realtimeNet.radiusAccounting,
+        primaryDeviceSerial: realtimeNet.acsSerial
       },
     });
   } catch (err) {
@@ -2245,7 +2248,8 @@ async function getCustomerById(req, res, next) {
       lead: undefined,
       ontRealtimeStatus: realtimeNet.ontRealtimeStatus,
       radiusRealtimeStatus: realtimeNet.radiusRealtimeStatus,
-      radiusAccounting: realtimeNet.radiusAccounting
+      radiusAccounting: realtimeNet.radiusAccounting,
+      primaryDeviceSerial: realtimeNet.acsSerial
     };
 
     return res.json(response);
@@ -3706,7 +3710,7 @@ async function updateCustomerDevice(req, res, next) {
     return res.status(400).json({ error: 'Invalid customer or device ID' });
   }
 
-  const { brand, model, serialNumber, macAddress, ponSerial, provisioningStatus, notes } = req.body;
+  const { brand, model, serialNumber, macAddress, ponSerial, ponVendorIdIncluded, provisioningStatus, notes } = req.body;
 
   try {
     const device = await prisma.customerDevice.findFirst({
@@ -3725,6 +3729,7 @@ async function updateCustomerDevice(req, res, next) {
         serialNumber: serialNumber !== undefined ? serialNumber : device.serialNumber,
         macAddress: macAddress !== undefined ? macAddress : device.macAddress,
         ponSerial: ponSerial !== undefined ? ponSerial : device.ponSerial,
+        ponVendorIdIncluded: ponVendorIdIncluded !== undefined ? Boolean(ponVendorIdIncluded) : device.ponVendorIdIncluded,
         provisioningStatus: provisioningStatus !== undefined ? provisioningStatus : device.provisioningStatus,
         notes: notes !== undefined ? notes : device.notes,
         updatedAt: new Date()
@@ -3918,28 +3923,30 @@ async function getCustomerRadiusAuthLogs(req, res, next) {
         const logTime = new Date(log.authdate).getTime();
         
         let matchedSession = null;
-        if (log.reply === 'Access-Accept') {
-          matchedSession = radAcct.find(session => {
-            if (!session.acctstarttime) return false;
-            const sessionTime = new Date(session.acctstarttime).getTime();
-            const diff = Math.abs(sessionTime - logTime);
-            // Timezone-independent check (modulo 15 minutes)
-            const mod = diff % 900000;
-            return mod <= 30000 || (900000 - mod) <= 30000;
-          });
+        if (log.reply === 'Access-Accept' && Array.isArray(radAcct) && radAcct.length > 0) {
+          // An Access-Accept can be written while a PPP session that started days
+          // earlier is still active. Prefer that active session; otherwise use the
+          // accounting record whose start/update time is closest to the auth event.
+          const activeSessions = radAcct.filter(session => !session.acctstoptime && !session.acctStopTime);
+          const candidates = activeSessions.length > 0 ? activeSessions : radAcct;
+          matchedSession = [...candidates].sort((a, b) => {
+            const aTime = new Date(a.acctupdatetime || a.acctUpdateTime || a.acctstarttime || a.acctStartTime || 0).getTime();
+            const bTime = new Date(b.acctupdatetime || b.acctUpdateTime || b.acctstarttime || b.acctStartTime || 0).getTime();
+            return Math.abs(aTime - logTime) - Math.abs(bTime - logTime);
+          })[0] || null;
         }
 
         const mac = findMacAddress(
-          eui64ToMac(matchedSession?.framedinterfaceid),
-          matchedSession?.callingstationid,
-          log.callingstationid,
+          eui64ToMac(matchedSession?.framedinterfaceid || matchedSession?.framedInterfaceId),
+          matchedSession?.callingstationid || matchedSession?.callingStationId,
+          log.callingstationid || log.callingStationId,
           log.mac,
           deviceMac
         );
-        const calledId = log.calledstationid || matchedSession?.calledstationid || 'N/A';
-        const framedIp = log.framedipaddress || matchedSession?.framedipaddress || 'N/A';
-        const nasIp = log.nasipaddress || log.nas || matchedSession?.nasipaddress || 'N/A';
-        const nasPort = log.nasportid || matchedSession?.nasportid || 'N/A';
+        const calledId = log.calledstationid || log.calledStationId || matchedSession?.calledstationid || matchedSession?.calledStationId || 'N/A';
+        const framedIp = log.framedipaddress || log.framedIpAddress || matchedSession?.framedipaddress || matchedSession?.framedIpAddress || 'N/A';
+        const nasIp = log.nasipaddress || log.nasIpAddress || log.nas || matchedSession?.nasipaddress || matchedSession?.nasIpAddress || 'N/A';
+        const nasPort = log.nasportid || log.nasPortId || matchedSession?.nasportid || matchedSession?.nasPortId || 'N/A';
         const reason = log.reply === 'Access-Accept' ? 'Login Success' : 'Incorrect credentials / access-reject';
 
         return {
@@ -4244,6 +4251,15 @@ async function reprovisionRadius(req, res, next) {
         where: { customerId_serviceId: { customerId, serviceId } },
         update: { status: 'active', serviceData: result },
         create: { customerId, serviceId, status: 'active', serviceData: result }
+      });
+    }
+
+    // A successful Radius reprovision is also the activation path for customers
+    // that were originally saved as drafts from the customer creation flow.
+    if (customer.status === 'draft') {
+      await prisma.customer.update({
+        where: { id: customerId },
+        data: { status: 'active', onboardStatus: 'fully_onboarded' }
       });
     }
 

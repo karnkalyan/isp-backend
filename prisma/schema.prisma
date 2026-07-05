@@ -565,19 +565,20 @@ model Customer {
 }
 
 model CustomerDevice {
-  id                 Int      @id @default(autoincrement())
-  customerId         Int
-  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "customer_device_customer_fkey")
-  deviceType         String
-  brand              String?
-  model              String?
-  serialNumber       String?  @unique
-  macAddress         String?  @unique
-  ponSerial          String? // <-- NEW FIELD
-  provisioningStatus String   @default("pending")
-  notes              String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                  Int      @id @default(autoincrement())
+  customerId          Int
+  customer            Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "customer_device_customer_fkey")
+  deviceType          String
+  brand               String?
+  model               String?
+  serialNumber        String?  @unique
+  macAddress          String?  @unique
+  ponSerial           String? // <-- NEW FIELD
+  ponVendorIdIncluded Boolean  @default(true)
+  provisioningStatus  String   @default("pending")
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   @@index([customerId])
   @@index([serialNumber])
@@ -1648,26 +1649,27 @@ model BranchSetting {
 }
 
 model InventoryItem {
-  id              Int                  @id @default(autoincrement())
-  type            InventoryItem_type
-  name            String?
-  serialNumber    String?              @unique(map: "InventoryItem_serialNumber_key")
-  ponSerialNumber String?
-  macAddress      String?
-  status          InventoryItem_status @default(IN_STOCK)
-  condition       String?              @default("Good")
-  ispId           Int
-  branchId        Int?
-  userId          Int?
-  customerId      Int?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime
-  model           String?
-  assignedRoleId  Int?
-  qty             Int                  @default(1)
-  availableQty    Int                  @default(1)
-  vendorId        Int?
-  vendor          Vendor?              @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  id                  Int                  @id @default(autoincrement())
+  type                InventoryItem_type
+  name                String?
+  serialNumber        String?              @unique(map: "InventoryItem_serialNumber_key")
+  ponSerialNumber     String?
+  ponVendorIdIncluded Boolean              @default(true)
+  macAddress          String?
+  status              InventoryItem_status @default(IN_STOCK)
+  condition           String?              @default("Good")
+  ispId               Int
+  branchId            Int?
+  userId              Int?
+  customerId          Int?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime
+  model               String?
+  assignedRoleId      Int?
+  qty                 Int                  @default(1)
+  availableQty        Int                  @default(1)
+  vendorId            Int?
+  vendor              Vendor?              @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@index([branchId], map: "InventoryItem_branchId_idx")
   @@index([customerId], map: "InventoryItem_customerId_idx")

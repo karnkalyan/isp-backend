@@ -4,6 +4,7 @@ const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
 const {
   syncDevices,
+  syncDevice,
   listDevices,
   getDeviceBySerial,
   linkLead,
@@ -25,6 +26,12 @@ module.exports = (prisma) => {
     '/sync',
     checkPermission('services_manage'),
     syncDevices
+  );
+
+  router.post(
+    '/:serialNumber/sync',
+    checkPermission('services_manage'),
+    syncDevice
   );
 
   // List all local devices
