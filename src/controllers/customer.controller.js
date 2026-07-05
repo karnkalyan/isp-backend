@@ -2108,8 +2108,6 @@ async function listCustomers(req, res, next) {
       req.prisma.customer.count({ where })
     ]);
 
-    await attachPaymentMethodNames(req.prisma, req.ispId, customer.orders);
-
     // Enrich serviceDetails with VLAN objects
     await enrichServiceDetailsWithVlans(req.prisma, customers);
 
