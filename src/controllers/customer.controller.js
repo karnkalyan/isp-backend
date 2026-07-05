@@ -2880,15 +2880,19 @@ async function deleteCustomer(req, res, next) {
         data: { isDeleted: true }
       });
 
-      await tx.lead.update({
-        where: { id: existing.leadId },
-        data: {
-          isDeleted: false,
-          convertedToCustomer: false,
-          convertedAt: null,
-          status: 'qualified'
-        }
-      });
+      if (existing.leadId) {
+        await tx.lead.update({
+          where: { id: existing.leadId },
+          data: {
+            isDeleted: false,
+            isActive: true,
+            convertedToCustomer: false,
+            convertedAt: null,
+            convertedById: null,
+            status: 'qualified'
+          }
+        });
+      }
 
       await logAudit(tx, req.user.id, 'CUSTOMER_DELETE_REVERT_LEAD', {
         id,
