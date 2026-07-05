@@ -529,6 +529,12 @@ async function returnItem(req, res, next) {
 
         const fromStatus = item.status;
         const targetStatus = status || 'IN_STOCK'; // Default back to stock if not specified as faulty
+        const assignedDevice = item.customerId
+            ? await req.prisma.CustomerDevice.findFirst({
+                where: { customerId: item.customerId, serialNumber: item.serialNumber },
+                select: { serialNumber: true, ponSerial: true }
+            })
+            : null;
         
         // If returning from customer, we might want to also remove the CustomerDevice entry or mark it
         if (item.customerId) {
@@ -538,6 +544,19 @@ async function returnItem(req, res, next) {
                     customerId: item.customerId,
                     serialNumber: item.serialNumber
                 }
+            });
+        }
+
+        const tr069Serials = [...new Set([
+            item.serialNumber,
+            item.ponSerialNumber,
+            assignedDevice?.serialNumber,
+            assignedDevice?.ponSerial
+        ].filter(Boolean))];
+        if (tr069Serials.length > 0) {
+            await req.prisma.tr069Device.updateMany({
+                where: { ispId: req.ispId, serialNumber: { in: tr069Serials } },
+                data: { leadId: null, updatedAt: new Date() }
             });
         }
 

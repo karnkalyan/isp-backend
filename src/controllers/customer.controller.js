@@ -3970,6 +3970,14 @@ async function deleteCustomerDevice(req, res, next) {
         });
       }
 
+      const tr069Serials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean))];
+      if (tr069Serials.length > 0) {
+        await tx.tr069Device.updateMany({
+          where: { ispId: req.ispId, serialNumber: { in: tr069Serials } },
+          data: { leadId: null, updatedAt: new Date() }
+        });
+      }
+
       // 2. Unassign corresponding InventoryItem if it exists and is assigned to this customer
       if (device.serialNumber) {
         const invItem = await tx.InventoryItem.findFirst({
