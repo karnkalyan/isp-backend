@@ -663,20 +663,24 @@ async function renewSubscription(req, res, next) {
             });
 
             // Create order for renewal
+            const basePrice = customer.isFree ? 0 : (pkgPrice.price || 0);
             const renewalItems = customer.isFree ? [] : pkgPrice.oneTimeCharges.map(item => ({
                 itemName: item.name || 'Renewal Item',
                 referenceId: item.referenceId,
                 itemPrice: Number(item.amount || 0)
             }));
             const renewalItemsTotal = renewalItems.reduce((sum, item) => sum + item.itemPrice, 0);
-            const orderItems = [
-              {
-                  itemName: pkgPrice.packagePlanDetails?.planName || 'Package Renewal',
-                  referenceId: pkgPrice.referenceId,
-                  itemPrice: customer.isFree ? 0 : Math.max(0, expectedAmount - renewalItemsTotal)
-              },
-              ...renewalItems
-            ];
+            
+            const orderItems = [];
+            const remainder = Math.max(0, basePrice - renewalItemsTotal);
+            if (remainder > 0 || renewalItems.length === 0) {
+                orderItems.push({
+                    itemName: pkgPrice.packagePlanDetails?.planName || pkgPrice.packageName || 'Package Renewal',
+                    referenceId: pkgPrice.referenceId,
+                    itemPrice: remainder
+                });
+            }
+            orderItems.push(...renewalItems);
 
             await tx.customerOrderManagement.create({
                 data: {
@@ -989,6 +993,10 @@ async function listInvoices(req, res, next) {
                 ? `${order.customer.lead.firstName} ${order.customer.lead.lastName || ''}`.trim()
                 : 'Unknown';
 
+            const customerAddress = order.customer
+                ? [order.customer.street, order.customer.district, order.customer.state].filter(Boolean).join(', ')
+                : '';
+
             return {
                 id: order.id,
                 invoiceId: order.invoiceId || `INV-${order.id.toString().padStart(4, '0')}`,
@@ -996,15 +1004,22 @@ async function listInvoices(req, res, next) {
                 customerEmail: order.customer?.lead?.email || '',
                 customerPhone: order.customer?.lead?.phoneNumber || '',
                 customerId: order.customer?.customerUniqueId || `CUST-${order.customer?.id}`,
+                customerAddress: customerAddress,
+                customerPan: order.customer?.panNo || '',
                 date: order.orderDate,
                 dueDate: order.packageEnd,
                 amount: order.totalAmount,
                 status: order.isPaid ? 'paid' : (new Date(order.packageEnd) < new Date() ? 'overdue' : 'pending'),
-                packageName: order.packagePrice?.packagePlanDetails?.planName || 'Package Renewal',
+                packageName: order.packagePrice?.packageName || 'Package Renewal',
+                planName: order.packagePrice?.packagePlanDetails?.planName || 'Package Plan',
+                downSpeed: order.packagePrice?.packagePlanDetails?.downSpeed || null,
+                upSpeed: order.packagePrice?.packagePlanDetails?.upSpeed || null,
+                packageDuration: order.packagePrice?.packageDuration || '',
                 isTscApplicable: order.packagePrice?.isTscApplicable || false,
                 paymentMethod: order.isPaid ? (paymentMethodById.get(order.paymentMethodId)?.name || order.paymentId || 'Payment') : null,
                 paymentMethodId: order.paymentMethodId || null,
-                items: order.items
+                items: order.items,
+                packagePrice: order.packagePrice
             };
         });
 
@@ -1271,7 +1286,38 @@ async function savePaymentMethod(req, res, next) {
     } catch (err) { next(err); }
 }
 
+async function updatePaymentMode(req, res, next) {
+    const prisma = req.prisma;
+    const { orderId, paymentMethodId, paymentMethod } = req.body;
+
+    try {
+        const order = await prisma.customerOrderManagement.findUnique({
+            where: { id: Number(orderId) }
+        });
+
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+        
+        const paymentMethodRecord = paymentMethodId 
+            ? await prisma.billingPaymentMethod.findUnique({ where: { id: Number(paymentMethodId) } })
+            : null;
+
+        const updated = await prisma.customerOrderManagement.update({
+            where: { id: order.id },
+            data: {
+                paymentId: paymentMethodRecord ? paymentMethodRecord.code : (paymentMethod || 'CASH'),
+                paymentMethodId: paymentMethodRecord ? paymentMethodRecord.id : null,
+                updatedAt: new Date()
+            }
+        });
+
+        res.json({ success: true, order: updated });
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
+    updatePaymentMode,
     extendSubscription,
     togglePause,
     addAdjustmentItem,

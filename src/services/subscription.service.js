@@ -98,18 +98,23 @@ async function createSubscriptionOrder(prisma, ispId, customerId) {
   const durationStr = String(pkg.packageDuration || "1 month");
   const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr); // Implement this
 
-  const orderItemsData = [
-    {
+  const basePrice = customer.isFree ? 0 : (pkg.price || 0);
+  const otcItemsTotal = otcItems.reduce((sum, item) => sum + item.amount, 0);
+  const remainder = Math.max(0, basePrice - otcItemsTotal);
+
+  const orderItemsData = [];
+  if (remainder > 0 || otcItems.length === 0) {
+    orderItemsData.push({
       itemName: pkg.packagePlanDetails?.planName ? `${pkg.packagePlanDetails.planName} - ${pkg.packageDuration}` : "Base Package",
       referenceId: pkg.referenceId || null,
-      itemPrice: packagePrice
-    },
-    ...otcItems.map(it => ({
-      itemName: it.name,
-      referenceId: it.referenceId,
-      itemPrice: it.amount
-    }))
-  ];
+      itemPrice: remainder
+    });
+  }
+  orderItemsData.push(...otcItems.map(it => ({
+    itemName: it.name,
+    referenceId: it.referenceId,
+    itemPrice: it.amount
+  })));
 
   // Create order in transaction
   const createdOrder = await prisma.$transaction(async tx => {

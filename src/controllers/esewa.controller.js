@@ -259,18 +259,23 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 //     const durationStr = String(pkg.packageDuration || "1 month");
 //     const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr);
 
-//     const orderItemsData = [
-//       {
-//         itemName: pkg.packageName || "Base Package",
-//         referenceId: pkg.referenceId || null,
-//         itemPrice: packagePrice
-//       },
-//       ...otcItems.map(it => ({
-//         itemName: it.name,
-//         referenceId: it.referenceId,
-//         itemPrice: it.amount
-//       }))
-//     ];
+//     const basePrice = customer.isFree ? 0 : (pkg.price || 0);
+    const otcItemsTotal = otcItems.reduce((sum, item) => sum + item.amount, 0);
+    const remainder = Math.max(0, basePrice - otcItemsTotal);
+
+    const orderItemsData = [];
+    if (remainder > 0 || otcItems.length === 0) {
+      orderItemsData.push({
+        itemName: pkg.packageName || "Base Package",
+        referenceId: pkg.referenceId || null,
+        itemPrice: remainder
+      });
+    }
+    orderItemsData.push(...otcItems.map(it => ({
+      itemName: it.name,
+      referenceId: it.referenceId,
+      itemPrice: it.amount
+    })));
 
 //     const createdOrder = await req.prisma.$transaction(async tx => {
 //       const updatedSubData = {

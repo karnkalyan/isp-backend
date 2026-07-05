@@ -720,18 +720,24 @@ class RadiusClient {
       };
       results.radcheck = await this.createRadcheck(radcheckData);
 
+      // Ensure Simultaneous-Use is set to 1 by default
+      const hasSimUse = Object.keys(attributes).some(k => k.toLowerCase() === 'simultaneous-use');
+      if (!hasSimUse) {
+        attributes['Simultaneous-Use'] = '1';
+      }
+
       // 2. Authentication constraints belong in radcheck; response attributes stay in radreply.
       if (Object.keys(attributes).length > 0) {
         results.radcheckAttributes = [];
         results.radreply = [];
         for (const [attribute, value] of Object.entries(attributes)) {
           const normalizedAttribute = String(attribute).toLowerCase();
-          const isCheckAttribute = ['expiration', 'calling-station-id', 'nas-ip-address'].includes(normalizedAttribute);
+          const isCheckAttribute = ['expiration', 'calling-station-id', 'nas-ip-address', 'simultaneous-use'].includes(normalizedAttribute);
           if (isCheckAttribute) {
             const checkResult = await this.createRadcheck({
               username,
               attribute,
-              op: normalizedAttribute === 'expiration' ? ':=' : '==',
+              op: ['expiration', 'simultaneous-use'].includes(normalizedAttribute) ? ':=' : '==',
               value: String(value)
             });
             results.radcheckAttributes.push(checkResult);

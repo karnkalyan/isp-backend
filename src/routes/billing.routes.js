@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+    updatePaymentMode,
     extendSubscription,
     togglePause,
     addAdjustmentItem,
@@ -39,6 +40,7 @@ module.exports = (prisma) => {
     router.post('/adjustments/add', checkPermission('billing_update'), addAdjustmentItem);
     router.post('/adjustments/remove', checkPermission('billing_update'), removeAdjustmentItem);
     router.post('/pay', checkPermission('billing_update'), payOrder);
+    router.post('/update-payment-mode', checkPermission('billing_update'), updatePaymentMode);
     router.post('/renew', checkAnyPermission(['billing_create', 'billing_read_self', 'customer_read']), renewSubscription);
     router.post('/generate-manual', checkPermission('billing_create'), generateManualInvoice);
     router.get('/stats', checkPermission('billing_read'), getBillingStats);

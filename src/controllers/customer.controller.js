@@ -1223,7 +1223,6 @@ async function createCustomer(req, res, next) {
             packageEnd: subscription.planEnd,
             orderDate: new Date(),
             totalAmount: orderItems.reduce((sum, i) => sum + (i.itemPrice || 0), 0),
-            isPaid: false,
             isActive: true,
             isDeleted: false,
             items: { create: orderItems },
@@ -1239,6 +1238,75 @@ async function createCustomer(req, res, next) {
 
       await logAudit(tx, req.user.id, 'CUSTOMER_CREATE', { id: createdCustomer.id, customerUniqueId: customerUniqueId, customerTypeId: targetTypeId }, req);
     });
+
+    // Sync to Radius during new customer creation
+    if (parsedWirelessCredentials.length > 0) {
+      try {
+        const { RadiusClient } = require('../services/radiusClient');
+        const radius = await RadiusClient.create(req.ispId);
+        
+        let radiusGroupName = '';
+        if (subscribedPackage) {
+          radiusGroupName = subscribedPackage.packagePlanDetails?.planCode ||
+                            subscribedPackage.referenceId ||
+                            subscribedPackage.packageName ||
+                            '';
+        }
+        
+        const expiryDate = subscription?.planEnd ? formatRadiusExpiration(subscription.planEnd) : null;
+        const attributes = {};
+        if (expiryDate) attributes.Expiration = expiryDate;
+        const groups = radiusGroupName ? [radiusGroupName] : [];
+
+        // Get Service ID
+        const getServiceIdByCode = async (code) => {
+          const ispService = await prisma.iSPService.findFirst({
+            where: {
+              ispId: req.ispId,
+              isActive: true,
+              isDeleted: false,
+              service: { code: code, isActive: true, isDeleted: false },
+            },
+            include: { service: true },
+          });
+          return ispService?.service?.id;
+        };
+        const serviceId = await getServiceIdByCode('RADIUS');
+
+        let provisioningSucceeded = false;
+        for (const cu of parsedWirelessCredentials) {
+          if (cu.username && cu.password) {
+            const result = await radius.createUser(cu.username, cu.password, attributes, groups);
+            provisioningSucceeded = true;
+
+            try {
+              await radius.sendCoA(cu.username, { action: 'disconnect' });
+            } catch (err) {
+              console.warn(`[RADIUS CREATE] sendCoA disconnect failed: ${err.message}`);
+            }
+
+            if (serviceId) {
+              await prisma.customerSubscribedService.upsert({
+                where: { customerId_serviceId: { customerId: createdCustomer.id, serviceId } },
+                update: { status: 'active', serviceData: result },
+                create: { customerId: createdCustomer.id, serviceId, status: 'active', serviceData: result }
+              });
+            }
+          }
+        }
+
+        if (provisioningSucceeded) {
+          await prisma.customer.update({
+            where: { id: createdCustomer.id },
+            data: { status: 'active', onboardStatus: 'fully_onboarded' }
+          });
+          createdCustomer.status = 'active';
+          createdCustomer.onboardStatus = 'fully_onboarded';
+        }
+      } catch (e) {
+        console.error('Radius sync failed during customer creation:', e.message);
+      }
+    }
 
     // ---------- Documents ----------
     if (req.files) {
@@ -2894,18 +2962,23 @@ const subscribePackage = async (req, res, next) => {
     const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr);
     if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
-    const orderItemsData = [
-      {
+    const basePrice = customer.isFree ? 0 : (pkg.price || 0);
+    const otcItemsTotal = otcItems.reduce((sum, item) => sum + item.amount, 0);
+    const remainder = Math.max(0, basePrice - otcItemsTotal);
+    
+    const orderItemsData = [];
+    if (remainder > 0 || otcItems.length === 0) {
+      orderItemsData.push({
         itemName: pkg.packageName || "Base Package",
         referenceId: pkg.referenceId || null,
-        itemPrice: customer.isFree ? 0 : (pkg.price || 0)
-      },
-      ...otcItems.map(it => ({
-        itemName: it.name,
-        referenceId: it.referenceId,
-        itemPrice: it.amount
-      }))
-    ];
+        itemPrice: remainder
+      });
+    }
+    orderItemsData.push(...otcItems.map(it => ({
+      itemName: it.name,
+      referenceId: it.referenceId,
+      itemPrice: it.amount
+    })));
 
     const createdOrder = await req.prisma.$transaction(async tx => {
       const updatedSubData = {
