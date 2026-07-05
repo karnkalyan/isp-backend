@@ -972,7 +972,11 @@ async function listInvoices(req, res, next) {
                     items: true,
                     packagePrice: {
                         include: {
-                            packagePlanDetails: true
+                            packagePlanDetails: true,
+                            oneTimeCharges: {
+                                where: { isDeleted: false },
+                                orderBy: { id: 'asc' }
+                            }
                         }
                     }
                 },
@@ -988,6 +992,27 @@ async function listInvoices(req, res, next) {
             : [];
         const paymentMethodById = new Map(paymentMethods.map(method => [method.id, method]));
 
+        // An add-on applies to the first package invoice regardless of isRenewal;
+        // subsequent invoices only include add-ons explicitly marked for renewal.
+        // Resolve this from order history instead of the customer's current
+        // isRechargeable flag, which no longer describes historical invoices.
+        const orderPackagePairs = orders
+            .filter(order => order.package)
+            .map(order => ({ customerId: order.customerId, package: order.package }));
+        const firstOrders = orderPackagePairs.length
+            ? await prisma.customerOrderManagement.groupBy({
+                by: ['customerId', 'package'],
+                where: {
+                    isDeleted: false,
+                    OR: orderPackagePairs
+                },
+                _min: { id: true }
+            })
+            : [];
+        const firstOrderIdByPackage = new Map(
+            firstOrders.map(row => [`${row.customerId}:${row.package}`, row._min.id])
+        );
+
         const formattedInvoices = orders.map(order => {
             const customerName = order.customer?.lead 
                 ? `${order.customer.lead.firstName} ${order.customer.lead.lastName || ''}`.trim()
@@ -996,6 +1021,11 @@ async function listInvoices(req, res, next) {
             const customerAddress = order.customer
                 ? [order.customer.street, order.customer.district, order.customer.state].filter(Boolean).join(', ')
                 : '';
+
+            const firstOrderId = firstOrderIdByPackage.get(`${order.customerId}:${order.package}`);
+            const isRenewalInvoice = Boolean(firstOrderId && order.id !== firstOrderId);
+            const packageItems = (order.packagePrice?.oneTimeCharges || [])
+                .filter(item => !isRenewalInvoice || item.isRenewal);
 
             return {
                 id: order.id,
@@ -1019,6 +1049,8 @@ async function listInvoices(req, res, next) {
                 paymentMethod: order.isPaid ? (paymentMethodById.get(order.paymentMethodId)?.name || order.paymentId || 'Payment') : null,
                 paymentMethodId: order.paymentMethodId || null,
                 items: order.items,
+                isRenewalInvoice,
+                packageItems,
                 packagePrice: order.packagePrice
             };
         });
@@ -1291,15 +1323,27 @@ async function updatePaymentMode(req, res, next) {
     const { orderId, paymentMethodId, paymentMethod } = req.body;
 
     try {
-        const order = await prisma.customerOrderManagement.findUnique({
-            where: { id: Number(orderId) }
+        const order = await prisma.customerOrderManagement.findFirst({
+            where: {
+                id: Number(orderId),
+                isPaid: true,
+                isDeleted: false,
+                customer: {
+                    ispId: req.ispId,
+                    ...(req.branchId ? { branchId: req.branchId } : {})
+                }
+            }
         });
 
-        if (!order) return res.status(404).json({ error: 'Order not found' });
+        if (!order) return res.status(404).json({ error: 'Paid invoice not found' });
         
         const paymentMethodRecord = paymentMethodId 
-            ? await prisma.billingPaymentMethod.findUnique({ where: { id: Number(paymentMethodId) } })
+            ? await prisma.billingPaymentMethod.findFirst({ where: { id: Number(paymentMethodId), ispId: req.ispId, isEnabled: true } })
             : null;
+
+        if (paymentMethodId && !paymentMethodRecord) {
+            return res.status(400).json({ error: 'Select a valid enabled payment method' });
+        }
 
         const updated = await prisma.customerOrderManagement.update({
             where: { id: order.id },
