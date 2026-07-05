@@ -449,15 +449,38 @@ class HuaweiOLTDriver {
 
         return this.runSession(async (send) => {
             const boardType = await this.serviceBoardType(slot);
-            const processLogs = { service_ports: [], ont_deletion: "" };
+            const processLogs = { service_ports: [], ont_deletion: "", discovered_service_ports: [] };
 
-            for (const index of service_port_indices) {
+            // Cached ONT details can be stale or empty. Always ask the OLT for
+            // the live service-port list before deleting the ONT and merge it
+            // with any indices supplied by the caller.
+            const servicePortOutput = await send(`display service-port port ${frame}/${slot}/${port} ont ${ont_id}`);
+            const parsedServicePorts = this.parseServicePortByOnt(servicePortOutput);
+            const fallbackIndices = [...servicePortOutput.matchAll(/^\s*(\d+)\s+\d+\s+/gm)]
+                .map(match => Number(match[1]));
+            const labeledIndices = [...servicePortOutput.matchAll(/service-port(?:\s+index)?\s*:\s*(\d+)/gi)]
+                .map(match => Number(match[1]));
+            const liveIndices = parsedServicePorts.map(row => Number(row.index));
+            const indicesToDelete = [...new Set([
+                ...(Array.isArray(service_port_indices) ? service_port_indices : []).map(Number),
+                ...liveIndices,
+                ...fallbackIndices,
+                ...labeledIndices
+            ].filter(index => Number.isInteger(index) && index >= 0))];
+            processLogs.discovered_service_ports = indicesToDelete;
+
+            for (const index of indicesToDelete) {
                 const undoCmd = `undo service-port ${index}`;
                 const undoOutput = await send(undoCmd);
+                const failed = /\bfailure\s*:|\b(error|failed)\b/i.test(undoOutput);
                 processLogs.service_ports.push({
                     index,
-                    status: undoOutput.includes("Failure") ? "Failed" : "Success"
+                    status: failed ? "Failed" : "Success",
+                    result: undoOutput.trim()
                 });
+                if (failed) {
+                    throw new Error(`Failed to delete service port ${index}: ${undoOutput.replace(/\s+/g, ' ').trim()}`);
+                }
             }
 
             if (boardType === 'gpon') {
@@ -465,6 +488,9 @@ class HuaweiOLTDriver {
                 const deleteOutput = await send(`ont delete ${port} ${ont_id}`);
                 processLogs.ont_deletion = deleteOutput.trim();
                 await send('quit');
+                if (/\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
+                    throw new Error(`Failed to delete ONT ${ont_id}: ${deleteOutput.replace(/\s+/g, ' ').trim()}`);
+                }
                 return processLogs;
             }
 
@@ -473,6 +499,9 @@ class HuaweiOLTDriver {
                 const deleteOutput = await send(`ont delete ${port} ${ont_id}`);
                 processLogs.ont_deletion = deleteOutput.trim();
                 await send('quit');
+                if (/\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
+                    throw new Error(`Failed to delete ONT ${ont_id}: ${deleteOutput.replace(/\s+/g, ' ').trim()}`);
+                }
                 return processLogs;
             }
 
