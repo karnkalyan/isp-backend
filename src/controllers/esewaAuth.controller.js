@@ -9,7 +9,7 @@ async function generateEsewaTokens(prisma, esewaConfigId) {
   console.log(`🔐 Using hardcoded secret: "${ESEWA_JWT_SECRET}"`);
   
   const accessTokenExpiry = 250; // seconds
-  const refreshTokenExpiry = 550; // seconds
+  const refreshTokenExpiry = 600; // 10 minutes
 
   // Generate tokens
   const accessToken = jwt.sign(
@@ -144,7 +144,8 @@ const getAccessToken = async (req, res) => {
         access_token: tokens.accessToken,
         token_type: 'Bearer',
         expires_in: 250,
-        refresh_token: tokens.refreshToken
+        refresh_token: tokens.refreshToken,
+        refresh_token_expires_in: 600
       });
       
     } else if (grant_type === 'refresh_token') {
@@ -196,7 +197,8 @@ const getAccessToken = async (req, res) => {
         access_token: tokens.accessToken,
         token_type: 'Bearer',
         expires_in: 250,
-        refresh_token: tokens.refreshToken
+        refresh_token: tokens.refreshToken,
+        refresh_token_expires_in: 600
       });
     } else {
       return res.status(400).json({ 

@@ -602,9 +602,22 @@ const getCustomerContext = async (req, requestId) => {
     where: {
       ispId: req.ispId,
       isDeleted: false,
+      lead: {
+        convertedToCustomer: true,
+        status: "converted"
+      },
       OR: orConditions
     },
     include: {
+      lead: {
+        select: {
+          firstName: true,
+          middleName: true,
+          lastName: true,
+          convertedToCustomer: true,
+          status: true
+        }
+      },
       subscribedPkg: {
         select: {
           id: true,
@@ -682,7 +695,7 @@ const getCustomerContext = async (req, requestId) => {
     }))
   ];
 
-  const fullName = [customer.firstName, customer.middleName, customer.lastName]
+  const fullName = [customer.lead?.firstName, customer.lead?.middleName, customer.lead?.lastName]
     .filter(Boolean)
     .join(" ");
 
@@ -705,7 +718,7 @@ const paymentInquiry = async (req, res, next) => {
   try {
     // Use shared helper to get data
     const context = await getCustomerContext(req, requestId);
-    const { customer, pkg, totalAmount, aggregatedItems, fullName } = context;
+    const { customer, pkg, totalAmount, fullName } = context;
 
     return res.status(200).json({
       request_id: String(requestId),
@@ -723,8 +736,7 @@ const paymentInquiry = async (req, res, next) => {
         package: {
           name: pkg.packageName,
           duration: pkg.packageDuration,
-        },
-        items: aggregatedItems,
+        }
       }
     });
 
