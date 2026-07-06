@@ -298,14 +298,6 @@ class NepurixClient {
       }
 
       const res = await this.#apiRequest('/api/v1/customer', 'POST', payload);
-      if (res && (res.Status === 405 || res.Status === 502 || (res.Error && String(res.Error).includes('405')))) {
-        return {
-          Id: payload.referenceId || payload.ReferenceId || `cust_${Date.now()}`,
-          Name: payload.name || payload.Name,
-          Success: true,
-          Message: 'Customer registered locally (NEPURIX associates customer by name in Sales Invoice)'
-        };
-      }
       return this.#normalizeResult(res);
     },
     get: async (id) => {
