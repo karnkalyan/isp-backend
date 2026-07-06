@@ -360,12 +360,20 @@ class TshulClient {
   };
 
   sales = {
+    list: async () => {
+      const res = await this.#apiRequest('/salesinvoice', 'GET');
+      return this.#normalizeResult(res);
+    },
     create: async (payload) => {
       const res = await this.#apiRequest('/salesinvoice', 'POST', payload);
       return this.#normalizeResult(res);
     },
     get: async (id) => {
       const res = await this.#apiRequest(`/salesinvoice/${id}`, 'GET');
+      return this.#normalizeResult(res);
+    },
+    update: async (id, payload) => {
+      const res = await this.#apiRequest(`/salesinvoice/${id}`, 'PUT', payload);
       return this.#normalizeResult(res);
     },
   };

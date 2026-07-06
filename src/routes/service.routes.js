@@ -68,6 +68,13 @@ module.exports = (prisma) => {
     router.put('/nepurix/customers/:refrenceId', checkPermission('services_manage'), serviceController.updateNepurixCustomer.bind(serviceController));
     router.delete('/nepurix/customers/:refrenceId', checkPermission('services_manage'), serviceController.deleteNepurixCustomer.bind(serviceController));
 
+    // Unified accounting dashboards (TSHUL / NEPURIX)
+    router.get('/accounting/:provider/dashboard', checkPermission('services_read'), serviceController.getAccountingDashboard.bind(serviceController));
+    router.get('/accounting/:provider/:resource', checkPermission('services_read'), serviceController.listAccountingResources.bind(serviceController));
+    router.get('/accounting/:provider/:resource/:id', checkPermission('services_read'), serviceController.getAccountingResource.bind(serviceController));
+    router.post('/accounting/:provider/:resource', checkPermission('services_manage'), serviceController.createAccountingResource.bind(serviceController));
+    router.put('/accounting/:provider/:resource/:id', checkPermission('services_manage'), serviceController.updateAccountingResource.bind(serviceController));
+
     // Radius Operations
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));
     router.get('/radius/act/:username', checkPermission('services_read'), serviceController.getRadiusAccountbyUser.bind(serviceController));

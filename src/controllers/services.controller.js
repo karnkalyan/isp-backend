@@ -1131,6 +1131,106 @@ class ServiceController {
     }
   }
 
+  #getAccountingClient(provider, ispId) {
+    const code = String(provider || '').toUpperCase();
+    if (![SERVICE_CODES.TSHUL, SERVICE_CODES.NEPURIX].includes(code)) {
+      const error = new Error('Accounting provider must be TSHUL or NEPURIX');
+      error.statusCode = 400;
+      throw error;
+    }
+    return ServiceFactory.getClient(code, ispId);
+  }
+
+  #accountingResource(client, resource) {
+    const normalized = String(resource || '').toLowerCase();
+    if (normalized === 'customers') return client.customer;
+    if (normalized === 'items') return client.item;
+    if (normalized === 'sales-invoices') return client.sales;
+    const error = new Error('Resource must be customers, items, or sales-invoices');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  #accountingArray(result) {
+    if (Array.isArray(result)) return result;
+    if (Array.isArray(result?.Data)) return result.Data;
+    if (Array.isArray(result?.data)) return result.data;
+    if (Array.isArray(result?.items)) return result.items;
+    if (Array.isArray(result?.results)) return result.results;
+    return [];
+  }
+
+  async getAccountingDashboard(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const [customersResult, itemsResult, invoicesResult] = await Promise.allSettled([
+        client.customer.list(), client.item.list(), client.sales.list()
+      ]);
+      const customers = this.#accountingArray(customersResult.status === 'fulfilled' ? customersResult.value : []);
+      const items = this.#accountingArray(itemsResult.status === 'fulfilled' ? itemsResult.value : []);
+      const salesInvoices = this.#accountingArray(invoicesResult.status === 'fulfilled' ? invoicesResult.value : []);
+      const invoiceTotal = salesInvoices.reduce((sum, invoice) => sum + Number(invoice.NetAmount ?? invoice.netAmount ?? invoice.TotalAmount ?? invoice.totalAmount ?? 0), 0);
+      return res.json({
+        success: true,
+        data: {
+          totals: { customers: customers.length, items: items.length, salesInvoices: salesInvoices.length, invoiceAmount: invoiceTotal },
+          customers,
+          items,
+          salesInvoices,
+          errors: {
+            customers: customersResult.status === 'rejected' ? customersResult.reason?.message : null,
+            items: itemsResult.status === 'rejected' ? itemsResult.reason?.message : null,
+            salesInvoices: invoicesResult.status === 'rejected' ? invoicesResult.reason?.message : null
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Accounting dashboard error:', error);
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
+  async listAccountingResources(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const resource = this.#accountingResource(client, req.params.resource);
+      const result = await resource.list();
+      return res.json({ success: true, data: this.#accountingArray(result), raw: result });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
+  async getAccountingResource(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const result = await this.#accountingResource(client, req.params.resource).get(req.params.id);
+      return res.json({ success: true, data: result?.Data ?? result?.data ?? result });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
+  async createAccountingResource(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const result = await this.#accountingResource(client, req.params.resource).create(req.body);
+      return res.status(201).json({ success: true, data: result?.Data ?? result?.data ?? result });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
+  async updateAccountingResource(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const result = await this.#accountingResource(client, req.params.resource).update(req.params.id, req.body);
+      return res.json({ success: true, data: result?.Data ?? result?.data ?? result });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
   // Radius Operations
   async getRadiusUsers(req, res) {
     try {

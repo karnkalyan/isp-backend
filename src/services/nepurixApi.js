@@ -378,12 +378,20 @@ class NepurixClient {
   };
 
   sales = {
+    list: async () => {
+      const res = await this.#apiRequest('/api/v1/sales-invoice', 'GET');
+      return this.#normalizeResult(res);
+    },
     create: async (payload) => {
       const res = await this.#apiRequest('/api/v1/sales-invoice', 'POST', payload);
       return this.#normalizeResult(res);
     },
     get: async (id) => {
       const res = await this.#apiRequest(`/api/v1/sales-invoice?id=${id}`, 'GET');
+      return this.#normalizeResult(res);
+    },
+    update: async (id, payload) => {
+      const res = await this.#apiRequest(`/api/v1/sales-invoice?id=${id}`, 'PUT', payload);
       return this.#normalizeResult(res);
     },
   };
