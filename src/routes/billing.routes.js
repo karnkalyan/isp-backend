@@ -20,6 +20,7 @@ const {
     updateFiscalYear,
     listPaymentMethods,
     savePaymentMethod
+    ,syncInvoiceToAccounting
 } = require('../controllers/billing.controller');
 
 const isAuthenticated = require('../middlewares/isAuthenticated');
@@ -48,6 +49,7 @@ module.exports = (prisma) => {
     // New Invoices endpoints
     router.get('/invoices', checkAnyPermission(['billing_read', 'billing_read_self']), listInvoices);
     router.get('/invoices/summary', checkAnyPermission(['billing_read', 'billing_read_self']), getInvoiceSummary);
+    router.post('/invoices/:id/sync-accounting', checkPermission('billing_update'), syncInvoiceToAccounting);
 
     // New Invoice Range allocation endpoints
     router.get('/invoice-ranges', checkAnyPermission(['billing_read', 'billing_read_self']), listInvoiceRanges);

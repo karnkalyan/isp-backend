@@ -2313,16 +2313,18 @@ async function getCustomerById(req, res, next) {
     }
     const firstOrderIdByPackage = new Map();
     for (const order of customer.orders || []) {
-      if (!order.package) continue;
+      if (!order.package || Number(order.totalAmount || 0) <= 0) continue;
       const current = firstOrderIdByPackage.get(order.package);
       if (current === undefined || order.id < current) firstOrderIdByPackage.set(order.package, order.id);
     }
     customer.orders = (customer.orders || []).map(order => {
-      const isRenewalOrder = firstOrderIdByPackage.has(order.package) && order.id !== firstOrderIdByPackage.get(order.package);
+      const isTrialOrder = Number(order.totalAmount || 0) === 0;
+      const isRenewalOrder = !isTrialOrder && firstOrderIdByPackage.has(order.package) && order.id !== firstOrderIdByPackage.get(order.package);
       return {
         ...order,
+        isTrialOrder,
         isRenewalOrder,
-        packageItems: (chargesByPackage.get(order.package) || order.packagePrice?.oneTimeCharges || [])
+        packageItems: isTrialOrder ? [] : (chargesByPackage.get(order.package) || order.packagePrice?.oneTimeCharges || [])
           .filter(item => !isRenewalOrder || item.isRenewal)
       };
     });

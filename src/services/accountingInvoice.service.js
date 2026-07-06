@@ -35,7 +35,7 @@ function taxName(isTaxable, isTscApplicable) {
 }
 
 async function loadOrder(prisma, ispId, orderId) {
-  return prisma.customerOrderManagement.findFirst({
+  const order = await prisma.customerOrderManagement.findFirst({
     where: { id: Number(orderId), isDeleted: false, customer: { ispId: Number(ispId) } },
     include: {
       items: true,
@@ -48,6 +48,19 @@ async function loadOrder(prisma, ispId, orderId) {
       }
     }
   });
+  if (!order?.package) return order;
+
+  // Package item links are stored in the explicit legacy join table. Load
+  // those definitions so each historical order line keeps its VAT/TSC rule.
+  const links = await prisma.packageonetimecharges.findMany({ where: { A: order.package } });
+  if (links.length) {
+    const charges = await prisma.OneTimeCharge.findMany({
+      where: { id: { in: links.map(link => link.B) }, isDeleted: false },
+      orderBy: { id: 'asc' }
+    });
+    order.packagePrice = { ...order.packagePrice, oneTimeCharges: charges };
+  }
+  return order;
 }
 
 async function buildNepurixPayload(prisma, ispId, order) {

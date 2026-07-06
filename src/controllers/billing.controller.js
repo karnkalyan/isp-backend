@@ -1060,6 +1060,7 @@ async function listInvoices(req, res, next) {
                 by: ['customerId', 'package'],
                 where: {
                     isDeleted: false,
+                    totalAmount: { gt: 0 },
                     OR: orderPackagePairs
                 },
                 _min: { id: true }
@@ -1081,12 +1082,14 @@ async function listInvoices(req, res, next) {
                 : '';
 
             const firstOrderId = firstOrderIdByPackage.get(`${order.customerId}:${order.package}`);
-            const isRenewalInvoice = Boolean(firstOrderId && order.id !== firstOrderId);
+            const isTrialInvoice = Number(order.totalAmount || 0) === 0;
+            const isRenewalInvoice = !isTrialInvoice && Boolean(firstOrderId && order.id !== firstOrderId);
             const configuredAddons = legacyChargesByPackage.get(order.package)
                 || order.packagePrice?.oneTimeCharges
                 || [];
-            const packageItems = configuredAddons
-                .filter(item => !isRenewalInvoice || item.isRenewal);
+            const packageItems = isTrialInvoice
+                ? []
+                : configuredAddons.filter(item => !isRenewalInvoice || item.isRenewal);
 
             return {
                 id: order.id,
@@ -1116,6 +1119,7 @@ async function listInvoices(req, res, next) {
                 accountingInvoice,
                 items: order.items,
                 isRenewalInvoice,
+                isTrialInvoice,
                 packageItems,
                 packagePrice: order.packagePrice
             };
@@ -1132,6 +1136,27 @@ async function listInvoices(req, res, next) {
                 totalPages: Math.ceil(total / Number(limit))
             }
         });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function syncInvoiceToAccounting(req, res, next) {
+    try {
+        const order = await req.prisma.customerOrderManagement.findFirst({
+            where: {
+                id: Number(req.params.id),
+                isDeleted: false,
+                isPaid: true,
+                totalAmount: { gt: 0 },
+                customer: { ispId: req.ispId, ...(req.branchId ? { branchId: req.branchId } : {}) }
+            }
+        });
+        if (!order) return res.status(404).json({ error: 'Paid non-trial invoice not found' });
+
+        const accountingInvoice = await syncOrderToAccounting(req.prisma, req.ispId, order.id);
+        const updated = await req.prisma.customerOrderManagement.findUnique({ where: { id: order.id } });
+        return res.json({ success: true, accountingInvoice, order: updated });
     } catch (err) {
         next(err);
     }
@@ -1447,4 +1472,5 @@ module.exports = {
     ,updateFiscalYear
     ,listPaymentMethods
     ,savePaymentMethod
+    ,syncInvoiceToAccounting
 };
