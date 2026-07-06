@@ -338,35 +338,32 @@ class ServiceFactory {
         const clients = [];
 
         if (activeServices.length > 0) {
-            // Accounting providers are mutually exclusive. Prefer the configured
-            // default and use the first active provider only as a legacy fallback.
-            const selectedService = activeServices.find(s => {
+            // Accounting providers are mutually exclusive. Select exactly one
+            // enabled default and repair legacy configurations that have no
+            // default (or more than one default) while loading the provider.
+            const defaultServices = activeServices.filter(s => {
                 const config = s.config && typeof s.config === 'object' ? s.config : {};
                 return config.isDefault === true;
-            }) || activeServices[0];
+            });
+            const selectedService = defaultServices[0] || activeServices[0];
+
+            if (defaultServices.length !== 1) {
+                await Promise.all(activeServices.map(service => {
+                    const currentConfig = service.config && typeof service.config === 'object' ? service.config : {};
+                    const shouldBeDefault = service.id === selectedService.id;
+                    if (currentConfig.isDefault === shouldBeDefault) return Promise.resolve();
+                    return prismaClient.iSPService.update({
+                        where: { id: service.id },
+                        data: { config: { ...currentConfig, isDefault: shouldBeDefault } }
+                    });
+                }));
+            }
             for (const service of [selectedService]) {
                 try {
                     const client = await this.getClient(service.service.code, ispId, prismaClient);
                     clients.push({ code: service.service.code, client });
                 } catch (err) {
                     console.error(`[ServiceFactory] Failed to initialize active client for ${service.service.code}:`, err.message);
-                }
-            }
-        }
-
-        // If none is active, fall back to the one configured as default
-        if (clients.length === 0) {
-            const defaultService = billingServices.find(s => {
-                const config = s.config && typeof s.config === 'object' ? s.config : {};
-                return config.isDefault === true;
-            });
-
-            if (defaultService) {
-                try {
-                    const client = await this.getClient(defaultService.service.code, ispId, prismaClient);
-                    clients.push({ code: defaultService.service.code, client });
-                } catch (err) {
-                    console.error(`[ServiceFactory] Failed to initialize default client for ${defaultService.service.code}:`, err.message);
                 }
             }
         }
