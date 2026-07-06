@@ -614,9 +614,19 @@ const getCustomerContext = async (req, requestId) => {
           firstName: true,
           middleName: true,
           lastName: true,
+          phoneNumber: true,
           convertedToCustomer: true,
           status: true
         }
+      },
+      portalUser: {
+        select: { email: true }
+      },
+      customerSubscriptions: {
+        where: { isActive: true, isDeleted: false },
+        orderBy: { planEnd: "desc" },
+        take: 1,
+        select: { planEnd: true }
       },
       subscribedPkg: {
         select: {
@@ -721,23 +731,28 @@ const paymentInquiry = async (req, res, next) => {
     const { customer, pkg, totalAmount, fullName } = context;
 
     return res.status(200).json({
-      request_id: String(requestId),
-      response_code: "00",
-      response_message: "SUCCESS",
       amount: totalAmount,
+      request_id: String(requestId),
+      response_code: 0,
+      response_message: "success",
       properties: {
-        customer: {
-          id: customer.id,
-          customerUniqueId: customer.customerUniqueId || null,
-          name: fullName,
-          // phone: customer.phoneNumber || null,
-          // email: customer.email || null,
-        },
-        package: {
-          name: pkg.packageName,
-          duration: pkg.packageDuration,
+        username: customer.portalUser?.email || String(requestId),
+        customer_name: fullName,
+        customer_id: customer.customerUniqueId || String(customer.id),
+        expiry_date: customer.customerSubscriptions?.[0]?.planEnd
+          ? new Date(customer.customerSubscriptions[0].planEnd).toISOString().slice(0, 10)
+          : null,
+        phone: customer.lead?.phoneNumber || null
+      },
+      packages: [
+        {
+          display: `${pkg.packageName}. [ ${pkg.packageDuration} at ${totalAmount} ]`,
+          value: totalAmount,
+          properties: {
+            package_id: pkg.id
+          }
         }
-      }
+      ]
     });
 
   } catch (err) {
