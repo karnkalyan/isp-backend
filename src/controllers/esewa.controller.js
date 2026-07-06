@@ -3,6 +3,13 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
 
+function generateEsewaReferenceCode(orderId) {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const random = crypto.randomBytes(6).toString('hex').toUpperCase();
+  const orderNumber = String(orderId || 0).padStart(2, '0');
+  return `${date}-${random}-${orderNumber}`;
+}
+
 function getRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
   const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
@@ -775,6 +782,13 @@ const processPayment = async (req, res, next) => {
   const transactionCode = req.body.transaction_code || null;
 
   try {
+    if (!requestId || req.body.amount === undefined || !transactionCode) {
+      return res.status(400).json({
+        response_code: 1,
+        response_message: "request_id, amount and transaction_code are required"
+      });
+    }
+
     // 1. Get Context
     const context = await getCustomerContext(req, requestId);
     const {
@@ -782,12 +796,17 @@ const processPayment = async (req, res, next) => {
       fullName, otcItems, packagePrice
     } = context;
 
+    if (req.body.package_id !== undefined && Number(req.body.package_id) !== Number(pkg.id)) {
+      return res.status(400).json({
+        response_code: 1,
+        response_message: "Invalid package"
+      });
+    }
+
     if (req.body.amount !== undefined && Number(req.body.amount) !== Number(totalAmount)) {
       return res.status(400).json({
-        request_id: String(requestId),
         response_code: 1,
-        response_message: "AMOUNT_MISMATCH",
-        amount: totalAmount
+        response_message: "Payment amount mismatch"
       });
     }
 
@@ -799,10 +818,8 @@ const processPayment = async (req, res, next) => {
 
     if (!subscription) {
       return res.status(404).json({
-        request_id: String(requestId),
-        response_code: "04",
-        response_message: "NO_ACTIVE_SUBSCRIPTION",
-        error: "No active subscription found."
+        response_code: 1,
+        response_message: "No active subscription found"
       });
     }
 
@@ -813,18 +830,22 @@ const processPayment = async (req, res, next) => {
 
     // If payment exists and is completed, check if we should reprocess
     if (existingPayment && existingPayment.status === 'COMPLETED') {
-      // Option 1: Return already processed response
+      // eSewa may retry confirmation. Return the original successful
+      // reconciliation reference instead of internal payment details.
+      let referenceCode = existingPayment.referenceCode;
+      if (!referenceCode || /^ORD-\d+$/i.test(referenceCode)) {
+        referenceCode = generateEsewaReferenceCode(existingPayment.orderId);
+        await req.prisma.eSewaTokenPayment.update({
+          where: { id: existingPayment.id },
+          data: { referenceCode }
+        });
+      }
       return res.status(200).json({
         request_id: String(requestId),
-        response_code: "01",
-        response_message: "ALREADY_PROCESSED",
+        response_code: 0,
+        response_message: "Payment successful",
         amount: existingPayment.amount,
-        properties: {
-          customerId: customer.id,
-          orderId: existingPayment.orderId,
-          payment_reference: existingPayment.referenceCode,
-          note: "This payment was already processed successfully."
-        }
+        reference_code: referenceCode
       });
 
       // Option 2: If you want to allow reprocessing for same requestId, 
@@ -956,7 +977,7 @@ const processPayment = async (req, res, next) => {
           status: 'COMPLETED',
           paidAt: new Date(),
           orderId: String(newOrder.id),  // Convert to string here
-          referenceCode: `ORD-${newOrder.id}`,
+          referenceCode: generateEsewaReferenceCode(newOrder.id),
           ...(transactionCode ? { eSewaTransactionCode: transactionCode } : {})
         }
       });
@@ -964,7 +985,7 @@ const processPayment = async (req, res, next) => {
       return { order: newOrder, payment: updatedPayment };
     });
 
-    const { order: createdOrder } = result;
+    const { order: createdOrder, payment: completedPayment } = result;
 
     // 6. Radius Provisioning
     const radiusProvisioned = [];
@@ -1019,24 +1040,12 @@ const processPayment = async (req, res, next) => {
     }
 
     // 8. Success Response
-    return res.status(201).json({
+    return res.status(200).json({
       request_id: String(requestId),
-      response_code: "00",
-      response_message: "SUCCESS",
+      response_code: 0,
+      response_message: "Payment successful",
       amount: totalAmount,
-      properties: {
-        customerId: customer.id,
-        order: {
-          id: createdOrder.id,
-          totalAmount: createdOrder.totalAmount,
-          packageEnd: createdOrder.packageEnd,
-        },
-        payment_reference: `ORD-${createdOrder.id}`,
-        radiusProvisioned,
-        accountingProvider,
-        tshulInvoice,
-        nepurixInvoice
-      }
+      reference_code: completedPayment.referenceCode
     });
 
   } catch (err) {
@@ -1059,10 +1068,8 @@ const processPayment = async (req, res, next) => {
     }
 
     return res.status(err.statusCode || 500).json({
-      request_id: String(requestId || ""),
-      response_code: err.code || "99",
-      response_message: "FAILED",
-      error: err.message
+      response_code: 1,
+      response_message: err.message || "Payment failed"
     });
   }
 };
@@ -1200,7 +1207,7 @@ const confirmPayment = async (req, res) => {
       response_code: 0,
       response_message: "Payment successful",
       amount,
-      reference_code: `ORD-${createdOrder.id}`
+      reference_code: generateEsewaReferenceCode(createdOrder.id)
     });
 
   } catch (error) {
