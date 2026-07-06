@@ -1231,6 +1231,20 @@ class ServiceController {
     }
   }
 
+  async deleteAccountingResource(req, res) {
+    try {
+      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const resource = this.#accountingResource(client, req.params.resource);
+      if (typeof resource.delete !== 'function') {
+        return res.status(405).json({ success: false, error: 'Delete not supported for this resource' });
+      }
+      const result = await resource.delete(req.params.id);
+      return res.json({ success: true, data: result?.Data ?? result?.data ?? result });
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+  }
+
   // Radius Operations
   async getRadiusUsers(req, res) {
     try {

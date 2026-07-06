@@ -4597,29 +4597,69 @@ async function reprovisionAccount(req, res, next) {
       customer.lead?.zipCode || customer.zipCode,
     ].filter(Boolean);
 
-    const defaultPayload = {
-      Name: name,
-      ReferenceId: customer.customerUniqueId || `cust_${customer.id}`,
-      PanNo: customer.panNumber || customer.lead?.panNumber || '',
-      Address: addressParts.join(', ') || customer.lead?.address || customer.address || '',
-      City: customer.lead?.city || customer.city || '',
-      Province: customer.lead?.province || customer.state || '',
-      PostalCode: customer.lead?.zipCode || customer.zipCode || '',
-      Country: 'Nepal',
-      Phone: customer.phoneNumber || customer.lead?.phoneNumber || '',
-      Email: customer.email || customer.lead?.email || '',
-      Website: '',
-      ContactPerson: name,
-      ContactPersonPhone: customer.phoneNumber || customer.lead?.phoneNumber || '',
-      Bank: '',
-      AcNo: '',
-      AcName: '',
-      CustomerId: customer.idNumber || customer.customerUniqueId || String(customer.id),
-      Notes: `Reprovisioned from customer profile. Customer ID: ${customer.id}`,
+    // Base customer data (provider-neutral)
+    const baseData = {
+      name: name,
+      referenceId: customer.customerUniqueId || `cust_${customer.id}`,
+      panNo: customer.panNumber || customer.lead?.panNumber || '',
+      address: addressParts.join(', ') || customer.lead?.address || customer.address || '',
+      city: customer.lead?.city || customer.city || '',
+      province: customer.lead?.province || customer.state || '',
+      postalCode: customer.lead?.zipCode || customer.zipCode || '',
+      country: 'Nepal',
+      phone: customer.phoneNumber || customer.lead?.phoneNumber || '',
+      email: customer.email || customer.lead?.email || '',
+      website: '',
+      contactPerson: name,
+      contactPersonPhone: customer.phoneNumber || customer.lead?.phoneNumber || '',
+      bank: '',
+      acNo: '',
+      acName: '',
+      customerId: customer.idNumber || customer.customerUniqueId || String(customer.id),
+      notes: `Reprovisioned from customer profile. Customer ID: ${customer.id}`,
+    };
+
+    // TSHUL uses PascalCase keys, NEPURIX uses camelCase keys
+    const buildProviderPayload = (code, data) => {
+      if (code === 'TSHUL') {
+        return {
+          Name: data.name,
+          ReferenceId: data.referenceId,
+          PanNo: data.panNo,
+          Address: data.address,
+          City: data.city,
+          Province: data.province,
+          PostalCode: data.postalCode,
+          Country: data.country,
+          Phone: data.phone,
+          Email: data.email,
+          Website: data.website,
+          ContactPerson: data.contactPerson,
+          ContactPersonPhone: data.contactPersonPhone,
+          Bank: data.bank,
+          AcNo: data.acNo,
+          AcName: data.acName,
+          CustomerId: data.customerId,
+          Notes: data.notes,
+        };
+      }
+      // NEPURIX uses camelCase
+      return {
+        name: data.name,
+        panNo: data.panNo,
+        address: data.address,
+        city: data.city,
+        province: data.province,
+        postalCode: data.postalCode,
+        country: data.country,
+        phone: data.phone,
+        email: data.email,
+        contactPerson: data.contactPerson,
+        contactPersonPhone: data.contactPersonPhone,
+      };
     };
 
     const requestPayload = req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
-    const payload = { ...defaultPayload, ...requestPayload };
     const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
 
     if (!activeBillingClients.length) {
@@ -4645,6 +4685,8 @@ async function reprovisionAccount(req, res, next) {
     const results = [];
     for (const billingClient of activeBillingClients) {
       try {
+        const providerPayload = buildProviderPayload(billingClient.code, baseData);
+        const payload = { ...providerPayload, ...requestPayload };
         const result = await billingClient.client.customer.create(payload);
         const apiError = result?.Error || result?.Errors || result?.error;
         if (apiError) {
@@ -4679,6 +4721,7 @@ async function reprovisionAccount(req, res, next) {
     return res.status(500).json({ error: 'Account reprovisioning failed', details: error.message });
   }
 }
+
 
 async function disconnectRadiusSession(req, res, next) {
   const prisma = req.prisma;

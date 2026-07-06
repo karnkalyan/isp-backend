@@ -74,6 +74,7 @@ module.exports = (prisma) => {
     router.get('/accounting/:provider/:resource/:id', checkPermission('services_read'), serviceController.getAccountingResource.bind(serviceController));
     router.post('/accounting/:provider/:resource', checkPermission('services_manage'), serviceController.createAccountingResource.bind(serviceController));
     router.put('/accounting/:provider/:resource/:id', checkPermission('services_manage'), serviceController.updateAccountingResource.bind(serviceController));
+    router.delete('/accounting/:provider/:resource/:id', checkPermission('services_manage'), serviceController.deleteAccountingResource.bind(serviceController));
 
     // Radius Operations
     router.get('/radius/users', checkPermission('services_read'), serviceController.getRadiusUsers.bind(serviceController));
