@@ -38,7 +38,9 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
       } else {
         const newRecord = await prisma.OneTimeCharge.create({
           data: {
-            name: `${original.name} (${amount})`,
+            // Keep the catalog item identity/name stable. The generated code,
+            // reference ID and rate carry the package-specific price variant.
+            name: original.name,
             code: newCode,
             referenceId,
             description: original.description,

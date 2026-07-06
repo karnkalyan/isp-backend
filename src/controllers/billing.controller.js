@@ -2,6 +2,16 @@ const { computeExpiryFromBase } = require('../utils/dateHelper');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const { RadiusClient } = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
+const { syncOrderToAccounting, fetchAccountingInvoices } = require('../services/accountingInvoice.service');
+
+async function syncPaidOrderAccounting(prisma, ispId, orderId) {
+    try {
+        return await syncOrderToAccounting(prisma, ispId, orderId);
+    } catch (error) {
+        console.error('[ACCOUNTING] Sales invoice sync failed:', { ispId, orderId, error: error.message });
+        return null;
+    }
+}
 
 async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expiration, context) {
     const users = (connectionUsers || []).filter(user => user?.username && user.isDeleted !== true && user.isActive !== false);
@@ -519,6 +529,8 @@ async function payOrder(req, res, next) {
             await syncRadiusExpirationAndDisconnect(req.ispId, pppUsers, subscription.planEnd, 'payment approval');
         }
 
+        await syncPaidOrderAccounting(prisma, req.ispId, updatedOrder.id);
+
         res.json(updatedOrder);
     } catch (err) {
         next(err);
@@ -808,6 +820,13 @@ async function renewSubscription(req, res, next) {
             console.error('Recharge notification dispatch error:', notifErr.message);
         }
 
+        const paidOrder = await prisma.customerOrderManagement.findFirst({
+            where: { subscriptionId: newSub.id, isPaid: true },
+            orderBy: { id: 'desc' },
+            select: { id: true }
+        });
+        if (paidOrder) await syncPaidOrderAccounting(prisma, req.ispId, paidOrder.id);
+
         res.json({ success: true, subscription: newSub });
     } catch (err) {
         next(err);
@@ -1050,7 +1069,9 @@ async function listInvoices(req, res, next) {
             firstOrders.map(row => [`${row.customerId}:${row.package}`, row._min.id])
         );
 
+        const accountingInvoices = await fetchAccountingInvoices(prisma, req.ispId, orders);
         const formattedInvoices = orders.map(order => {
+            const accountingInvoice = accountingInvoices.get(order.id) || null;
             const customerName = order.customer?.lead 
                 ? `${order.customer.lead.firstName} ${order.customer.lead.lastName || ''}`.trim()
                 : 'Unknown';
@@ -1088,6 +1109,11 @@ async function listInvoices(req, res, next) {
                 isTscApplicable: order.packagePrice?.isTscApplicable || false,
                 paymentMethod: order.isPaid ? (paymentMethodById.get(order.paymentMethodId)?.name || order.paymentId || 'Payment') : null,
                 paymentMethodId: order.paymentMethodId || null,
+                accountingProvider: order.accountingProvider || null,
+                accountingInvoiceId: order.accountingInvoiceId || null,
+                accountingInvoiceUrl: order.accountingInvoiceUrl || accountingInvoice?.InvoicePrintUrl || accountingInvoice?.invoicePrintUrl || null,
+                accountingSyncError: order.accountingSyncError || null,
+                accountingInvoice,
                 items: order.items,
                 isRenewalInvoice,
                 packageItems,

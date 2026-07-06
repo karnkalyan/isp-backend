@@ -2,6 +2,35 @@ const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
+const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
+
+async function syncEsewaAccounting(prisma, ispId, orderId) {
+  try {
+    return await syncOrderToAccounting(prisma, ispId, orderId);
+  } catch (error) {
+    console.error('[ESEWA ACCOUNTING] Sales invoice sync failed:', { ispId, orderId, error: error.message });
+    return null;
+  }
+}
+
+function buildPackageOrderItems(pkg, charges, isFree = false) {
+  const resolvedCharges = (charges || []).map(item => ({
+    itemName: item.name || 'Package item',
+    referenceId: item.referenceId || null,
+    itemPrice: isFree ? 0 : Number(item.amount || 0)
+  }));
+  const itemTotal = resolvedCharges.reduce((sum, item) => sum + item.itemPrice, 0);
+  const packageSubtotal = isFree ? 0 : Number(pkg.price || 0);
+  const remainder = Math.max(0, packageSubtotal - itemTotal);
+  return [
+    ...(remainder > 0 || resolvedCharges.length === 0 ? [{
+      itemName: pkg.packageName || 'Base Package',
+      referenceId: pkg.referenceId || null,
+      itemPrice: remainder
+    }] : []),
+    ...resolvedCharges
+  ];
+}
 
 function generateEsewaReferenceCode(orderId) {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -859,18 +888,7 @@ const processPayment = async (req, res, next) => {
     const expiryDateObj = computeExpiryFromBase(renewalBase, durationStr);
     if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
-    const orderItemsData = [
-      {
-        itemName: pkg.packageName || "Base Package",
-        referenceId: pkg.referenceId || null,
-        itemPrice: packagePrice
-      },
-      ...otcItems.map(it => ({
-        itemName: it.name,
-        referenceId: it.referenceId,
-        itemPrice: it.amount
-      }))
-    ];
+    const orderItemsData = buildPackageOrderItems(pkg, otcItems, customer.isFree);
 
     const esewaPaymentMethod = await req.prisma.billingPaymentMethod.findFirst({
       where: {
@@ -1021,23 +1039,8 @@ const processPayment = async (req, res, next) => {
       console.warn("Radius provisioning overall failed:", rAllErr.message);
     }
 
-    // 7. Accounting integration. Tshul and Nepurix are mutually exclusive:
-    // initialize only the active/default provider selected by ServiceFactory.
-    let tshulInvoice = null;
-    let nepurixInvoice = null;
-    let accountingProvider = null;
-    try {
-      const [billingService] = await ServiceFactory.getActiveBillingClients(req.ispId, req.prisma);
-      if (billingService) {
-        accountingProvider = billingService.code;
-        const customerReferenceId = customer.customerUniqueId || `CUST-${customer.id}`;
-        // Invoice synchronization is provider-specific and can be added here.
-        // Do not initialize the other accounting provider in this payment flow.
-        console.log(`[DEBUG] ${billingService.code} client obtained for customer:`, customerReferenceId);
-      }
-    } catch (billingErr) {
-      console.warn('[WARNING] Accounting sync failed or skipped:', billingErr.message);
-    }
+    // 7. Create the corresponding sales invoice in the selected accounting service.
+    await syncEsewaAccounting(req.prisma, req.ispId, createdOrder.id);
 
     // 8. Success Response
     return res.status(200).json({
@@ -1170,10 +1173,7 @@ const confirmPayment = async (req, res) => {
           paymentMethodId: esewaPaymentMethod?.id || null,
           transactionCode: transaction_code,
           items: {
-            create: [
-              { itemName: pkg.packageName, referenceId: pkg.referenceId, itemPrice: packagePrice },
-              ...otcItems.map(it => ({ itemName: it.name, referenceId: it.referenceId, itemPrice: it.amount }))
-            ]
+            create: buildPackageOrderItems(pkg, otcItems, customer.isFree)
           }
         }
       });
@@ -1193,13 +1193,7 @@ const confirmPayment = async (req, res) => {
       }
     } catch (re) { console.error("Radius Fail:", re.message); }
 
-    // --- Post-Transaction: Selected Accounting Provider ---
-    try {
-      const [billingService] = await ServiceFactory.getActiveBillingClients(ispId, prisma);
-      if (billingService) {
-        console.log(`[DEBUG] ${billingService.code} client obtained for confirmation`);
-      }
-    } catch (billingError) { console.error("Accounting provider fail:", billingError.message); }
+    await syncEsewaAccounting(prisma, ispId, createdOrder.id);
 
     // Return Success to eSewa
     res.json({
@@ -1407,8 +1401,7 @@ const completeEpayRenewal = async (req, res, next) => {
     const planStart = renewalWindow.planStart;
     const planEnd = computeExpiryFromBase(planStart, pkg.packageDuration);
     if (renewalWindow.trialDeductionDays > 0) planEnd.setDate(planEnd.getDate() - renewalWindow.trialDeductionDays);
-    const renewalItems = pkg.oneTimeCharges.map(item => ({ itemName: item.name || 'Renewal Item', referenceId: item.referenceId, itemPrice: Number(item.amount || 0) }));
-    const itemTotal = renewalItems.reduce((sum, item) => sum + item.itemPrice, 0);
+    const renewalItems = buildPackageOrderItems(pkg, pkg.oneTimeCharges, payment.customer.isFree);
 
     const order = await req.prisma.$transaction(async tx => {
       await tx.customerSubscription.update({ where: { id: subscription.id }, data: { isActive: false } });
@@ -1423,7 +1416,7 @@ const completeEpayRenewal = async (req, res, next) => {
           totalAmount: payment.amount, isPaid: true, isActive: true,
           paymentId: 'ESEWA_EPAY',
           paymentMethodId: esewaPaymentMethod?.id || null,
-          items: { create: [{ itemName: pkg.packageName || 'Package Renewal', referenceId: pkg.referenceId, itemPrice: Math.max(0, payment.amount - itemTotal) }, ...renewalItems] }
+          items: { create: renewalItems }
         }
       });
       await tx.customer.update({ where: { id: customerId }, data: { isRechargeable: true, status: 'active', onboardStatus: 'fully_onboarded' } });
@@ -1442,6 +1435,7 @@ const completeEpayRenewal = async (req, res, next) => {
     } catch (radiusError) {
       console.warn('[eSewa ePay] Renewal completed but RADIUS expiration sync failed:', radiusError.message);
     }
+    await syncEsewaAccounting(req.prisma, req.ispId, order.id);
     res.json({ success: true, orderId: order.id, referenceCode: statusResponse.data.ref_id || response.transaction_code, planEnd });
   } catch (error) { next(error); }
 };
@@ -1493,4 +1487,4 @@ const listTransactions = async (req, res, next) => {
   }
 };
 
-module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry, initiateEpayRenewal, completeEpayRenewal, listTransactions };
+module.exports = { confirmPayment, checkStatus, processPayment, paymentInquiry, initiateEpayRenewal, completeEpayRenewal, listTransactions, buildPackageOrderItems };

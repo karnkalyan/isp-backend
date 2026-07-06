@@ -1168,6 +1168,10 @@ model CustomerOrderManagement {
   paymentId       String?
   fiscalYearId    Int?
   paymentMethodId Int?
+  accountingProvider String?
+  accountingInvoiceId String?
+  accountingInvoiceUrl String?
+  accountingSyncError String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }

@@ -9,6 +9,7 @@ const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this line
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const getDriver = require('../drivers');
+const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
 
 function getSubscriptionRenewalBase(subscription, now = new Date()) {
   const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
@@ -1182,7 +1183,7 @@ async function createCustomer(req, res, next) {
       }
 
       // 6. Optional free test subscription based on master settings.
-      const [pushTrialSetting, autoTrialSetting, trialSetting] = await Promise.all([
+      const [, autoTrialSetting, trialSetting] = await Promise.all([
         tx.iSPSettings.findFirst({ where: { key: 'pushTrialPackageToAccount', ispId: req.ispId } }),
         tx.iSPSettings.findFirst({ where: { key: 'autoTrialEnabled', ispId: req.ispId } }),
         tx.iSPSettings.findFirst({ where: { key: 'trialDurationDays', ispId: req.ispId } })
@@ -1210,24 +1211,11 @@ async function createCustomer(req, res, next) {
           },
         });
 
-        const orderItems = [
-          { itemName: `${subscribedPackage.packageName || 'Package'} - ${trialDays} Day Test Period`, referenceId: subscribedPackage.referenceId, itemPrice: 0 },
-        ];
-
-        order = await tx.customerOrderManagement.create({
-          data: {
-            customer: { connect: { id: createdCustomer.id } },
-            subscription: { connect: { id: subscription.id } },
-            packagePrice: { connect: { id: subscribedPackage.id } },
-            packageStart: subscription.planStart,
-            packageEnd: subscription.planEnd,
-            orderDate: new Date(),
-            totalAmount: orderItems.reduce((sum, i) => sum + (i.itemPrice || 0), 0),
-            isActive: true,
-            isDeleted: false,
-            items: { create: orderItems },
-          },
-        });
+        // A trial is subscription state, not a billable event. Keep the package
+        // on the subscription for provisioning/display, but do not create a
+        // zero-value order or package items. The first paid activation creates
+        // the first order and flips customer.isRechargeable.
+        order = null;
       }
 
       // 8. Update lead
@@ -3090,6 +3078,12 @@ const subscribePackage = async (req, res, next) => {
 
       return order;
     });
+
+    try {
+      await syncOrderToAccounting(req.prisma, req.ispId, createdOrder.id);
+    } catch (accountingError) {
+      console.error('[CUSTOMER RECHARGE ACCOUNTING] Sales invoice sync failed:', accountingError.message);
+    }
 
     return res.status(201).json({
       success: true,
