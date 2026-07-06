@@ -623,7 +623,7 @@ const getCustomerContext = async (req, requestId) => {
         select: { email: true }
       },
       customerSubscriptions: {
-        where: { isActive: true, isDeleted: false },
+        where: { isActive: true },
         orderBy: { planEnd: "desc" },
         take: 1,
         select: { planEnd: true }
