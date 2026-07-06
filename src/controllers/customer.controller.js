@@ -1640,7 +1640,10 @@ async function getRealtimeNetworkStatus(prisma, customer) {
       if (radiusClient) {
         const sessions = await radiusClient.getRadacctByUsername(username).catch(() => []);
         if (Array.isArray(sessions)) {
-          const activeSession = sessions.find(session => !session.acctstoptime || session.acctstoptime === '0000-00-00 00:00:00' || session.acctstoptime === null);
+          const activeSession = sessions.find(session => {
+            const stopTime = session.acctstoptime ?? session.acctStopTime;
+            return !stopTime || stopTime === '0000-00-00 00:00:00';
+          });
           const sortedSessions = [...sessions].sort((a, b) => {
             const timeA = a.acctstarttime ? new Date(a.acctstarttime).getTime() : 0;
             const timeB = b.acctstarttime ? new Date(b.acctstarttime).getTime() : 0;
@@ -4462,6 +4465,16 @@ async function reprovisionRadius(req, res, next) {
         create: { customerId, serviceId, status: 'active', serviceData: result }
       });
     }
+
+    // Radius recovery completes the customer's network service activation.
+    // Keep the profile provisioning status in sync with the successful push.
+    await prisma.customerServiceConnection.updateMany({
+      where: { customerId },
+      data: {
+        status: 'active',
+        provisioningNotes: `RADIUS provisioned successfully on ${new Date().toISOString()}`
+      }
+    });
 
     // A successful Radius reprovision is also the activation path for customers
     // that were originally saved as drafts from the customer creation flow.
