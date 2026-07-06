@@ -1638,7 +1638,17 @@ async function getRealtimeNetworkStatus(prisma, customer) {
     if (username) {
       const radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, customer.ispId).catch(() => null);
       if (radiusClient) {
-        const sessions = await radiusClient.getRadacctByUsername(username).catch(() => []);
+        const [sessions, postAuthLogs] = await Promise.all([
+          radiusClient.getRadacctByUsername(username).catch(() => []),
+          radiusClient.getRadpostauthByUsername(username).catch(() => [])
+        ]);
+        // For the customer profile, a successful RADIUS authentication is the
+        // source of truth requested by operations. Accounting records are used
+        // for traffic details only and do not decide the online/offline badge.
+        const hasAccessAccept = Array.isArray(postAuthLogs) && postAuthLogs.some(
+          log => String(log.reply || '').trim().toLowerCase() === 'access-accept'
+        );
+        radiusRealtimeStatus = hasAccessAccept ? 'online' : 'offline';
         if (Array.isArray(sessions)) {
           const activeSession = sessions.find(session => {
             const stopTime = session.acctstoptime ?? session.acctStopTime;
@@ -1652,9 +1662,8 @@ async function getRealtimeNetworkStatus(prisma, customer) {
           const latestSession = sortedSessions[0] || null;
           const targetSession = activeSession || latestSession;
 
-          radiusRealtimeStatus = activeSession ? 'online' : 'offline';
           radiusAccounting = {
-            status: activeSession ? 'online' : 'offline',
+            status: hasAccessAccept ? 'online' : 'offline',
             sessionDownload: targetSession ? (Number(targetSession.acctoutputoctets || 0) + Number(targetSession.acctoutputoctets64 || 0)) : 0,
             sessionUpload: targetSession ? (Number(targetSession.acctinputoctets || 0) + Number(targetSession.acctinputoctets64 || 0)) : 0,
             nasIp: targetSession ? (targetSession.nasipaddress || 'N/A') : 'N/A',
