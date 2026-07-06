@@ -3970,6 +3970,17 @@ class ServiceController {
     }
   }
 
+  async getNetTVSTB(req, res) {
+    try {
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
+      const result = await client.getSTB(req.params.serial);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV STB', message: error.message });
+    }
+  }
+
   async resolveBranchSmsProvider(req, requestedProvider) {
     if (!req.branchId) return requestedProvider;
     let branch = await this.prisma.branch.findFirst({ where: { id: Number(req.branchId), ispId: Number(req.ispId), isDeleted: false }, select: { id: true, parentId: true, smsEnabled: true, smsUseParentProvider: true, smsProviderCode: true } });

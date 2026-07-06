@@ -354,12 +354,22 @@ class NetTVClient {
     async getSubscriberOverview(username) {
         const subscriber = await this.getSubscriber(username);
         const resellerId = subscriber?.reseller_id || this.#config.resellerId;
-        const shallowStbs = Array.isArray(subscriber?.stbs) ? subscriber.stbs : [];
+        const directStbs = Array.isArray(subscriber?.stbs) ? subscriber.stbs : [];
+        const userStbs = Array.isArray(subscriber?.user_stbs)
+            ? subscriber.user_stbs.map(link => ({
+                ...(link.stb || {}),
+                subscriber_stb_id: link.id,
+                stb_user: { ...link, stb: undefined }
+            }))
+            : [];
+        const shallowStbs = [...directStbs, ...userStbs].filter(
+            (stb, index, all) => stb?.serial && all.findIndex(item => item?.serial === stb.serial) === index
+        );
         const stbs = await Promise.all(shallowStbs.map(async (stb) => {
             const serial = stb.serial;
             if (!serial) return { ...stb };
             const detail = await this.getSTB(serial).catch(error => ({ ...stb, detail_error: error.message }));
-            const deviceId = detail?.stb_user?.id;
+            const deviceId = detail?.stb_user?.id || stb.subscriber_stb_id;
             const packageIds = [...new Set([
                 this.#config.defaultPackageId,
                 ...(detail?.subscribed_packages || []).map(item => item.package_id),
@@ -374,12 +384,24 @@ class NetTVClient {
             ]);
             return { ...detail, bootstrap, available_packages: availablePackages, package_details: packageDetails };
         }));
-        const [paymentMethods, creditBalance] = resellerId
+        let [paymentMethods, creditBalance] = resellerId
             ? await Promise.all([
                 this.getPaymentMethods(resellerId).catch(error => ({ error: error.message })),
                 this.getCreditBalance(resellerId).catch(error => ({ error: error.message }))
             ])
             : [null, null];
+        if (paymentMethods?.error) {
+            paymentMethods = {
+                status: 'fallback',
+                data: [{ reseller_wallet: 'Reseller Wallet' }, { wallet: 'Subscriber Wallet' }]
+            };
+        }
+        if (creditBalance?.error) {
+            creditBalance = {
+                credit_balance: Number(subscriber?.reseller?.credit_balance ?? subscriber?.balance ?? 0),
+                enable_credit_balance: String(subscriber?.reseller?.enable_credit_balance ?? '0')
+            };
+        }
         return { subscriber, stbs, reseller: { id: resellerId, payment_methods: paymentMethods, credit_balance: creditBalance } };
     }
 
