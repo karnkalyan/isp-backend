@@ -71,7 +71,11 @@ class NetTVClient {
             apiKey: apiKey,
             apiSecret: apiSecret,
             apiVersion: nettvService.apiVersion || 'v1',
-            config: nettvService.config || {}
+            config: nettvService.config || {},
+            resellerId: credentials.reseller_id || nettvService.config?.resellerId || null,
+            createdBy: credentials.reseller_username || nettvService.config?.createdBy || 'kisannet',
+            defaultPackageId: nettvService.config?.packageId || nettvService.config?.defaultPackageId || 145,
+            btbnBaseUrl: nettvService.config?.btbnBaseUrl || 'https://btbn.geniustv.geniussystems.com.np'
         });
     }
 
@@ -241,12 +245,11 @@ class NetTVClient {
     async getSubscribers(page = 1, perPage = 20, search = null) {
         const params = {
             page,
-            per_page: perPage
+            limit: perPage,
+            q: search || '',
+            sort_field: 'id',
+            sort_by: 'desc'
         };
-
-        if (search) {
-            params.search = search;
-        }
 
         return this.#apiRequest('get', '/subscribers', null, params);
     }
@@ -258,13 +261,7 @@ class NetTVClient {
 
     // Search subscribers
     async searchSubscribers(query, page = 1, perPage = 20) {
-        const params = {
-            search: query,
-            page,
-            per_page: perPage
-        };
-
-        return this.#apiRequest('get', '/subscribers/search', null, params);
+        return this.getSubscribers(page, perPage, query);
     }
 
     // Create a new subscriber
@@ -300,23 +297,90 @@ class NetTVClient {
     async getPackages(page = 1, perPage = 20) {
         return this.#apiRequest('get', '/packages', null, {
             page,
-            per_page: perPage
+            limit: perPage,
+            q: '',
+            sort_field: 'id',
+            sort_by: 'desc'
         });
     }
 
     // Get package by ID
-    async getPackage(packageId) {
-        return this.#apiRequest('get', `/packages/${packageId}`);
+    async getPackage(packageId, serial = null) {
+        return this.#apiRequest('get', `/packages/${packageId}`, null, serial ? { serial } : null);
     }
 
     // Get STBs (Set-Top Boxes)
     async getSTBs(subscriberId = null, page = 1, perPage = 20) {
-        const params = { page, per_page: perPage };
+        const params = { page, limit: perPage, q: '', sort_field: 'id', sort_by: 'desc' };
         if (subscriberId) {
             params.subscriber_id = subscriberId;
         }
 
         return this.#apiRequest('get', '/stbs', null, params);
+    }
+
+    async getSTB(serial) {
+        return this.#apiRequest('get', `/stbs/${encodeURIComponent(serial)}`);
+    }
+
+    async getBootstrapServices(serial) {
+        const baseUrl = String(this.#config.btbnBaseUrl || '').replace(/\/$/, '');
+        if (!baseUrl) return null;
+        const response = await axios.get(`${baseUrl}/${encodeURIComponent(serial)}`, { timeout: 30000 });
+        return response.data;
+    }
+
+    async getSubscriberDevicePackages(resellerId, subscriberId, deviceId) {
+        return this.#apiRequest(
+            'get',
+            `/reseller/package/v2/namespaces/${resellerId}/subscribers/${subscriberId}/devices/${deviceId}/packages`,
+            null,
+            { limit: 1000, page: 1, q: '', sort_field: 'id', sort_by: 'desc' }
+        );
+    }
+
+    async getPaymentMethods(resellerId) {
+        return this.#apiRequest('get', `/reseller/subscription/v1/namespaces/${resellerId}/payment-methods`);
+    }
+
+    async getCreditBalance(resellerId) {
+        return this.#apiRequest('get', `/reseller/account/v1/namespaces/${resellerId}/credit-balance`);
+    }
+
+    async subscribePackages(serial, payload) {
+        return this.#apiRequest('post', `/v2/subscriptions/${encodeURIComponent(serial)}/packages`, payload);
+    }
+
+    async getSubscriberOverview(username) {
+        const subscriber = await this.getSubscriber(username);
+        const resellerId = subscriber?.reseller_id || this.#config.resellerId;
+        const shallowStbs = Array.isArray(subscriber?.stbs) ? subscriber.stbs : [];
+        const stbs = await Promise.all(shallowStbs.map(async (stb) => {
+            const serial = stb.serial;
+            if (!serial) return { ...stb };
+            const detail = await this.getSTB(serial).catch(error => ({ ...stb, detail_error: error.message }));
+            const deviceId = detail?.stb_user?.id;
+            const packageIds = [...new Set([
+                this.#config.defaultPackageId,
+                ...(detail?.subscribed_packages || []).map(item => item.package_id),
+                ...(detail?.active_package || []).map(item => item.package_id)
+            ].filter(Boolean))];
+            const [bootstrap, availablePackages, packageDetails] = await Promise.all([
+                this.getBootstrapServices(serial).catch(error => ({ error: error.message })),
+                resellerId && subscriber?.id && deviceId
+                    ? this.getSubscriberDevicePackages(resellerId, subscriber.id, deviceId).catch(error => ({ error: error.message }))
+                    : null,
+                Promise.all(packageIds.map(id => this.getPackage(id, serial).catch(error => ({ id, error: error.message }))))
+            ]);
+            return { ...detail, bootstrap, available_packages: availablePackages, package_details: packageDetails };
+        }));
+        const [paymentMethods, creditBalance] = resellerId
+            ? await Promise.all([
+                this.getPaymentMethods(resellerId).catch(error => ({ error: error.message })),
+                this.getCreditBalance(resellerId).catch(error => ({ error: error.message }))
+            ])
+            : [null, null];
+        return { subscriber, stbs, reseller: { id: resellerId, payment_methods: paymentMethods, credit_balance: creditBalance } };
     }
 
     // Add STB to subscriber

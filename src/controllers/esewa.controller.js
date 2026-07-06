@@ -1220,18 +1220,79 @@ const confirmPayment = async (req, res) => {
  * 4. STATUS CHECK
  */
 const checkStatus = async (req, res) => {
-  const { request_id, transaction_code } = req.body;
-  const payment = await req.prisma.eSewaTokenPayment.findFirst({
-    where: { requestId: request_id, eSewaTransactionCode: transaction_code }
-  });
+  const { request_id, transaction_code, amount } = req.body;
+  if (!request_id && !transaction_code) {
+    return res.status(400).json({
+      response_code: 1,
+      status: "FAILED",
+      response_message: "request_id or transaction_code is required",
+      amount: Number(amount || 0),
+      reference_code: ""
+    });
+  }
 
-  if (!payment) return res.json({ response_code: 3, status: "NOT FOUND" });
+  const scope = req.ispId ? { ispId: Number(req.ispId) } : {};
+  let payment = null;
+  if (request_id && transaction_code) {
+    payment = await req.prisma.eSewaTokenPayment.findFirst({
+      where: {
+        ...scope,
+        eSewaTransactionCode: String(transaction_code),
+        OR: [{ requestId: String(request_id) }, { customerUniqueId: String(request_id) }]
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+  // Production reconciliation sometimes sends the customer's stable request
+  // ID while the payment was stored under another lookup value. The eSewa
+  // transaction code is the strongest fallback identifier.
+  if (!payment && transaction_code) {
+    payment = await req.prisma.eSewaTokenPayment.findFirst({
+      where: { ...scope, eSewaTransactionCode: String(transaction_code) },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+  if (!payment && request_id) {
+    payment = await req.prisma.eSewaTokenPayment.findFirst({
+      where: {
+        ...scope,
+        OR: [{ requestId: String(request_id) }, { customerUniqueId: String(request_id) }]
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
 
-  res.json({
-    request_id,
-    response_code: payment.status === 'COMPLETED' ? 0 : 2,
-    status: payment.status === 'COMPLETED' ? "SUCCESS" : "PENDING",
-    amount: payment.amount
+  if (!payment) {
+    return res.json({
+      request_id: String(request_id || ''),
+      response_code: 3,
+      status: "NOT FOUND",
+      response_message: "Payment not found",
+      amount: Number(amount || 0),
+      reference_code: ""
+    });
+  }
+
+  if (amount !== undefined && Number(amount) !== Number(payment.amount)) {
+    return res.json({
+      request_id: String(request_id || payment.requestId),
+      response_code: 1,
+      status: "FAILED",
+      response_message: "Payment amount mismatch",
+      amount: payment.amount,
+      reference_code: payment.referenceCode || ""
+    });
+  }
+
+  const completed = payment.status === 'COMPLETED';
+  const failed = payment.status === 'FAILED';
+  return res.json({
+    request_id: String(request_id || payment.requestId),
+    response_code: completed ? 0 : failed ? 1 : 2,
+    status: completed ? "SUCCESS" : failed ? "FAILED" : "PENDING",
+    response_message: completed ? "Payment successful" : failed ? "Payment failed" : "Payment is being processed",
+    amount: payment.amount,
+    reference_code: payment.referenceCode || ""
   });
 };
 

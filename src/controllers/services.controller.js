@@ -769,7 +769,7 @@ class ServiceController {
       const ispId = req.ispId;
       const { username } = req.params;
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
-      const subscriber = await client.getSubscriber(username);
+      const subscriber = await client.getSubscriberOverview(username);
       return res.json({ success: true, data: subscriber });
     } catch (error) {
       console.error('Error getting NetTV subscriber:', error);
@@ -3957,6 +3957,17 @@ class ServiceController {
     }
 
     return configuredServices[0].service.code;
+  }
+
+  async subscribeNetTVPackages(req, res) {
+    try {
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
+      const result = await client.subscribePackages(req.params.serial, req.body);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error subscribing NetTV package:', error);
+      return res.status(500).json({ success: false, error: 'Failed to subscribe NetTV package', message: error.message });
+    }
   }
 
   async resolveBranchSmsProvider(req, requestedProvider) {

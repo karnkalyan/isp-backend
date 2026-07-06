@@ -41,6 +41,7 @@ module.exports = (prisma) => {
     router.get('/nettv/stbs', checkPermission('services_read'), serviceController.getNetTVSTBs.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));
     router.post('/nettv/subscribers', checkPermission('services_manage'), serviceController.createNetTVSubscriber.bind(serviceController));
+    router.post('/nettv/stbs/:serial/packages', checkPermission('services_manage'), serviceController.subscribeNetTVPackages.bind(serviceController));
 
     // Mikrotik Operations
     router.get('/mikrotik/resources', checkPermission('services_read'), serviceController.getMikrotikResources.bind(serviceController));
