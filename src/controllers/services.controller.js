@@ -804,15 +804,25 @@ class ServiceController {
             select: {
               id: true,
               customerUniqueId: true,
-              firstName: true,
-              lastName: true,
-              status: true
+              status: true,
+              lead: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
             }
           });
           
           const customerMap = {};
           localCustomers.forEach(cust => {
-            customerMap[cust.customerUniqueId] = cust;
+            customerMap[cust.customerUniqueId] = {
+              id: cust.id,
+              customerUniqueId: cust.customerUniqueId,
+              status: cust.status,
+              firstName: cust.lead?.firstName || "",
+              lastName: cust.lead?.lastName || ""
+            };
           });
           
           items.forEach(sub => {
