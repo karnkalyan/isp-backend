@@ -39,7 +39,14 @@ async function loadOrder(prisma, ispId, orderId) {
     where: { id: Number(orderId), isDeleted: false, customer: { ispId: Number(ispId) } },
     include: {
       items: true,
-      customer: { include: { lead: true, connectionUsers: { where: { isDeleted: false } } } },
+      customer: {
+        include: {
+          lead: true,
+          connectionUsers: { where: { isDeleted: false } },
+          branch: true,
+          subBranch: true
+        }
+      },
       packagePrice: {
         include: {
           packagePlanDetails: true,
@@ -98,7 +105,34 @@ async function buildNepurixPayload(prisma, ispId, order) {
   const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || order.customer?.customerUniqueId;
   const packageName = order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || null;
   const radiusUsername = order.customer?.connectionUsers?.[0]?.username || null;
-  return {
+
+  // Retrieve Active ISP details for Organization finTag
+  const isp = await prisma.iSP.findUnique({
+    where: { id: Number(ispId) },
+    select: { companyName: true }
+  });
+
+  const finTagDetail = [];
+  if (isp?.companyName) {
+    finTagDetail.push({
+      category: "Organization",
+      finTag: isp.companyName
+    });
+  }
+  if (order.customer?.branch?.name) {
+    finTagDetail.push({
+      category: "Branch",
+      finTag: order.customer.branch.name
+    });
+  }
+  if (order.customer?.subBranch?.name) {
+    finTagDetail.push({
+      category: "Sub-branch",
+      finTag: order.customer.subBranch.name
+    });
+  }
+
+  const payload = {
     invoiceType: 'Cash',
     paymentMode: paymentMode(order.paymentId),
     customer: customerName,
@@ -114,8 +148,12 @@ async function buildNepurixPayload(prisma, ispId, order) {
     activationDate: dateOnly(order.packageStart),
     deactivationDate: dateOnly(order.packageEnd),
     detail,
-    finTagDetail: []
+    finTagDetail
   };
+
+  console.log('[NEPURIX PAYLOAD DEBUG]:', JSON.stringify(payload, null, 2));
+
+  return payload;
 }
 
 function buildTshulPayload(order) {

@@ -1154,6 +1154,10 @@ async function syncInvoiceToAccounting(req, res, next) {
         });
         if (!order) return res.status(404).json({ error: 'Paid non-trial invoice not found' });
 
+        if (order.accountingInvoiceId) {
+            return res.status(400).json({ error: 'Sales invoice has already been generated/synchronized for this order.' });
+        }
+
         const accountingInvoice = await syncOrderToAccounting(req.prisma, req.ispId, order.id);
         const updated = await req.prisma.customerOrderManagement.findUnique({ where: { id: order.id } });
         return res.json({ success: true, accountingInvoice, order: updated });
