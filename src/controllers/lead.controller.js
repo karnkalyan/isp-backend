@@ -33,18 +33,18 @@ async function createLead(req, res, next) {
 
     // Validate branch and sub-branch based on global system settings
     const branchValidationSetting = await req.prisma.iSPSettings.findFirst({
-      where: { ispId: req.ispId ? Number(req.ispId) : null, key: 'leadBranchValidation' }
+      where: { ispId: req.ispId ? Number(req.ispId) : undefined, key: 'leadBranchValidation' }
     });
     const validationRule = branchValidationSetting?.value || 'optional';
 
     if (validationRule === 'branch_only' || validationRule === 'both') {
       if (!branchId) {
-        return res.status(400).json({ error: 'Branch is required.' });
+        return res.status(400).json({ error: 'Branch is required based on system settings.' });
       }
     }
     if (validationRule === 'both') {
       if (!subBranchId) {
-        return res.status(400).json({ error: 'Sub-branch is required.' });
+        return res.status(400).json({ error: 'Sub-branch is required based on system settings.' });
       }
     }
 
@@ -441,6 +441,100 @@ async function getLeadById(req, res, next) {
         name: log.name
       }))
     };
+
+    return res.status(200).json(leadWithSms);
+  } catch (err) {
+    console.error("Get Lead By ID Error:", err.message);
+    if (err.code && err.code.startsWith('P')) {
+      return res.status(400).json({ error: "Database operation failed.", details: err.message });
+    }
+    return res.status(500).json({ error: "Internal server error", details: err.message || String(err) });
+  }
+}
+
+async function updateLead(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    const {
+      firstName,
+      middleName,
+      lastName,
+      email,
+      phoneNumber,
+      secondaryContactNumber,
+      source,
+      status,
+      memberShipId,
+      notes,
+      assignedUserId,
+      interestedPackageId,
+      branchId,
+      subBranchId,
+      address,
+      street,
+      district,
+      province,
+      gender,
+      age,
+      fullAddress,
+      latitude,
+      longitude,
+      serviceRadius
+    } = req.body;
+
+    const existingLead = await req.prisma.lead.findFirst({
+      where: {
+        id: id,
+        ispId: req.ispId,
+        isDeleted: false
+      }
+    });
+
+    if (!existingLead) {
+      return res.status(404).json({ error: "Lead not found." });
+    }
+
+    // Check for duplicate email/phone when updating
+    if (email || phoneNumber) {
+      const duplicateLead = await req.prisma.lead.findFirst({
+        where: {
+          OR: [
+            email ? { email } : {},
+            phoneNumber ? { phoneNumber } : {}
+          ],
+          NOT: { id: id },
+          ispId: req.ispId,
+          isDeleted: false
+        }
+      });
+
+      if (duplicateLead) {
+        return res.status(409).json({ error: "Another lead with this email or phone already exists." });
+      }
+    }
+
+    // Validate branch and sub-branch based on global system settings
+    const branchValidationSetting = await req.prisma.iSPSettings.findFirst({
+      where: { ispId: req.ispId ? Number(req.ispId) : undefined, key: 'leadBranchValidation' }
+    });
+    const validationRule = branchValidationSetting?.value || 'optional';
+
+    if (validationRule === 'branch_only' || validationRule === 'both') {
+      if (!branchId && !existingLead.branchId) {
+        return res.status(400).json({ error: 'Branch is required based on system settings.' });
+      }
+    }
+    if (validationRule === 'both') {
+      if (!subBranchId && !existingLead.subBranchId) {
+        return res.status(400).json({ error: 'Sub-branch is required based on system settings.' });
+      }
+    }
+
+    const updateData = {};
+
+    // Only include fields that are provided
+    if (firstName !== undefined) updateData.firstName = firstName;
+    if (middleName !== undefined) updateData.middleName = middleName;
     if (lastName !== undefined) updateData.lastName = lastName;
     if (email !== undefined) updateData.email = email;
     if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
