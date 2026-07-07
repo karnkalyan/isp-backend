@@ -1794,6 +1794,15 @@ const completeEpayRenewal = async (req, res, next) => {
     }
     await syncEsewaAccounting(req.prisma, req.ispId, order.id);
     res.json({ success: true, orderId: order.id, referenceCode: statusResponse.data.ref_id || response.transaction_code, planEnd });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listTransactions = async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
     const status = String(req.query.status || '').trim();
     const search = String(req.query.search || '').trim();
     const where = {
