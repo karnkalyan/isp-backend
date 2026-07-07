@@ -152,6 +152,18 @@ class NetTVClient {
     }
 
     // Make API request
+    #formatApiMessage(errorData, fallback) {
+        const message = errorData?.message || errorData?.error || fallback;
+        if (typeof message === 'string') return message;
+        if (Array.isArray(message)) return message.join(', ');
+        if (message && typeof message === 'object') {
+            return Object.entries(message)
+                .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+                .join('; ');
+        }
+        return String(message || fallback);
+    }
+
     async #apiRequest(method, endpoint, data = null, params = null) {
         try {
             const config = {
@@ -195,7 +207,7 @@ class NetTVClient {
                     case 429:
                         throw new Error('Rate limit exceeded');
                     default:
-                        throw new Error(errorData?.message || `API request failed with status ${status}`);
+                        throw new Error(this.#formatApiMessage(errorData, `API request failed with status ${status}`));
                 }
             }
 
@@ -285,7 +297,8 @@ class NetTVClient {
 
     // Update a subscriber
     async updateSubscriber(username, updateData) {
-        return this.#apiRequest('patch', `/subscribers/${encodeURIComponent(username)}`, updateData);
+        const { username: _username, user_name: _userName, customer_username: _customerUsername, ...payload } = updateData || {};
+        return this.#apiRequest('patch', `/subscribers/${encodeURIComponent(username)}`, payload);
     }
 
     // Delete a subscriber
@@ -362,11 +375,15 @@ class NetTVClient {
     }
 
     async getSTBModels(page = 1, perPage = 100) {
-        return this.#apiRequest('get', '/models', null, { page, limit: perPage, sort_field: 'id', sort_by: 'desc' });
+        const params = { page, limit: perPage, sort_field: 'id', sort_by: 'desc' };
+        return this.#apiRequest('get', '/models', null, params)
+            .catch(() => this.#apiRequest('get', '/stb/models', null, params));
     }
 
     async getSTBVendors(page = 1, perPage = 100) {
-        return this.#apiRequest('get', '/vendors', null, { page, limit: perPage, sort_field: 'id', sort_by: 'desc' });
+        const params = { page, limit: perPage, sort_field: 'id', sort_by: 'desc' };
+        return this.#apiRequest('get', '/vendors', null, params)
+            .catch(() => this.#apiRequest('get', '/stb/vendors', null, params));
     }
 
     async getBootstrapServices(serial) {

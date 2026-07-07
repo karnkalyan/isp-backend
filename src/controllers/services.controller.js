@@ -800,6 +800,9 @@ class ServiceController {
       const { username } = req.params;
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
       const result = await client.updateSubscriber(username, req.body || {});
+      await this.#syncNetTVCustomerService(username, req.body || {}, result, ispId).catch(error => {
+        console.warn('NetTV local customer sync skipped:', error.message);
+      });
       return res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error updating NetTV subscriber:', error);
@@ -807,6 +810,42 @@ class ServiceController {
       if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to update subscriber', message: error.message });
     }
+  }
+
+  async #syncNetTVCustomerService(username, requestData, apiResult, ispId) {
+    if (!username || !this.prisma) return;
+    const [customer, service] = await Promise.all([
+      this.prisma.customer.findFirst({
+        where: { customerUniqueId: username, ispId, isDeleted: false },
+        select: { id: true }
+      }),
+      this.prisma.service.findFirst({
+        where: { code: SERVICE_CODES.NETTV, isDeleted: false },
+        select: { id: true }
+      })
+    ]);
+    if (!customer || !service) return;
+    const normalizedStatus = String(requestData.status ?? '').trim();
+    const localStatus = normalizedStatus === '0' ? 'inactive' : 'active';
+    if (normalizedStatus === '0' || normalizedStatus === '1') {
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: { status: localStatus }
+      });
+    }
+    await this.prisma.customerSubscribedService.upsert({
+      where: { customerId_serviceId: { customerId: customer.id, serviceId: service.id } },
+      update: {
+        status: localStatus,
+        serviceData: { ...requestData, lastNetTVSync: new Date().toISOString(), apiResult }
+      },
+      create: {
+        customerId: customer.id,
+        serviceId: service.id,
+        status: localStatus,
+        serviceData: { ...requestData, lastNetTVSync: new Date().toISOString(), apiResult }
+      }
+    });
   }
 
   async deleteNetTVSubscriber(req, res) {
