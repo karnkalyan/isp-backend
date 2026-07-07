@@ -37,12 +37,28 @@ module.exports = (prisma) => {
     // NetTV Operations
     router.get('/nettv/countries', checkPermission('services_read'), serviceController.countriesProvince.bind(serviceController));
     router.get('/nettv/subscribers', checkPermission('services_read'), serviceController.getNetTVSubscribers.bind(serviceController));
+    router.get('/nettv/subscribers/orders', checkPermission('services_read'), serviceController.getNetTVOrders.bind(serviceController));
+    router.get('/nettv/subscribers/orders/:id', checkPermission('services_read'), serviceController.getNetTVOrder.bind(serviceController));
+    router.post('/nettv/subscribers/pwd/reset', checkPermission('services_manage'), serviceController.requestNetTVPasswordReset.bind(serviceController));
+    router.patch('/nettv/subscribers/pwd/reset', checkPermission('services_manage'), serviceController.resetNetTVPassword.bind(serviceController));
     router.get('/nettv/packages', checkPermission('services_read'), serviceController.getNetTVPackages.bind(serviceController));
+    router.get('/nettv/models', checkPermission('services_read'), serviceController.getNetTVModels.bind(serviceController));
+    router.get('/nettv/vendors', checkPermission('services_read'), serviceController.getNetTVVendors.bind(serviceController));
     router.get('/nettv/stbs', checkPermission('services_read'), serviceController.getNetTVSTBs.bind(serviceController));
+    router.post('/nettv/stbs', checkPermission('services_manage'), serviceController.createNetTVSTB.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));
+    router.patch('/nettv/subscribers/:username', checkPermission('services_manage'), serviceController.updateNetTVSubscriber.bind(serviceController));
+    router.delete('/nettv/subscribers/:username', checkPermission('services_manage'), serviceController.deleteNetTVSubscriber.bind(serviceController));
+    router.patch('/nettv/subscribers/:username/pwd', checkPermission('services_manage'), serviceController.forceNetTVPassword.bind(serviceController));
+    router.get('/nettv/subscribers/:username/stbs/:serial', checkPermission('services_read'), serviceController.getNetTVSubscriberSTB.bind(serviceController));
+    router.post('/nettv/subscribers/:username/stbs', checkPermission('services_manage'), serviceController.addNetTVSubscriberSTB.bind(serviceController));
+    router.delete('/nettv/subscribers/:username/stbs/:serial', checkPermission('services_manage'), serviceController.removeNetTVSubscriberSTB.bind(serviceController));
+    router.post('/nettv/subscribers/:username/replace/stb/:serial', checkPermission('services_manage'), serviceController.replaceNetTVSubscriberSTB.bind(serviceController));
     router.post('/nettv/subscribers', checkPermission('services_manage'), serviceController.createNetTVSubscriber.bind(serviceController));
     router.get('/nettv/stbs/:serial', checkPermission('services_read'), serviceController.getNetTVSTB.bind(serviceController));
+    router.patch('/nettv/stbs/:serial', checkPermission('services_manage'), serviceController.updateNetTVSTB.bind(serviceController));
     router.post('/nettv/stbs/:serial/packages', checkPermission('services_manage'), serviceController.subscribeNetTVPackages.bind(serviceController));
+    router.patch('/nettv/stbs/:serial/packages', checkPermission('services_manage'), serviceController.cancelNetTVPackage.bind(serviceController));
 
     // Mikrotik Operations
     router.get('/mikrotik/resources', checkPermission('services_read'), serviceController.getMikrotikResources.bind(serviceController));

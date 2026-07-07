@@ -256,7 +256,7 @@ class NetTVClient {
 
     // Get a specific subscriber by username
     async getSubscriber(username) {
-        return this.#apiRequest('get', `/subscribers/${username}`);
+        return this.#apiRequest('get', `/subscribers/${encodeURIComponent(username)}`);
     }
 
     // Search subscribers
@@ -285,12 +285,24 @@ class NetTVClient {
 
     // Update a subscriber
     async updateSubscriber(username, updateData) {
-        return this.#apiRequest('put', `/subscribers/${username}`, updateData);
+        return this.#apiRequest('patch', `/subscribers/${encodeURIComponent(username)}`, updateData);
     }
 
     // Delete a subscriber
     async deleteSubscriber(username) {
-        return this.#apiRequest('delete', `/subscribers/${username}`);
+        return this.#apiRequest('delete', `/subscribers/${encodeURIComponent(username)}`);
+    }
+
+    async forceSubscriberPassword(username, payload) {
+        return this.#apiRequest('patch', `/subscribers/${encodeURIComponent(username)}/pwd`, payload);
+    }
+
+    async requestSubscriberPasswordReset(payload) {
+        return this.#apiRequest('post', '/subscribers/pwd/reset', payload);
+    }
+
+    async resetSubscriberPassword(payload) {
+        return this.#apiRequest('patch', '/subscribers/pwd/reset', payload);
     }
 
     // Get packages
@@ -323,6 +335,29 @@ class NetTVClient {
         return this.#apiRequest('get', `/stbs/${encodeURIComponent(serial)}`);
     }
 
+    async getSubscriberSTB(username, serial) {
+        return this.#apiRequest(
+            'get',
+            `/subscribers/${encodeURIComponent(username)}/stbs/${encodeURIComponent(serial)}`
+        );
+    }
+
+    async createSTB(stbData) {
+        return this.#apiRequest('post', '/stbs', stbData);
+    }
+
+    async updateSTB(serial, stbData) {
+        return this.#apiRequest('patch', `/stbs/${encodeURIComponent(serial)}`, stbData);
+    }
+
+    async getSTBModels(page = 1, perPage = 100) {
+        return this.#apiRequest('get', '/models', null, { page, limit: perPage, sort_field: 'id', sort_by: 'desc' });
+    }
+
+    async getSTBVendors(page = 1, perPage = 100) {
+        return this.#apiRequest('get', '/vendors', null, { page, limit: perPage, sort_field: 'id', sort_by: 'desc' });
+    }
+
     async getBootstrapServices(serial) {
         const baseUrl = String(this.#config.btbnBaseUrl || '').replace(/\/$/, '');
         if (!baseUrl) return null;
@@ -349,6 +384,20 @@ class NetTVClient {
 
     async subscribePackages(serial, payload) {
         return this.#apiRequest('post', `/v2/subscriptions/${encodeURIComponent(serial)}/packages`, payload);
+    }
+
+    async cancelPackageSubscription(serial, payload) {
+        return this.#apiRequest('patch', `/subscriptions/${encodeURIComponent(serial)}/packages`, payload);
+    }
+
+    async getSubscriberOrders(page = 1, perPage = 20, username = '') {
+        const params = { page, limit: perPage, sort_field: 'id', sort_by: 'desc' };
+        if (username) params['filter[subscriber_stb.user.username]'] = username;
+        return this.#apiRequest('get', '/subscribers/orders', null, params);
+    }
+
+    async getSubscriberOrder(orderId) {
+        return this.#apiRequest('get', `/subscribers/orders/${encodeURIComponent(orderId)}`);
     }
 
     async getSubscriberOverview(username) {
@@ -412,12 +461,24 @@ class NetTVClient {
             ...stbData
         };
 
-        return this.#apiRequest('post', '/stbs', payload);
+        return this.#apiRequest('post', `/subscribers/${encodeURIComponent(username)}/stbs`, payload);
     }
 
     // Remove STB from subscriber
-    async removeSTBFromSubscriber(stbId) {
-        return this.#apiRequest('delete', `/stbs/${stbId}`);
+    async removeSTBFromSubscriber(username, serial, payload = {}) {
+        return this.#apiRequest(
+            'delete',
+            `/subscribers/${encodeURIComponent(username)}/stbs/${encodeURIComponent(serial)}`,
+            { username, ...payload }
+        );
+    }
+
+    async replaceSubscriberSTB(username, oldSerial, payload) {
+        return this.#apiRequest(
+            'post',
+            `/subscribers/${encodeURIComponent(username)}/replace/stb/${encodeURIComponent(oldSerial)}`,
+            payload
+        );
     }
 
     // Get subscriber invoices

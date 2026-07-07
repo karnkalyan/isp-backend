@@ -794,6 +794,73 @@ class ServiceController {
     }
   }
 
+  async updateNetTVSubscriber(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.updateSubscriber(username, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error updating NetTV subscriber:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to update subscriber', message: error.message });
+    }
+  }
+
+  async deleteNetTVSubscriber(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.deleteSubscriber(username);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error deleting NetTV subscriber:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to delete subscriber', message: error.message });
+    }
+  }
+
+  async forceNetTVPassword(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.forceSubscriberPassword(username, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error forcing NetTV password change:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update NetTV password', message: error.message });
+    }
+  }
+
+  async requestNetTVPasswordReset(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.requestSubscriberPasswordReset(req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error requesting NetTV password reset:', error);
+      return res.status(500).json({ success: false, error: 'Failed to request NetTV password reset', message: error.message });
+    }
+  }
+
+  async resetNetTVPassword(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.resetSubscriberPassword(req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error resetting NetTV password:', error);
+      return res.status(500).json({ success: false, error: 'Failed to reset NetTV password', message: error.message });
+    }
+  }
+
 
   async countriesProvince(req, res) {
     try {
@@ -837,6 +904,148 @@ class ServiceController {
       const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
       if (optional) return optional;
       return res.status(500).json({ success: false, error: 'Failed to get NetTV STBs', message: error.message });
+    }
+  }
+
+  async getNetTVModels(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { page = 1, perPage = 100 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const models = await client.getSTBModels(parseInt(page), parseInt(perPage));
+      return res.json({ success: true, data: models });
+    } catch (error) {
+      console.error('Error getting NetTV models:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV models', message: error.message });
+    }
+  }
+
+  async getNetTVVendors(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { page = 1, perPage = 100 } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const vendors = await client.getSTBVendors(parseInt(page), parseInt(perPage));
+      return res.json({ success: true, data: vendors });
+    } catch (error) {
+      console.error('Error getting NetTV vendors:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV vendors', message: error.message });
+    }
+  }
+
+  async createNetTVSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.createSTB(req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error creating NetTV STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to create NetTV STB', message: error.message });
+    }
+  }
+
+  async updateNetTVSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.updateSTB(serial, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error updating NetTV STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update NetTV STB', message: error.message });
+    }
+  }
+
+  async getNetTVSubscriberSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username, serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getSubscriberSTB(username, serial);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV subscriber STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get subscriber STB', message: error.message });
+    }
+  }
+
+  async addNetTVSubscriberSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.addSTBToSubscriber(username, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error adding NetTV subscriber STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to add subscriber STB', message: error.message });
+    }
+  }
+
+  async removeNetTVSubscriberSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username, serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.removeSTBFromSubscriber(username, serial, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error removing NetTV subscriber STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to remove subscriber STB', message: error.message });
+    }
+  }
+
+  async replaceNetTVSubscriberSTB(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { username, serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.replaceSubscriberSTB(username, serial, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error replacing NetTV subscriber STB:', error);
+      return res.status(500).json({ success: false, error: 'Failed to replace subscriber STB', message: error.message });
+    }
+  }
+
+  async getNetTVOrders(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { page = 1, perPage = 20, username = '' } = req.query;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getSubscriberOrders(parseInt(page), parseInt(perPage), username);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV orders:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV orders', message: error.message });
+    }
+  }
+
+  async getNetTVOrder(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { id } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getSubscriberOrder(id);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV order:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV order', message: error.message });
+    }
+  }
+
+  async cancelNetTVPackage(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.cancelPackageSubscription(serial, req.body || {});
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error cancelling NetTV package:', error);
+      return res.status(500).json({ success: false, error: 'Failed to cancel NetTV package', message: error.message });
     }
   }
   // Mikrotik Operations
