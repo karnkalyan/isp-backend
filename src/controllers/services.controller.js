@@ -749,13 +749,81 @@ class ServiceController {
   }
 
   // NetTV Operations
+  async getNetTVResellerInfo(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const resellerId = client.resellerId;
+      if (!resellerId) {
+        return res.status(400).json({ success: false, error: 'Reseller ID is not configured' });
+      }
+
+      const [creditBalance, paymentMethods] = await Promise.all([
+        client.getCreditBalance(resellerId).catch(() => null),
+        client.getPaymentMethods(resellerId).catch(() => null)
+      ]);
+
+      return res.json({
+        success: true,
+        data: {
+          resellerId,
+          creditBalance: creditBalance || { credit_balance: 0, enable_credit_balance: "0" },
+          paymentMethods: paymentMethods || { status: 'fallback', data: [] },
+          createdBy: client.config?.createdBy || 'kisannet'
+        }
+      });
+    } catch (error) {
+      console.error('Error getting NetTV reseller info:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get reseller info', message: error.message });
+    }
+  }
+
   async getNetTVSubscribers(req, res) {
     try {
       const ispId = req.ispId;
       const { page = 1, perPage = 20, search } = req.query;
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
-      const subscribers = await client.getSubscribers(parseInt(page), parseInt(perPage), search);
-      return res.json({ success: true, data: subscribers });
+      const subscribersResponse = await client.getSubscribers(parseInt(page), parseInt(perPage), search);
+      
+      const db = req.prisma || this.prisma;
+      if (subscribersResponse && db) {
+        const items = Array.isArray(subscribersResponse)
+          ? subscribersResponse
+          : (subscribersResponse.subscribers || subscribersResponse.data || subscribersResponse.items || []);
+        
+        if (Array.isArray(items) && items.length > 0) {
+          const usernames = items.map(sub => sub.username).filter(Boolean);
+          const localCustomers = await db.customer.findMany({
+            where: {
+              customerUniqueId: { in: usernames },
+              ispId,
+              isDeleted: false
+            },
+            select: {
+              id: true,
+              customerUniqueId: true,
+              firstName: true,
+              lastName: true,
+              status: true
+            }
+          });
+          
+          const customerMap = {};
+          localCustomers.forEach(cust => {
+            customerMap[cust.customerUniqueId] = cust;
+          });
+          
+          items.forEach(sub => {
+            if (sub.username && customerMap[sub.username]) {
+              sub.local_customer = customerMap[sub.username];
+            }
+          });
+        }
+      }
+
+      return res.json({ success: true, data: subscribersResponse });
     } catch (error) {
       console.error('Error getting NetTV subscribers:', error);
       const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
@@ -778,8 +846,6 @@ class ServiceController {
       return res.status(500).json({ success: false, error: 'Failed to get subscriber', message: error.message });
     }
   }
-
-
 
   async createNetTVSubscriber(req, res) {
     try {

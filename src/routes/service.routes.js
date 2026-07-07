@@ -35,6 +35,7 @@ module.exports = (prisma) => {
     // ==================== SERVICE-SPECIFIC OPERATIONS ====================
 
     // NetTV Operations
+    router.get('/nettv/reseller/info', checkPermission('services_read'), serviceController.getNetTVResellerInfo.bind(serviceController));
     router.get('/nettv/countries', checkPermission('services_read'), serviceController.countriesProvince.bind(serviceController));
     router.get('/nettv/subscribers', checkPermission('services_read'), serviceController.getNetTVSubscribers.bind(serviceController));
     router.get('/nettv/subscribers/orders', checkPermission('services_read'), serviceController.getNetTVOrders.bind(serviceController));

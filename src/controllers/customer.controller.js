@@ -1924,9 +1924,17 @@ async function provisionCustomer(req, res, next) {
                   value: '1'
                 });
                 break;
-              case SERVICE_CODES.NETTV:
+              case SERVICE_CODES.NETTV: {
                 result = await client.createSubscriber(data);
+                const overviewData = await client.getSubscriberOverview(data.username).catch(error => {
+                  console.warn('Failed to fetch full overview on NetTV provision:', error.message);
+                  return null;
+                });
+                if (overviewData) {
+                  result = { ...result, ...overviewData, lastNetTVSync: new Date().toISOString() };
+                }
                 break;
+              }
               default:
                 throw new Error(`Unsupported service: ${service}`);
             }
@@ -4519,6 +4527,95 @@ async function reprovisionRadius(req, res, next) {
   }
 }
 
+
+async function syncNettv(req, res, next) {
+  const prisma = req.prisma;
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId)) return res.status(400).json({ error: 'Invalid customer ID' });
+
+  try {
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, isDeleted: false, ispId: req.ispId }
+    });
+
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const username = customer.customerUniqueId;
+    if (!username) {
+      return res.status(400).json({ error: 'Customer has no unique username associated' });
+    }
+
+    const getServiceIdByCode = async (code) => {
+      const ispService = await prisma.iSPService.findFirst({
+        where: {
+          ispId: req.ispId,
+          isActive: true,
+          isDeleted: false,
+          service: {
+            code: code,
+            isActive: true,
+            isDeleted: false,
+          },
+        },
+        include: { service: true },
+      });
+      return ispService?.service?.id;
+    };
+
+    const serviceId = await getServiceIdByCode(SERVICE_CODES.NETTV);
+    if (!serviceId) {
+      return res.status(400).json({ error: 'NetTV service not available for this ISP' });
+    }
+
+    const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
+    
+    // Fetch overview from NetTV API
+    const overviewData = await client.getSubscriberOverview(username);
+    
+    // Store in local DB
+    const localStatus = overviewData?.subscriber?.status === 1 ? 'active' : 'inactive';
+    
+    // Sync customer status
+    if (overviewData?.subscriber?.status === 0 || overviewData?.subscriber?.status === 1) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { status: localStatus }
+      });
+    }
+
+    const updatedSubscribedService = await prisma.customerSubscribedService.upsert({
+      where: { customerId_serviceId: { customerId, serviceId } },
+      update: { 
+        status: localStatus, 
+        serviceData: {
+          username,
+          ...overviewData,
+          lastNetTVSync: new Date().toISOString()
+        } 
+      },
+      create: { 
+        customerId, 
+        serviceId, 
+        status: localStatus, 
+        serviceData: {
+          username,
+          ...overviewData,
+          lastNetTVSync: new Date().toISOString()
+        } 
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: 'NetTV subscriber details synchronized successfully',
+      data: updatedSubscribedService.serviceData
+    });
+  } catch (error) {
+    console.error('Error syncing NetTV subscriber:', error);
+    return res.status(500).json({ error: 'NetTV synchronization failed', details: error.message });
+  }
+}
+
 async function reprovisionNettv(req, res, next) {
   const prisma = req.prisma;
   const customerId = Number(req.params.id);
@@ -4577,16 +4674,28 @@ async function reprovisionNettv(req, res, next) {
     // Reprovision is equivalent to calling createSubscriber to upsert/update configuration on NetTV
     const result = await client.createSubscriber(nettvData);
 
+    // Fetch full overview details right after provision to keep local DB fully in sync
+    const overviewData = await client.getSubscriberOverview(nettvData.username).catch(error => {
+      console.warn('Failed to fetch full overview on NetTV reprovision:', error.message);
+      return null;
+    });
+
+    const finalNettvData = {
+      ...nettvData,
+      ...(overviewData || {}),
+      lastNetTVSync: new Date().toISOString()
+    };
+
     await prisma.customerSubscribedService.upsert({
       where: { customerId_serviceId: { customerId, serviceId } },
-      update: { status: 'active', serviceData: nettvData },
-      create: { customerId, serviceId, status: 'active', serviceData: nettvData }
+      update: { status: 'active', serviceData: finalNettvData },
+      create: { customerId, serviceId, status: 'active', serviceData: finalNettvData }
     });
 
     return res.json({
       success: true,
       message: 'NetTV reprovisioned successfully',
-      data: result
+      data: finalNettvData
     });
   } catch (error) {
     console.error('Error reprovisioning NetTV:', error);
@@ -5340,6 +5449,7 @@ module.exports = {
   changeConnectionUserPassword,
   reprovisionRadius,
   reprovisionNettv,
+  syncNettv,
   reprovisionAccount,
   disconnectRadiusSession,
   listNasDevices,

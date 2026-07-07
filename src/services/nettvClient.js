@@ -20,6 +20,15 @@ class NetTVClient {
         });
     }
 
+    get resellerId() {
+        return this.#config.resellerId;
+    }
+
+    get config() {
+        return this.#config;
+    }
+
+
     /**
      * Factory method to create NetTVClient using service code
      */

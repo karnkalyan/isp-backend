@@ -32,6 +32,7 @@ const {
   changeConnectionUserPassword,
   reprovisionRadius,
   reprovisionNettv,
+  syncNettv,
   reprovisionAccount,
   disconnectRadiusSession,
   listNasDevices,
@@ -147,6 +148,7 @@ module.exports = (prisma) => {
   router.put('/:id/mac', checkPermission('customer_update'), resetMac);
   router.post('/:id/reprovision/radius', checkPermission('customer_update'), reprovisionRadius);
   router.post('/:id/reprovision/nettv', checkPermission('customer_update'), reprovisionNettv);
+  router.post('/:id/sync/nettv', checkPermission('customer_update'), syncNettv);
   router.post('/:id/reprovision/account', checkPermission('customer_update'), reprovisionAccount);
   router.post('/:id/disconnect-session', checkPermission('customer_update'), disconnectRadiusSession);
 
