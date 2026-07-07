@@ -73,23 +73,50 @@ async function loadOrder(prisma, ispId, orderId) {
 async function buildNepurixPayload(prisma, ispId, order) {
   const tscSetting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'tscPercentage' } });
   const tscRate = number(tscSetting?.value || 10) / 100;
-  const charges = order.packagePrice?.oneTimeCharges || [];
-  const chargeByReference = new Map(charges.filter(item => item.referenceId).map(item => [item.referenceId, item]));
-  const packageReference = order.packagePrice?.referenceId;
+
+  const isTrial = Number(order.totalAmount || 0) === 0;
+
+  let itemsToUse = [];
+  if (isTrial) {
+    itemsToUse = [{
+      itemName: order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || 'Trial Package',
+      itemPrice: 0,
+      isTaxable: false,
+      isTscApplicable: false
+    }];
+  } else if (order.packagePrice?.oneTimeCharges && order.packagePrice.oneTimeCharges.length > 0) {
+    itemsToUse = order.packagePrice.oneTimeCharges.map(charge => ({
+      itemName: charge.name || 'Package Item',
+      itemPrice: Number(charge.amount || 0),
+      isTaxable: charge.isTaxable !== false,
+      isTscApplicable: charge.isTscApplicable === true
+    }));
+  } else {
+    itemsToUse = order.items.map(item => ({
+      itemName: item.itemName,
+      itemPrice: Number(item.itemPrice || 0),
+      isTaxable: true,
+      isTscApplicable: order.packagePrice?.isTscApplicable === true
+    }));
+  }
 
   let taxableAmount = 0;
   let calculatedNet = 0;
-  const detail = order.items.map(item => {
-    const charge = item.referenceId ? chargeByReference.get(item.referenceId) : null;
-    const isPackage = Boolean(packageReference && item.referenceId === packageReference);
-    const isTaxable = charge ? charge.isTaxable !== false : true;
-    const isTscApplicable = charge ? charge.isTscApplicable === true : (isPackage && order.packagePrice?.isTscApplicable === true);
+  let subTotal = 0;
+
+  const detail = itemsToUse.map(item => {
+    const isTaxable = item.isTaxable !== false;
+    const isTscApplicable = item.isTscApplicable === true;
     const basicAmount = round(item.itemPrice);
+    
     const tsc = isTscApplicable ? round(basicAmount * tscRate) : 0;
     const vatBase = isTaxable ? basicAmount + tsc : 0;
     const vat = isTaxable ? round(vatBase * 0.13) : 0;
+    
     taxableAmount += vatBase;
     calculatedNet += basicAmount + tsc + vat;
+    subTotal += basicAmount;
+
     return {
       item: item.itemName,
       quantity: 1,
@@ -139,7 +166,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
     UserName: radiusUsername,
     date: dateOnly(order.orderDate),
     remarks: `ISP invoice ${order.invoiceId || order.id}`,
-    subTotal: round(order.items.reduce((sum, item) => sum + number(item.itemPrice), 0)),
+    subTotal: round(subTotal),
     taxableAmount: round(taxableAmount),
     discount: null,
     netAmount: round(order.totalAmount || calculatedNet),
@@ -192,6 +219,9 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
       ? await buildNepurixPayload(prisma, ispId, order)
       : buildTshulPayload(order);
     const result = await service.client.sales.create(payload);
+    if (result && result.Error) {
+      throw new Error(`Nepurix API Error: ${result.Error}`);
+    }
     const data = result?.Data || result?.data || result || {};
     const id = data.Id ?? data.id ?? data.ReferenceId ?? data.referenceId;
     const url = data.InvoicePrintUrl ?? data.invoicePrintUrl ?? data.PrintUrl ?? null;
