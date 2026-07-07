@@ -39,7 +39,7 @@ async function loadOrder(prisma, ispId, orderId) {
     where: { id: Number(orderId), isDeleted: false, customer: { ispId: Number(ispId) } },
     include: {
       items: true,
-      customer: { include: { lead: true } },
+      customer: { include: { lead: true, connectionUsers: { where: { isDeleted: false } } } },
       packagePrice: {
         include: {
           packagePlanDetails: true,
@@ -97,10 +97,12 @@ async function buildNepurixPayload(prisma, ispId, order) {
   const lead = order.customer?.lead || {};
   const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || order.customer?.customerUniqueId;
   const packageName = order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || null;
+  const radiusUsername = order.customer?.connectionUsers?.[0]?.username || null;
   return {
     invoiceType: 'Cash',
     paymentMode: paymentMode(order.paymentId),
     customer: customerName,
+    UserName: radiusUsername,
     date: dateOnly(order.orderDate),
     remarks: `ISP invoice ${order.invoiceId || order.id}`,
     subTotal: round(order.items.reduce((sum, item) => sum + number(item.itemPrice), 0)),
