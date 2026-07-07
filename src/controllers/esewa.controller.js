@@ -606,12 +606,207 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 //       request_id: req.params.request_id ?? req.body.request_id ?? null,
 //       response_code: "99",
 //       response_message: "INTERNAL_SERVER_ERROR",
+//                 });
+//               }
+//             } catch (rErr) {
+//               radiusProvisioned.push({
+//                 username,
+//                 action: "error",
+//                 error: rErr.message || String(rErr)
+//               });
+//             }
+//           }
+//         }
+//       }
+//     } catch (rAllErr) {
+//       console.warn("Radius provisioning overall failed:", rAllErr.message || rAllErr);
+//     }
+
+//     // TSHUL SALES INVOICE CREATION
+//     let tshulInvoice = null;
+//     try {
+//       const TSHUL_SERVICE_ID = 1;
+//       const isTshulEnabled = await isServiceEnabled(req.ispId, TSHUL_SERVICE_ID);
+
+//       if (isTshulEnabled) {
+//         const tshul = await TshulClient.create(req.ispId);
+
+//         const customerReferenceId = customer.customerUniqueId || `CUST-${customer.id}`;
+//         let tshulCustomer = null;
+
+//         try {
+//           tshulCustomer = await tshul.customer.get(customerReferenceId);
+//         } catch (customerErr) {
+//           const customerPayload = {
+//             Name: `${customer.firstName} ${customer.lastName}`,
+//             ReferenceId: customerReferenceId,
+//             PanNo: customer.idNumber || customer.id.toString().padStart(9, '0'),
+//             Address: `${customer.streetAddress}, ${customer.city}, ${customer.state}, ${customer.zipCode}`,
+//             City: customer.city,
+//             Province: customer.state,
+//             PostalCode: customer.zipCode,
+//             Country: 'Nepal',
+//             Phone: customer.phoneNumber,
+//             Email: customer.email,
+//             Website: '',
+//             ContactPerson: `${customer.firstName} ${customer.lastName}`,
+//             ContactPersonPhone: customer.phoneNumber,
+//             Bank: '',
+//             AcNo: '',
+//             AcName: '',
+//             CustomerId: customer.idNumber || customer.id.toString(),
+//             Notes: `Customer created via ISP system. ISP Customer ID: ${customer.id}`
+//           };
+
+//           tshulCustomer = await tshul.customer.create(customerPayload);
+//         }
+
+//         let branchReferenceId = "MAIN";
+//         try {
+//           const branches = await tshul.branch.list();
+//           if (branches && branches.length > 0) {
+//             branchReferenceId = branches[0].ReferenceId || "MAIN";
+//           }
+//         } catch (branchErr) {
+//           console.warn('Could not fetch branches, using default:', branchReferenceId);
+//         }
+
+//         const details = [];
+
+//         // Check and create package item
+//         const packageItemRefId = pkg.referenceId || `PKG_${pkg.id}`;
+//         try {
+//           await tshul.item.get(packageItemRefId);
+//         } catch (itemErr) {
+//           const itemPayload = {
+//             ReferenceId: packageItemRefId,
+//             Name: pkg.packageName,
+//             Unit: "PCS",
+//             Rate: packagePrice,
+//             Tax: 0,
+//             Description: `Internet package: ${pkg.packageName} for ${pkg.packageDuration}`
+//           };
+//           await tshul.item.create(itemPayload);
+//         }
+
+//         details.push({
+//           ItemReferenceId: packageItemRefId,
+//           Quantity: 1,
+//           Rate: packagePrice,
+//           Amount: packagePrice,
+//           BasicAmount: packagePrice,
+//           DiscountPercent: 0,
+//           DiscountAmount: 0
+//         });
+
+//         // Add one-time charges as items
+//         for (const otcItem of otcItems) {
+//           const otcRefId = otcItem.referenceId || `OTC_${otcItem.id}`;
+
+//           try {
+//             await tshul.item.get(otcRefId);
+//           } catch (otcItemErr) {
+//             const otcPayload = {
+//               ReferenceId: otcRefId,
+//               Name: otcItem.name,
+//               Unit: "PCS",
+//               Rate: otcItem.amount,
+//               Tax: 0,
+//               Description: `One-time charge: ${otcItem.name}`
+//             };
+//             await tshul.item.create(otcPayload);
+//           }
+
+//           details.push({
+//             ItemReferenceId: otcRefId,
+//             Quantity: 1,
+//             Rate: otcItem.amount,
+//             Amount: otcItem.amount,
+//             BasicAmount: otcItem.amount,
+//             DiscountPercent: 0,
+//             DiscountAmount: 0
+//           });
+//         }
+
+//         const salesInvoicePayload = {
+//           FiscalYear: '2081/2082',
+//           InvoiceType: "Cash",
+//           Date: '2081-05-01',
+//           PaymentMode: "Cash",
+//           TaxableAmount: totalAmount,
+//           Vat: 0,
+//           Tsc: 0,
+//           SubTotal: totalAmount,
+//           NetAmount: totalAmount,
+//           ExcisableAmount: 0,
+//           ExciseDuty: 0,
+//           DiscountRate: 0,
+//           Discount: 0,
+//           CustomerReferenceId: customerReferenceId,
+//           OtherCustomerName: `${customer.firstName} ${customer.lastName}`,
+//           OtherCustomerMobile: customer.phoneNumber,
+//           BranchReferenceId: branchReferenceId,
+//           Detail: details
+//         };
+
+//         tshulInvoice = await tshul.sales.create(salesInvoicePayload);
+
+//         if (tshulInvoice && !tshulInvoice.Error) {
+//           await req.prisma.customerOrderManagement.update({
+//             where: { id: createdOrder.id },
+//             data: {
+//               tshulInvoiceId: tshulInvoice.Data?.Id || tshulInvoice.Id || null,
+//               tshulReferenceId: tshulInvoice.Data?.ReferenceId || tshulInvoice.ReferenceId || null
+//             }
+//           });
+//         }
+//       }
+//     } catch (tshulError) {
+//       console.error("Tshul sales invoice creation error:", tshulError);
+//       tshulInvoice = {
+//         error: tshulError.message || "Failed to create Tshul sales invoice",
+//         details: tshulError
+//       };
+//     }
+
+//     return res.status(201).json({
+//       request_id: String(requestId),
+//       response_code: "00",
+//       response_message: "SUCCESS",
+//       amount: totalAmount,
+//       properties: {
+//         customerId: customer.id,
+//         customerUniqueId: customer.customerUniqueId || null,
+//         fullName,
+//         phone,
+//         email,
+//         order: {
+//           id: createdOrder.id,
+//           packageStart: createdOrder.packageStart,
+//           packageEnd: createdOrder.packageEnd,
+//           totalAmount: createdOrder.totalAmount,
+//           items: createdOrder.items,
+//           tshulInvoiceId: tshulInvoice?.Data?.Id || tshulInvoice?.Id || null
+//         },
+//         items: aggregatedItems,
+//         radiusProvisioned: radiusProvisioned,
+//         tshulInvoice: tshulInvoice
+//       }
+//     });
+//   } catch (err) {
+//     console.error("subscribePackage error:", err);
+
+//     // Handle unexpected errors with the same format
+//     return res.status(500).json({
+//       request_id: req.params.request_id ?? req.body.request_id ?? null,
+//       response_code: "99",
+//       response_message: "INTERNAL_SERVER_ERROR",
 //       error: err.message || "An unexpected error occurred"
 //     });
 //   }
 // };
 
-const getCustomerContext = async (req, requestId) => {
+const getCustomerContext = async (req, requestId, packageId = null) => {
   // 1. Validation
   if (!requestId) {
     const error = new Error("request_id (customer id / phone / unique id) required");
@@ -673,6 +868,7 @@ const getCustomerContext = async (req, requestId) => {
           renewAmountWithTax: true,
           packageDuration: true,
           referenceId: true,
+          planId: true,
           oneTimeCharges: {
             where: { isDeleted: false },
             select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
@@ -689,12 +885,48 @@ const getCustomerContext = async (req, requestId) => {
     throw error;
   }
 
-  const pkg = customer.subscribedPkg;
+  let pkg = customer.subscribedPkg;
   if (!pkg) {
     const error = new Error("Customer has no subscribed package");
     error.code = "03"; // NO_SUBSCRIBED_PACKAGE
     error.statusCode = 404;
     throw error;
+  }
+
+  // If a specific package ID is requested, load it and verify it's under the same Speed Plan
+  if (packageId && Number(packageId) !== pkg.id) {
+    const selectedPkg = await req.prisma.PackagePrice.findFirst({
+      where: {
+        id: Number(packageId),
+        planId: pkg.planId,
+        isDeleted: false,
+        isActive: true,
+        isOnline: true
+      },
+      select: {
+        id: true,
+        packageName: true,
+        price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
+        packageDuration: true,
+        referenceId: true,
+        planId: true,
+        oneTimeCharges: {
+          where: { isDeleted: false },
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+        }
+      }
+    });
+
+    if (selectedPkg) {
+      pkg = selectedPkg;
+    } else {
+      const error = new Error("Selected package is invalid or not available online");
+      error.code = "04"; // INVALID_PACKAGE
+      error.statusCode = 400;
+      throw error;
+    }
   }
 
   // 4. Calculate Financials
@@ -745,7 +977,7 @@ const getCustomerContext = async (req, requestId) => {
     .filter(Boolean)
     .join(" ");
 
-  return {
+    return {
     customer,
     pkg,
     isRechargeable,
@@ -766,6 +998,55 @@ const paymentInquiry = async (req, res, next) => {
     const context = await getCustomerContext(req, requestId);
     const { customer, pkg, totalAmount, fullName } = context;
 
+    // Fetch all online-enabled packages under the same Speed Plan (same planId)
+    const dbPrices = await req.prisma.PackagePrice.findMany({
+      where: {
+        planId: pkg.planId,
+        isDeleted: false,
+        isActive: true,
+        isOnline: true
+      },
+      include: {
+        oneTimeCharges: {
+          where: { isDeleted: false }
+        }
+      }
+    });
+
+    // Ensure the current subscribed package is always included (even if it's not marked online)
+    const pricesMap = new Map();
+    pricesMap.set(pkg.id, pkg);
+    dbPrices.forEach(p => {
+      pricesMap.set(p.id, p);
+    });
+
+    const allPrices = Array.from(pricesMap.values());
+    const isRechargeable = Boolean(customer.isRechargeable);
+
+    const packagesList = allPrices.map(p => {
+      const newPackageAmount = p.initialTotalWithTax !== null && p.initialTotalWithTax !== undefined
+        ? Number(p.initialTotalWithTax)
+        : Number(p.price || 0);
+      const renewalAmount = p.renewAmountWithTax !== null && p.renewAmountWithTax !== undefined
+        ? Number(p.renewAmountWithTax)
+        : Number(p.price || 0);
+      
+      const priceToUse = isRechargeable ? renewalAmount : newPackageAmount;
+      const finalPrice = customer.isFree ? 0 : priceToUse;
+
+      return {
+        display: `${p.packageName}. [ ${p.packageDuration} at Rs. ${finalPrice} ]`,
+        value: finalPrice,
+        properties: {
+          package_id: p.id,
+          package_amount: newPackageAmount,
+          recurring_amount: renewalAmount,
+          initial_amount: newPackageAmount,
+          renewal_amount: renewalAmount
+        }
+      };
+    });
+
     return res.status(200).json({
       amount: totalAmount,
       request_id: String(requestId),
@@ -780,15 +1061,7 @@ const paymentInquiry = async (req, res, next) => {
           : null,
         phone: customer.lead?.phoneNumber || null
       },
-      packages: [
-        {
-          display: `${pkg.packageName}. [ ${pkg.packageDuration} at ${totalAmount} ]`,
-          value: totalAmount,
-          properties: {
-            package_id: pkg.id
-          }
-        }
-      ]
+      packages: packagesList
     });
 
   } catch (err) {
@@ -819,18 +1092,11 @@ const processPayment = async (req, res, next) => {
     }
 
     // 1. Get Context
-    const context = await getCustomerContext(req, requestId);
+    const context = await getCustomerContext(req, requestId, req.body.package_id);
     const {
       customer, pkg, totalAmount, aggregatedItems,
       fullName, otcItems, packagePrice
     } = context;
-
-    if (req.body.package_id !== undefined && Number(req.body.package_id) !== Number(pkg.id)) {
-      return res.status(400).json({
-        response_code: 1,
-        response_message: "Invalid package"
-      });
-    }
 
     if (req.body.amount !== undefined && Number(req.body.amount) !== Number(totalAmount)) {
       return res.status(400).json({
@@ -876,9 +1142,6 @@ const processPayment = async (req, res, next) => {
         amount: existingPayment.amount,
         reference_code: referenceCode
       });
-
-      // Option 2: If you want to allow reprocessing for same requestId, 
-      // you can continue below instead of returning
     }
 
     // 4. Prepare Order Data
@@ -948,19 +1211,26 @@ const processPayment = async (req, res, next) => {
         adminExtensionDays: 0
       };
       if (subscription.isTrial) updatedSubData.planStart = renewalBase;
+      if (pkg.id !== subscription.package) {
+        updatedSubData.package = pkg.id;
+      }
 
       const updatedSubscription = await tx.customerSubscription.update({
         where: { id: subscription.id },
         data: updatedSubData
       });
 
-      // C. Update Customer Status
-      if (!customer.isRechargeable) {
-        await tx.customer.update({
-          where: { id: customer.id },
-          data: { isRechargeable: true }
-        });
+      // C. Update Customer Status & Subscribed Package
+      const customerUpdateData = {
+        isRechargeable: true
+      };
+      if (pkg.id !== customer.subscribedPkgId) {
+        customerUpdateData.subscribedPkgId = pkg.id;
       }
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: customerUpdateData
+      });
 
       // D. Create Order Management Record
       const newOrder = await tx.customerOrderManagement.create({
@@ -1077,9 +1347,6 @@ const processPayment = async (req, res, next) => {
   }
 };
 
-/**
- * 3. PAYMENT CONFIRMATION (The main logic block)
- */
 const confirmPayment = async (req, res) => {
   const { prisma, ispId } = req;
   const { request_id, amount, transaction_code } = req.body;
@@ -1100,7 +1367,32 @@ const confirmPayment = async (req, res) => {
     if (!payment) return res.json({ response_code: 1, response_message: "Payment request not found" });
 
     const customer = payment.customer;
-    const pkg = customer.subscribedPkg;
+    
+    let pkg = customer.subscribedPkg;
+    if (payment.packageDetails && typeof payment.packageDetails === 'object') {
+      const details = payment.packageDetails;
+      const targetPackageId = details.packageId || details.package_id;
+      if (targetPackageId && Number(targetPackageId) !== pkg?.id) {
+        const dbPkg = await prisma.PackagePrice.findFirst({
+          where: {
+            id: Number(targetPackageId),
+            planId: pkg?.planId,
+            isDeleted: false,
+            isActive: true,
+            isOnline: true
+          },
+          include: {
+            oneTimeCharges: {
+              where: { isDeleted: false }
+            }
+          }
+        });
+        if (dbPkg) {
+          pkg = dbPkg;
+        }
+      }
+    }
+
     const isRechargeable = Boolean(customer.isRechargeable);
     const newPackageAmount = pkg.initialTotalWithTax !== null && pkg.initialTotalWithTax !== undefined
       ? Number(pkg.initialTotalWithTax)
@@ -1133,24 +1425,36 @@ const confirmPayment = async (req, res) => {
       if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
 
       // Update Subscription
+      const updatedSubData = {
+        planEnd: expiryDateObj,
+        isTrial: false,
+        isInvoicing: true,
+        extensionCount: 0,
+        graceDaysBalance: 0,
+        compensationDays: 0,
+        adminExtensionDays: 0,
+        ...(subscription.isTrial ? { planStart: renewalBase } : {})
+      };
+      if (pkg.id !== subscription.package) {
+        updatedSubData.package = pkg.id;
+      }
+
       const updatedSubscription = await tx.customerSubscription.update({
         where: { id: subscription.id },
-        data: {
-          planEnd: expiryDateObj,
-          isTrial: false,
-          isInvoicing: true,
-          extensionCount: 0,
-          graceDaysBalance: 0,
-          compensationDays: 0,
-          adminExtensionDays: 0,
-          ...(subscription.isTrial ? { planStart: renewalBase } : {})
-        }
+        data: updatedSubData
       });
 
-      // Update Customer Status
-      if (!customer.isRechargeable) {
-        await tx.customer.update({ where: { id: customer.id }, data: { isRechargeable: true } });
+      // Update Customer Status & Subscribed Package
+      const customerUpdateData = {
+        isRechargeable: true
+      };
+      if (pkg.id !== customer.subscribedPkgId) {
+        customerUpdateData.subscribedPkgId = pkg.id;
       }
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: customerUpdateData
+      });
 
       // Mark eSewa Token as Completed
       await tx.eSewaTokenPayment.update({
@@ -1333,7 +1637,30 @@ const initiateEpayRenewal = async (req, res, next) => {
       return res.status(400).json({ error: 'Customer has no active renewable package' });
     }
 
-    const pkg = customer.subscribedPkg;
+    let pkg = customer.subscribedPkg;
+    const requestedPackageId = req.body?.package_id || req.body?.packageId;
+    if (requestedPackageId && Number(requestedPackageId) !== pkg.id) {
+      const selectedPkg = await req.prisma.PackagePrice.findFirst({
+        where: {
+          id: Number(requestedPackageId),
+          planId: pkg.planId,
+          isDeleted: false,
+          isActive: true,
+          isOnline: true
+        },
+        include: {
+          oneTimeCharges: {
+            where: { isDeleted: false, isRenewal: true }
+          }
+        }
+      });
+      if (selectedPkg) {
+        pkg = selectedPkg;
+      } else {
+        return res.status(400).json({ error: 'Selected package is invalid or not available online' });
+      }
+    }
+
     const amount = customer.isFree ? 0 : Number(pkg.renewAmountWithTax ?? pkg.price ?? 0);
     if (amount <= 0) return res.status(400).json({ error: 'Renewal amount must be greater than zero' });
     const epay = await getEpayConfig(req.prisma, req.ispId);
@@ -1394,7 +1721,31 @@ const completeEpayRenewal = async (req, res, next) => {
       return res.status(409).json({ error: `Payment is not complete (${statusResponse.data?.status || 'UNKNOWN'})` });
     }
 
-    const pkg = payment.customer.subscribedPkg;
+    let pkg = payment.customer.subscribedPkg;
+    if (payment.packageDetails && typeof payment.packageDetails === 'object') {
+      const details = payment.packageDetails;
+      const targetPackageId = details.packageId || details.package_id;
+      if (targetPackageId && Number(targetPackageId) !== pkg?.id) {
+        const dbPkg = await req.prisma.PackagePrice.findFirst({
+          where: {
+            id: Number(targetPackageId),
+            planId: pkg?.planId,
+            isDeleted: false,
+            isActive: true,
+            isOnline: true
+          },
+          include: {
+            oneTimeCharges: {
+              where: { isDeleted: false, isRenewal: true }
+            }
+          }
+        });
+        if (dbPkg) {
+          pkg = dbPkg;
+        }
+      }
+    }
+
     const subscription = await req.prisma.customerSubscription.findFirst({ where: { customerId, isActive: true }, orderBy: { createdAt: 'desc' } });
     if (!pkg || !subscription) return res.status(400).json({ error: 'Active subscription or package not found' });
     const renewalWindow = await getRenewalWindow(req.prisma, req.ispId, subscription);
@@ -1419,7 +1770,13 @@ const completeEpayRenewal = async (req, res, next) => {
           items: { create: renewalItems }
         }
       });
-      await tx.customer.update({ where: { id: customerId }, data: { isRechargeable: true, status: 'active', onboardStatus: 'fully_onboarded' } });
+      
+      const customerUpdateData = { isRechargeable: true, status: 'active', onboardStatus: 'fully_onboarded' };
+      if (pkg.id !== payment.customer.subscribedPkgId) {
+        customerUpdateData.subscribedPkgId = pkg.id;
+      }
+      await tx.customer.update({ where: { id: customerId }, data: customerUpdateData });
+      
       await tx.eSewaTokenPayment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', paidAt: new Date(), eSewaTransactionCode: response.transaction_code, referenceCode: statusResponse.data.ref_id || response.transaction_code, orderId: String(createdOrder.id) } });
       return createdOrder;
     });
@@ -1437,13 +1794,6 @@ const completeEpayRenewal = async (req, res, next) => {
     }
     await syncEsewaAccounting(req.prisma, req.ispId, order.id);
     res.json({ success: true, orderId: order.id, referenceCode: statusResponse.data.ref_id || response.transaction_code, planEnd });
-  } catch (error) { next(error); }
-};
-
-const listTransactions = async (req, res, next) => {
-  try {
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
     const status = String(req.query.status || '').trim();
     const search = String(req.query.search || '').trim();
     const where = {
