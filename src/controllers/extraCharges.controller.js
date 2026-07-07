@@ -147,7 +147,15 @@ async function createOneTimeCharge(req, res, next) {
 async function listOneTimeCharges(req, res, next) {
   try {
     const list = await req.prisma.OneTimeCharge.findMany({
-      where: { isDeleted: false, ispId: req.ispId }
+      where: {
+        isDeleted: false,
+        ispId: req.ispId,
+        NOT: {
+          description: {
+            startsWith: 'SYSTEM_OVERRIDE:'
+          }
+        }
+      }
     });
     return res.json(await attachApplicablePackages(req.prisma, list));
   } catch (err) {

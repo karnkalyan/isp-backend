@@ -18,12 +18,29 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
     });
     if (!original) continue;
 
-    // Check if amount is overridden and differs from the original amount
-    const isAmountChanged = amount !== undefined && amount !== null && amount !== '' && parseFloat(amount) !== original.amount;
+    // Resolve relative to the root catalog charge (which has forPackageCreation: true)
+    let baseCharge = original;
+    if (!original.forPackageCreation) {
+      const cleanName = original.name.split(' (')[0].trim();
+      const catalogCharge = await prisma.OneTimeCharge.findFirst({
+        where: {
+          name: cleanName,
+          forPackageCreation: true,
+          ispId,
+          isDeleted: false
+        }
+      });
+      if (catalogCharge) {
+        baseCharge = catalogCharge;
+      }
+    }
+
+    // Check if amount is overridden and differs from the base amount
+    const isAmountChanged = amount !== undefined && amount !== null && amount !== '' && parseFloat(amount) !== baseCharge.amount;
 
     if (isAmountChanged) {
       // Create a new OneTimeCharge item for this specific overridden amount
-      const cleanCode = original.code ? original.code.replace(/[\s-]/g, '') : 'ADDON';
+      const cleanCode = baseCharge.code ? baseCharge.code.replace(/[\s-]/g, '') : 'ADDON';
       const cleanAmount = String(amount).replace('.', '_');
       const newCode = `${cleanCode}${cleanAmount}`;
       const referenceId = `INT-${newCode}`;
@@ -38,16 +55,14 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
       } else {
         const newRecord = await prisma.OneTimeCharge.create({
           data: {
-            // Keep the catalog item identity/name stable. The generated code,
-            // reference ID and rate carry the package-specific price variant.
-            name: original.name,
+            name: `${baseCharge.name} (${amount})`,
             code: newCode,
             referenceId,
-            description: original.description,
+            description: `SYSTEM_OVERRIDE: ${baseCharge.description || ''}`,
             amount: parseFloat(amount),
-            isTaxable: original.isTaxable,
-            isTscApplicable: original.isTscApplicable,
-            isRenewal: original.isRenewal,
+            isTaxable: baseCharge.isTaxable,
+            isTscApplicable: baseCharge.isTscApplicable,
+            isRenewal: baseCharge.isRenewal,
             forPackageCreation: false,
             ispId,
             isActive: true,
@@ -97,11 +112,10 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
         finalIds.push(newRecord.id);
       }
     } else {
-      // Amount is unchanged or not overridden, use the original ID
-      finalIds.push(original.id);
+      // Amount is unchanged or not overridden, use the base catalog ID
+      finalIds.push(baseCharge.id);
     }
   }
-
   return finalIds;
 }
 
