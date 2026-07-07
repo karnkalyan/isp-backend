@@ -297,8 +297,9 @@ class NepurixClient {
         console.error('[NEPURIX] Failed to check existing customers:', err.message);
       }
 
-      const res = await this.#apiRequest('/api/v1/customer', 'POST', payload);
-      return this.#normalizeResult(res);
+      // Since Nepurix creates customers automatically on invoice creation,
+      // and has no customer POST endpoint, we return a mock success object.
+      return { Name: payload.name || payload.Name || 'Created Customer', Key: 'MOCK_KEY' };
     },
     get: async (id) => {
       const res = await this.#apiRequest(`/api/v1/customer?id=${id}`, 'GET');
@@ -390,19 +391,19 @@ class NepurixClient {
 
   sales = {
     list: async () => {
-      const res = await this.#apiRequest('/api/v1/sales-invoice', 'GET');
+      const res = await this.#apiRequest('/api/v1/sales-invoices', 'GET');
       return this.#normalizeResult(res);
     },
     create: async (payload) => {
-      const res = await this.#apiRequest('/api/v1/sales-invoice', 'POST', payload);
+      const res = await this.#apiRequest('/api/v1/sales-invoices', 'POST', payload);
       return this.#normalizeResult(res);
     },
     get: async (id) => {
-      const res = await this.#apiRequest(`/api/v1/sales-invoice?id=${id}`, 'GET');
+      const res = await this.#apiRequest(`/api/v1/sales-invoices-print?invoiceId=${id}`, 'GET');
       return this.#normalizeResult(res);
     },
     update: async (id, payload) => {
-      const res = await this.#apiRequest(`/api/v1/sales-invoice?id=${id}`, 'PUT', payload);
+      const res = await this.#apiRequest(`/api/v1/sales-invoices?id=${id}`, 'PUT', payload);
       return this.#normalizeResult(res);
     },
   };

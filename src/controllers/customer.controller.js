@@ -846,6 +846,7 @@ async function createCustomer(req, res, next) {
     let parsedWirelessCredentials = [];
     let parsedServiceConnection = {};
     let parsedSubscribedServices = [];
+    let finalWirelessCredentials = [];
 
     try {
       if (devices) parsedDevices = typeof devices === 'string' ? JSON.parse(devices) : devices;
@@ -1000,6 +1001,14 @@ async function createCustomer(req, res, next) {
     const skippedDevices = []; // track duplicates
 
     await prisma.$transaction(async (tx) => {
+      // Get settings for auto-generation
+      const autoGenSettings = await tx.iSPSettings.findMany({
+        where: { ispId: req.ispId ? Number(req.ispId) : null, key: { in: ['autoGenerateRadius', 'autoGenerateCustomerLogin'] } }
+      });
+      const settingsObj = Object.fromEntries(autoGenSettings.map(s => [s.key, s.value]));
+      const autoGenRadius = settingsObj.autoGenerateRadius === 'true';
+      const autoGenLogin = settingsObj.autoGenerateCustomerLogin === 'true';
+
       // 1. Create Customer
       createdCustomer = await tx.customer.create({
         data: {
@@ -1028,40 +1037,54 @@ async function createCustomer(req, res, next) {
         data: { customerUniqueId },
       });
 
-      const loginUsername = requestedLoginUsername || normalizeCustomerLoginUsername(customerUniqueId);
-      const loginEmail = toCustomerLoginEmail(loginUsername);
-      const loginPassword = String(customerLoginPassword || '').trim() || generateSecurePassword(10);
-
-      if (loginEmail) {
-        const customerRole = await tx.role.upsert({
-          where: { name: 'Customer' },
-          update: { isActive: true },
-          create: { name: 'Customer', isActive: true },
+      // Populate finalWirelessCredentials
+      finalWirelessCredentials.push(...parsedWirelessCredentials);
+      if (finalWirelessCredentials.length === 0 && autoGenRadius) {
+        finalWirelessCredentials.push({
+          username: customerUniqueId.toLowerCase(),
+          password: generateSecurePassword(10)
         });
-        const existingLogin = await tx.user.findUnique({ where: { email: loginEmail } });
-        if (existingLogin) {
-          throw new Error('Customer login username already exists');
+      }
+
+      // Check if we should create a login user (if explicitly provided or if autoGenLogin is enabled)
+      const shouldCreateLogin = Boolean(requestedLoginUsername || autoGenLogin);
+
+      if (shouldCreateLogin) {
+        const loginUsername = requestedLoginUsername || normalizeCustomerLoginUsername(customerUniqueId);
+        const loginEmail = toCustomerLoginEmail(loginUsername);
+        const loginPassword = String(customerLoginPassword || '').trim() || generateSecurePassword(10);
+
+        if (loginEmail) {
+          const customerRole = await tx.role.upsert({
+            where: { name: 'Customer' },
+            update: { isActive: true },
+            create: { name: 'Customer', isActive: true },
+          });
+          const existingLogin = await tx.user.findUnique({ where: { email: loginEmail } });
+          if (existingLogin) {
+            throw new Error('Customer login username already exists');
+          }
+
+          await tx.user.create({
+            data: {
+              email: loginEmail,
+              passwordHash: await bcrypt.hash(loginPassword, 10),
+              name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+              roleId: customerRole.id,
+              status: 'active',
+              ispId: req.ispId ? Number(req.ispId) : null,
+              branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+              customerId: createdCustomer.id,
+            },
+          });
+
+          customerLogin = {
+            username: loginUsername,
+            loginEmail,
+            password: loginPassword,
+            generatedPassword: !String(customerLoginPassword || '').trim(),
+          };
         }
-
-        await tx.user.create({
-          data: {
-            email: loginEmail,
-            passwordHash: await bcrypt.hash(loginPassword, 10),
-            name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
-            roleId: customerRole.id,
-            status: 'active',
-            ispId: req.ispId ? Number(req.ispId) : null,
-            branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
-            customerId: createdCustomer.id,
-          },
-        });
-
-        customerLogin = {
-          username: loginUsername,
-          loginEmail,
-          password: loginPassword,
-          generatedPassword: !String(customerLoginPassword || '').trim(),
-        };
       }
 
       // 3. Create Devices – handle duplicates individually
@@ -1168,7 +1191,7 @@ async function createCustomer(req, res, next) {
       }
 
       // 5. Connection Users
-      for (const cu of parsedWirelessCredentials) {
+      for (const cu of finalWirelessCredentials) {
         if (cu.username && cu.password) {
           await tx.connectionUser.create({
             data: {
@@ -1228,7 +1251,7 @@ async function createCustomer(req, res, next) {
     });
 
     // Sync to Radius during new customer creation
-    if (parsedWirelessCredentials.length > 0) {
+    if (finalWirelessCredentials.length > 0) {
       try {
         const { RadiusClient } = require('../services/radiusClient');
         const radius = await RadiusClient.create(req.ispId);
@@ -1262,7 +1285,7 @@ async function createCustomer(req, res, next) {
         const serviceId = await getServiceIdByCode('RADIUS');
 
         let provisioningSucceeded = false;
-        for (const cu of parsedWirelessCredentials) {
+        for (const cu of finalWirelessCredentials) {
           if (cu.username && cu.password) {
             const result = await radius.createUser(cu.username, cu.password, attributes, groups);
             provisioningSucceeded = true;
