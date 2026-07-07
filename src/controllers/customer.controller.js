@@ -1760,8 +1760,9 @@ async function provisionCustomer(req, res, next) {
       include: {
         lead: true,
         customerSubscriptions: {
-          where: { isActive: true, isTrial: true },
+          where: { isActive: true },
           include: { packagePrice: { include: { packagePlanDetails: true } } },
+          orderBy: { createdAt: 'desc' },
           take: 1,
         },
         devices: true,
@@ -1771,11 +1772,24 @@ async function provisionCustomer(req, res, next) {
     });
 
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
-    if (customer.status === 'active') return res.status(400).json({ error: 'Customer is already active' });
+    if (customer.status === 'active' && (!Array.isArray(services) || services.length === 0)) {
+      return res.status(200).json({
+        success: true,
+        message: 'Customer is already active. No additional services were requested.',
+        customer: {
+          id: customer.id,
+          customerUniqueId: customer.customerUniqueId,
+          name: `${customer.lead?.firstName || ''} ${customer.lead?.lastName || ''}`.trim(),
+          status: customer.status,
+          onboardStatus: customer.onboardStatus,
+        },
+        services: [],
+      });
+    }
 
     const testSubscription = customer.customerSubscriptions[0];
     if (!testSubscription) {
-      return res.status(400).json({ error: 'No active test-period subscription found' });
+      return res.status(400).json({ error: 'No active subscription found' });
     }
 
     // Prepare results for each service
@@ -1891,8 +1905,9 @@ async function provisionCustomer(req, res, next) {
                 }
                 if (testSubscription?.packagePrice) {
                   const radiusGroupName =
+                    data.planCode ||
                     testSubscription.packagePrice.packagePlanDetails?.planCode ||
-                    testSubscription.packagePrice.referenceId ||
+                    (Array.isArray(data.groups) ? data.groups.find(Boolean) : null) ||
                     testSubscription.packagePrice.packageName;
                   if (radiusGroupName) data.groups = [radiusGroupName];
                 }
@@ -1953,24 +1968,27 @@ async function provisionCustomer(req, res, next) {
       }
     }
 
-    // Update customer status and device/service connection statuses
-    await prisma.$transaction([
-      prisma.customer.update({
-        where: { id: customerId },
-        data: { status: 'active', onboardStatus: 'fully_onboarded' },
-      }),
-      prisma.customerDevice.updateMany({
-        where: { customerId, deviceType: 'ONT' },
-        data: { provisioningStatus: 'active' },
-      }),
-      prisma.customerServiceConnection.updateMany({
-        where: { customerId },
-        data: {
-          status: 'active',
-          provisioningNotes: `Provisioned via ${customer.serviceDetails?.[0]?.connectionType || 'service connection'} on ${new Date().toISOString()}`,
-        },
-      }),
-    ]);
+    // Update customer status and device/service connection statuses. This endpoint can also add
+    // missing add-on services for an already-active customer.
+    if (customer.status !== 'active' || customer.onboardStatus !== 'fully_onboarded') {
+      await prisma.$transaction([
+        prisma.customer.update({
+          where: { id: customerId },
+          data: { status: 'active', onboardStatus: 'fully_onboarded' },
+        }),
+        prisma.customerDevice.updateMany({
+          where: { customerId, deviceType: 'ONT' },
+          data: { provisioningStatus: 'active' },
+        }),
+        prisma.customerServiceConnection.updateMany({
+          where: { customerId },
+          data: {
+            status: 'active',
+            provisioningNotes: `Provisioned via ${customer.serviceDetails?.[0]?.connectionType || 'service connection'} on ${new Date().toISOString()}`,
+          },
+        }),
+      ]);
+    }
 
     // Extract results for convenience
     const tshulResult = serviceResults.find(r => r.service === SERVICE_CODES.TSHUL);
