@@ -388,7 +388,7 @@ async function createSplitter(req, res, next) {
             isDeleted: false,
             oltId: olt.id,
             connectedServiceBoard: {
-              path: 'boardPort',
+              path: '$.boardPort',
               equals: connectedServiceBoard.boardPort
             }
           }
@@ -747,7 +747,7 @@ async function updateSplitter(req, res, next) {
             isDeleted: false,
             oltId: olt.id,
             connectedServiceBoard: {
-              path: 'boardPort',
+              path: '$.boardPort',
               equals: targetServiceBoard.boardPort
             },
             id: { not: id }
