@@ -42,8 +42,13 @@ module.exports = (prisma) => {
     router.post('/nettv/subscribers/pwd/reset', checkPermission('services_manage'), serviceController.requestNetTVPasswordReset.bind(serviceController));
     router.patch('/nettv/subscribers/pwd/reset', checkPermission('services_manage'), serviceController.resetNetTVPassword.bind(serviceController));
     router.get('/nettv/packages', checkPermission('services_read'), serviceController.getNetTVPackages.bind(serviceController));
+    router.get('/nettv/config/:serial/packages', checkPermission('services_read'), serviceController.getNetTVPackageConfigs.bind(serviceController));
+    router.get('/nettv/config/:serial/packages/:packageId', checkPermission('services_read'), serviceController.getNetTVPackageConfig.bind(serviceController));
     router.get('/nettv/models', checkPermission('services_read'), serviceController.getNetTVModels.bind(serviceController));
     router.get('/nettv/vendors', checkPermission('services_read'), serviceController.getNetTVVendors.bind(serviceController));
+    router.get('/nettv/mac/replace-reasons/config', checkPermission('services_read'), serviceController.getNetTVMacReplaceReasons.bind(serviceController));
+    router.get('/nettv/invoices/:companyPaymentId/print', checkPermission('services_read'), serviceController.getNetTVInvoicePrint.bind(serviceController));
+    router.get('/nettv/credit-notes/:companyPaymentId/print', checkPermission('services_read'), serviceController.getNetTVCreditNotePrint.bind(serviceController));
     router.get('/nettv/stbs', checkPermission('services_read'), serviceController.getNetTVSTBs.bind(serviceController));
     router.post('/nettv/stbs', checkPermission('services_manage'), serviceController.createNetTVSTB.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));

@@ -892,6 +892,36 @@ class ServiceController {
     }
   }
 
+  async getNetTVPackageConfigs(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { serial } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const packages = await client.getPackageConfigs(serial);
+      return res.json({ success: true, data: packages });
+    } catch (error) {
+      console.error('Error getting NetTV package configs:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV package configs', message: error.message });
+    }
+  }
+
+  async getNetTVPackageConfig(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { serial, packageId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const packageConfig = await client.getPackageConfig(serial, packageId);
+      return res.json({ success: true, data: packageConfig });
+    } catch (error) {
+      console.error('Error getting NetTV package config:', error);
+      const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
+      if (optional) return optional;
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV package config', message: error.message });
+    }
+  }
+
   async getNetTVSTBs(req, res) {
     try {
       const ispId = req.ispId;
@@ -1046,6 +1076,44 @@ class ServiceController {
     } catch (error) {
       console.error('Error cancelling NetTV package:', error);
       return res.status(500).json({ success: false, error: 'Failed to cancel NetTV package', message: error.message });
+    }
+  }
+
+  async getNetTVInvoicePrint(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { companyPaymentId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getInvoicePrint(companyPaymentId);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV invoice print:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV invoice print', message: error.message });
+    }
+  }
+
+  async getNetTVCreditNotePrint(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { companyPaymentId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getCreditNotePrint(companyPaymentId);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV credit note print:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV credit note print', message: error.message });
+    }
+  }
+
+  async getNetTVMacReplaceReasons(req, res) {
+    try {
+      const ispId = req.ispId;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      const result = await client.getMacReplaceReasons();
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error getting NetTV MAC replace reasons:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get NetTV MAC replace reasons', message: error.message });
     }
   }
   // Mikrotik Operations

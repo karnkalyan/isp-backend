@@ -321,6 +321,17 @@ class NetTVClient {
         return this.#apiRequest('get', `/packages/${packageId}`, null, serial ? { serial } : null);
     }
 
+    async getPackageConfigs(serial) {
+        return this.#apiRequest('get', `/config/${encodeURIComponent(serial)}/packages`);
+    }
+
+    async getPackageConfig(serial, packageId) {
+        return this.#apiRequest(
+            'get',
+            `/config/${encodeURIComponent(serial)}/packages/${encodeURIComponent(packageId)}`
+        );
+    }
+
     // Get STBs (Set-Top Boxes)
     async getSTBs(subscriberId = null, page = 1, perPage = 20) {
         const params = { page, limit: perPage, q: '', sort_field: 'id', sort_by: 'desc' };
@@ -383,7 +394,7 @@ class NetTVClient {
     }
 
     async subscribePackages(serial, payload) {
-        return this.#apiRequest('post', `/v2/subscriptions/${encodeURIComponent(serial)}/packages`, payload);
+        return this.#apiRequest('post', `/subscriptions/${encodeURIComponent(serial)}/packages`, payload);
     }
 
     async cancelPackageSubscription(serial, payload) {
@@ -398,6 +409,18 @@ class NetTVClient {
 
     async getSubscriberOrder(orderId) {
         return this.#apiRequest('get', `/subscribers/orders/${encodeURIComponent(orderId)}`);
+    }
+
+    async getInvoicePrint(companyPaymentId) {
+        return this.#apiRequest('get', `/invoices/${encodeURIComponent(companyPaymentId)}/print`);
+    }
+
+    async getCreditNotePrint(companyPaymentId) {
+        return this.#apiRequest('get', `/credit-notes/${encodeURIComponent(companyPaymentId)}/print`);
+    }
+
+    async getMacReplaceReasons() {
+        return this.#apiRequest('get', '/mac/replace-reasons/config');
     }
 
     async getSubscriberOverview(username) {
