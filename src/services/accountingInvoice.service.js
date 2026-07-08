@@ -31,8 +31,7 @@ async function getEnabledAccountingClient(prisma, ispId) {
 function taxName(isTaxable, isTscApplicable) {
   if (isTaxable && isTscApplicable) return 'TSC + VAT';
   if (isTaxable) return 'VAT';
-  if (isTscApplicable) return 'TSC';
-  return 'Non Taxable';
+  return null;
 }
 
 async function loadOrder(prisma, ispId, orderId) {
@@ -128,7 +127,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
       amount: basicAmount,
       tax: taxName(isTaxable, isTscApplicable)
     };
-  });
+  }).filter(d => d.rate > 0);
 
   const lead = order.customer?.lead || {};
   const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || order.customer?.customerUniqueId;

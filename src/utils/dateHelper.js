@@ -90,7 +90,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 function convertToNepaliDate(dateStringOrObject) {
   if (!dateStringOrObject) return '';
   try {
-    const NepaliDate = require('nepali-date-converter');
+    const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
     const d = new Date(dateStringOrObject);
     if (isNaN(d.getTime())) return '';
     const nepaliDate = new NepaliDate(d);
