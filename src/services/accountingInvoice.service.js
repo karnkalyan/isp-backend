@@ -135,28 +135,16 @@ async function buildNepurixPayload(prisma, ispId, order) {
   const packageName = order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || null;
   const radiusUsername = order.customer?.connectionUsers?.[0]?.username || null;
 
-  // Retrieve Active ISP details for Organization finTag
-  const isp = await prisma.iSP.findUnique({
-    where: { id: Number(ispId) },
-    select: { companyName: true }
-  });
-
   const finTagDetail = [];
-  if (isp?.companyName) {
-    finTagDetail.push({
-      category: "Organization",
-      finTag: isp.companyName
-    });
-  }
   if (order.customer?.branch?.name) {
     finTagDetail.push({
-      category: "Branch",
+      category: "Organization",
       finTag: order.customer.branch.name
     });
   }
   if (order.customer?.subBranch?.name) {
     finTagDetail.push({
-      category: "Sub-branch",
+      category: "Branch",
       finTag: order.customer.subBranch.name
     });
   }
@@ -175,7 +163,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
     package: packageName,
     packageAmount: round(order.totalAmount || calculatedNet),
     activationDate: convertToNepaliDate(order.packageStart),
-    deactivationDate: convertToNepaliDate(order.packageEnd),
+    deActivationDate: convertToNepaliDate(order.packageEnd),
     detail,
     finTagDetail
   };
