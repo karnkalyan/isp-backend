@@ -13,6 +13,11 @@ const paymentMode = value => {
   return normalized === 'CREDIT' ? 'Credit' : 'Cash';
 };
 
+const safeUrl = url => {
+  if (!url || typeof url !== 'string') return url;
+  return url.replace(/\+/g, '%2B');
+};
+
 async function getEnabledAccountingClient(prisma, ispId) {
   const enabled = await prisma.iSPService.findFirst({
     where: {
@@ -213,7 +218,7 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
         : null;
       if (existing) {
         const id = existing.Id ?? existing.id ?? existing.ReferenceId ?? existing.referenceId;
-        const url = existing.InvoicePrintUrl ?? existing.invoicePrintUrl ?? existing.PrintUrl ?? null;
+        const url = safeUrl(existing.InvoicePrintUrl ?? existing.invoicePrintUrl ?? existing.PrintUrl ?? null);
         if (id) {
           console.log('[NEPURIX] Found existing invoice for order, reusing:', id);
           await prisma.customerOrderManagement.update({
@@ -238,7 +243,7 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
     }
     const data = result?.Data || result?.data || result || {};
     const id = data.Id ?? data.id ?? data.ReferenceId ?? data.referenceId;
-    const url = data.InvoicePrintUrl ?? data.invoicePrintUrl ?? data.PrintUrl ?? null;
+    const url = safeUrl(data.InvoicePrintUrl ?? data.invoicePrintUrl ?? data.PrintUrl ?? null);
     if (!id) throw new Error(result?.Message || 'Accounting service did not return a sales invoice ID');
     await prisma.customerOrderManagement.update({
       where: { id: order.id },
