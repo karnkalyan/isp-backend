@@ -253,7 +253,18 @@ async function listDevices(req, res, next) {
     const leads = leadIds.length
       ? await req.prisma.Lead.findMany({
           where: { id: { in: leadIds } },
-          select: { id: true, firstName: true, lastName: true, phoneNumber: true, status: true }
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phoneNumber: true,
+            status: true,
+            customers: {
+              select: {
+                id: true
+              }
+            }
+          }
         })
       : [];
     const leadById = new Map(leads.map(lead => [lead.id, lead]));
@@ -364,7 +375,19 @@ async function getDeviceBySerial(req, res, next) {
     const lead = device.leadId
       ? await req.prisma.Lead.findFirst({
           where: { id: device.leadId, ispId: req.ispId, isDeleted: false },
-          select: { id: true, firstName: true, lastName: true, phoneNumber: true, email: true, status: true }
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phoneNumber: true,
+            email: true,
+            status: true,
+            customers: {
+              select: {
+                id: true
+              }
+            }
+          }
         })
       : null;
 

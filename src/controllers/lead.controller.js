@@ -385,6 +385,14 @@ async function getLeadById(req, res, next) {
           orderBy: {
             scheduledAt: 'desc'
           }
+        },
+        customers: {
+          select: {
+            id: true,
+            customerUniqueId: true,
+            idNumber: true,
+            status: true
+          }
         }
       }
     });
