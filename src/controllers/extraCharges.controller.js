@@ -288,11 +288,13 @@ async function syncOneTimeCharges(req, res, next) {
     if (billingClients.length === 0) return res.status(400).json({ error: 'No active billing service available' });
 
     // Try list items from the first active billing client
-    const { code, client } = billingClients[0];
+    const { code: billingCode, client } = billingClients[0];
     const items = await client.item.list();
     if (!items || !Array.isArray(items)) {
-      return res.status(400).json({ error: `Failed to retrieve items from ${code}` });
+      return res.status(400).json({ error: `Failed to retrieve items from ${billingCode}` });
     }
+
+    console.log(`[SYNC] Retrieved ${items.length} items from accounting service ${billingCode}`);
 
     let createdCount = 0;
     let updatedCount = 0;
@@ -304,14 +306,14 @@ async function syncOneTimeCharges(req, res, next) {
 
       // Ensure referenceId and code are present
       let referenceId = item.ReferenceId;
-      let code = item.Code;
+      let itemCode = item.Code;
       
       if (!referenceId) {
-        if (code && code.startsWith('INT-')) {
-          referenceId = code;
-          code = code.replace('INT-', '');
+        if (itemCode && itemCode.startsWith('INT-')) {
+          referenceId = itemCode;
+          itemCode = itemCode.replace('INT-', '');
         } else {
-          referenceId = `INT-${code || item.Id || item.id || ''}`;
+          referenceId = `INT-${itemCode || item.Id || item.id || ''}`;
         }
       }
 
@@ -340,8 +342,8 @@ async function syncOneTimeCharges(req, res, next) {
       } else {
         await req.prisma.OneTimeCharge.create({
           data: {
-            name: item.Name || code,
-            code,
+            name: item.Name || itemCode,
+            code: itemCode,
             referenceId,
             description: item.Description || '',
             amount: item.SalesRate !== undefined ? parseFloat(item.SalesRate) : 0,
@@ -357,11 +359,62 @@ async function syncOneTimeCharges(req, res, next) {
       }
     }
 
+    // Now identify local items that are not in the retrieved accounting items list, and POST them!
+    const localCharges = await req.prisma.OneTimeCharge.findMany({
+      where: {
+        ispId,
+        isDeleted: false
+      }
+    });
+
+    const accountingCodes = new Set(
+      items.map(item => (item.Code || item.ReferenceId || '').toLowerCase().trim()).filter(Boolean)
+    );
+    const accountingNames = new Set(
+      items.map(item => (item.Name || '').toLowerCase().trim()).filter(Boolean)
+    );
+
+    let postedCount = 0;
+    let postErrors = 0;
+
+    for (const local of localCharges) {
+      const refIdLower = (local.referenceId || '').toLowerCase().trim();
+      const nameLower = (local.name || '').toLowerCase().trim();
+
+      const existsInAccounting = accountingCodes.has(refIdLower) || accountingNames.has(nameLower);
+
+      if (!existsInAccounting) {
+        try {
+          const itemPayload = {
+            Name: local.name,
+            Code: local.code,
+            Unit: 'Pcs',
+            ReferenceId: local.referenceId,
+            IsTaxable: local.isTaxable,
+            IsTSCApplied: local.isTscApplicable,
+            SalesRate: local.amount || 0
+          };
+
+          await client.item.create(itemPayload);
+          postedCount++;
+          console.log(`[SYNC] Posted local item to accounting: "${local.name}" (code: ${local.code})`);
+        } catch (postErr) {
+          postErrors++;
+          console.error(`[SYNC] Failed to post local item "${local.name}" to accounting:`, postErr.message);
+        }
+      }
+    }
+
+    console.log(`[SYNC] Identified ${localCharges.length} local items. Posted ${postedCount} missing items to accounting (Errors: ${postErrors}).`);
+
     return res.json({
       success: true,
-      message: `Sync completed: ${createdCount} created, ${updatedCount} updated.`,
+      message: `Sync completed: ${createdCount} imported/updated locally. Pushed ${postedCount} local items to accounting.`,
       created: createdCount,
-      updated: updatedCount
+      updated: updatedCount,
+      retrievedFromAccounting: items.length,
+      postedToAccounting: postedCount,
+      postErrors
     });
   } catch (err) {
     next(err);
