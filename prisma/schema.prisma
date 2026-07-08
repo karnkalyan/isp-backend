@@ -138,6 +138,7 @@ model ISP {
   onts                 ONT[]
   TerminalSession      TerminalSession[]
   TerminalCommand      TerminalCommand[]
+  pushTokens           UserPushToken[]
   splitters            Splitter[]
   messages             Message[]
   tickets              Ticket[]
@@ -193,6 +194,7 @@ model User {
   bulkUserAssignments BulkInventoryAssignment[] @relation("BulkInvUser")
   drumUserAssignments DrumAssignment[]          @relation("DrumUser")
   auditLogs           AuditLog[]                @relation("UserAuditLogs")
+  pushTokens          UserPushToken[]
 
   @@unique([ispId, yeastarExt])
   @@index([branchId])
@@ -2494,3 +2496,22 @@ model BranchRequest {
 
   @@map("branch_requests")
 }
+
+model UserPushToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  token     String   @db.VarChar(191)
+  platform  String?  @db.VarChar(50)   // "ios" | "android" | "web"
+  ispId     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, map: "user_push_token_user_fkey")
+  isp  ISP  @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "user_push_token_isp_fkey")
+
+  @@unique([userId, token])
+  @@index([userId])
+  @@index([ispId])
+  @@map("user_push_tokens")
+}
+

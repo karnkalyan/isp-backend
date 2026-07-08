@@ -12,6 +12,11 @@ module.exports = (prisma) => {
     router.put('/:id/read', auth, controller.markAsRead);
     router.put('/read-all', auth, controller.markAllRead);
 
+    // Push Tokens
+    router.post('/push-token', auth, controller.registerPushToken);
+    router.delete('/push-token', auth, controller.removePushToken);
+    router.post('/send-push', auth, controller.sendPushNotificationToSegment);
+
     // Notices
     router.get('/notices', auth, controller.getNotices);
     router.post('/notices', auth, controller.createNotice);

@@ -1,5 +1,6 @@
 const { TaskStatus, TaskPriority } = require('@prisma/client');
 const { logAudit } = require('../utils/auditLogger');
+const { createSystemNotification } = require('../utils/notificationHelper');
 
 // Helper to check for task overlaps
 async function checkOverlap(prisma, assignedToId, startTime, durationMinutes, excludeTaskId = null) {
@@ -273,6 +274,18 @@ async function createTask(req, res, next) {
 
         if (assignedToId) {
             try {
+                const wsManager = req.app.get('webSocketManager');
+                await createSystemNotification(req.prisma, {
+                    userId: Number(assignedToId),
+                    ispId,
+                    branchId: resolvedBranchId,
+                    type: 'info',
+                    title: `New Task Assigned`,
+                    description: `You have been assigned task: "${title}"`,
+                    link: `/tasks/${task.id}`,
+                    wsManager
+                });
+
                 const assignedUser = await req.prisma.user.findFirst({
                     where: { id: Number(assignedToId), ispId, isDeleted: false },
                     select: { name: true, email: true }
@@ -299,7 +312,7 @@ async function createTask(req, res, next) {
                     }, { ignoreNotificationSetting: true });
                 }
             } catch (err) {
-                console.error('Failed to send task assignment email:', err.message);
+                console.error('Failed to send task assignment notification/email:', err.message);
             }
         }
 
@@ -464,6 +477,24 @@ async function updateTask(req, res, next) {
                     notes: assignedToId ? `Assigned to user ID ${assignedToId}` : 'Unassigned task'
                 }
             });
+        }
+
+        if (assignedToId !== undefined && Number(assignedToId) !== task.assignedToId && assignedToId) {
+            try {
+                const wsManager = req.app.get('webSocketManager');
+                await createSystemNotification(req.prisma, {
+                    userId: Number(assignedToId),
+                    ispId,
+                    branchId: updatedTask.branchId,
+                    type: 'info',
+                    title: `Task Reassigned`,
+                    description: `You have been assigned task: "${updatedTask.title}"`,
+                    link: `/tasks/${updatedTask.id}`,
+                    wsManager
+                });
+            } catch (err) {
+                console.error('Failed to send task reassignment notification:', err.message);
+            }
         }
 
         await logAudit(req.prisma, req.user.id, 'TASK_UPDATE', { id: task.id, status: status || task.status }, req);

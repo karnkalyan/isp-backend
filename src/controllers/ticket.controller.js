@@ -1,4 +1,5 @@
 const prisma = require('../../prisma/client');
+const { createSystemNotification } = require('../utils/notificationHelper');
 
 // Reusable customer include that resolves name via lead
 const customerInclude = {
@@ -293,6 +294,23 @@ async function createTicket(req, res, next) {
                 title: 'New Ticket Created',
                 message: `Ticket ${ticketNumber}: ${title}`,
             });
+        }
+
+        if (assignedToId) {
+            try {
+                await createSystemNotification(req.prisma, {
+                    userId: parseInt(assignedToId),
+                    ispId,
+                    branchId,
+                    type: 'info',
+                    title: 'New Ticket Assigned',
+                    description: `Ticket ${ticketNumber} has been assigned to you: "${title}"`,
+                    link: `/tickets/${ticket.id}`,
+                    wsManager
+                });
+            } catch (err) {
+                console.error('Failed to send ticket assignment notification:', err.message);
+            }
         }
 
         // Trigger automated SMS
@@ -677,6 +695,23 @@ async function updateTicket(req, res, next) {
                 title: 'Ticket Updated',
                 message: `Ticket ${ticket.ticketNumber} status changed to ${status || 'updated'}`,
             });
+        }
+
+        if (assignedToId !== undefined && Number(assignedToId) !== existing.assignedToId && assignedToId) {
+            try {
+                await createSystemNotification(req.prisma, {
+                    userId: parseInt(assignedToId),
+                    ispId: ticket.ispId,
+                    branchId: ticket.branchId,
+                    type: 'info',
+                    title: 'Ticket Reassigned',
+                    description: `Ticket ${ticket.ticketNumber} has been reassigned to you: "${ticket.title}"`,
+                    link: `/tickets/${ticket.id}`,
+                    wsManager
+                });
+            } catch (err) {
+                console.error('Failed to send ticket reassignment notification:', err.message);
+            }
         }
 
         res.json(flattenCustomer(ticket));

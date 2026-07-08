@@ -1,3 +1,5 @@
+const { sendToUser } = require('../services/pushNotification');
+
 /**
  * Get notifications for current user
  */
@@ -118,6 +120,11 @@ async function createNotification(req, res, next) {
             },
         });
 
+        // Send Push Notification
+        if (userId) {
+            await sendToUser(req.prisma, parseInt(userId), title, description || '', { link: link || '' });
+        }
+
         // Push via WebSocket
         const wsManager = req.app.get('webSocketManager');
         if (wsManager) {
@@ -136,6 +143,7 @@ async function createNotification(req, res, next) {
         next(err);
     }
 }
+
 
 // ==================== NOTICES ====================
 
@@ -271,6 +279,126 @@ async function deleteNotice(req, res, next) {
     }
 }
 
+/**
+ * Register a user's push token
+ */
+async function registerPushToken(req, res, next) {
+    try {
+        const { token, platform } = req.body;
+        const userId = req.user?.id;
+        const ispId = req.ispId;
+
+        if (!token) {
+            return res.status(400).json({ error: 'Token is required' });
+        }
+
+        const pushToken = await req.prisma.userPushToken.upsert({
+            where: {
+                userId_token: {
+                    userId: parseInt(userId),
+                    token,
+                }
+            },
+            update: {
+                platform,
+                updatedAt: new Date(),
+            },
+            create: {
+                userId: parseInt(userId),
+                token,
+                platform,
+                ispId: parseInt(ispId),
+            }
+        });
+
+        res.status(200).json({ success: true, data: pushToken });
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Remove a user's push token
+ */
+async function removePushToken(req, res, next) {
+    try {
+        const { token } = req.body;
+        const userId = req.user?.id;
+
+        if (!token) {
+            return res.status(400).json({ error: 'Token is required' });
+        }
+
+        await req.prisma.userPushToken.deleteMany({
+            where: {
+                userId: parseInt(userId),
+                token,
+            }
+        });
+
+        res.status(200).json({ success: true, message: 'Push token removed successfully' });
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Send push notifications to all customers or all staff
+ */
+async function sendPushNotificationToSegment(req, res, next) {
+    try {
+        const { segment, title, body } = req.body;
+        const ispId = req.ispId;
+
+        if (!segment || !title || !body) {
+            return res.status(400).json({ error: 'Segment, title, and body are required' });
+        }
+
+        if (!['customer', 'staff'].includes(segment)) {
+            return res.status(400).json({ error: 'Invalid segment. Choose customer or staff.' });
+        }
+
+        const tokenQuery = {
+            ispId: parseInt(ispId),
+        };
+
+        if (segment === 'customer') {
+            tokenQuery.user = {
+                role: {
+                    name: {
+                        in: ['customer', 'customers']
+                    }
+                }
+            };
+        } else {
+            tokenQuery.user = {
+                role: {
+                    name: {
+                        notIn: ['customer', 'customers']
+                    }
+                }
+            };
+        }
+
+        const pushTokens = await req.prisma.userPushToken.findMany({
+            where: tokenQuery,
+            select: { token: true }
+        });
+
+        if (pushTokens.length === 0) {
+            return res.json({ success: true, message: 'No push devices found for this segment.', count: 0 });
+        }
+
+        const tokensList = pushTokens.map(t => t.token);
+        const { sendPushNotification } = require('../services/pushNotification');
+        await sendPushNotification(tokensList, title, body, { type: 'broadcast', segment });
+
+        res.json({ success: true, message: `Sent push notifications to ${tokensList.length} devices.`, count: tokensList.length });
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
     getNotifications,
     markAsRead,
@@ -280,4 +408,8 @@ module.exports = {
     createNotice,
     updateNotice,
     deleteNotice,
+    registerPushToken,
+    removePushToken,
+    sendPushNotificationToSegment,
 };
+

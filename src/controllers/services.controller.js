@@ -752,10 +752,26 @@ class ServiceController {
   async getNetTVResellerInfo(req, res) {
     try {
       const ispId = req.ispId;
-      const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      let client;
+      try {
+        client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
+      } catch (err) {
+        return res.json({
+          success: true,
+          configured: false,
+          data: null,
+          message: 'NetTV service is not configured or enabled'
+        });
+      }
+
       const resellerId = client.resellerId;
       if (!resellerId) {
-        return res.status(400).json({ success: false, error: 'Reseller ID is not configured' });
+        return res.json({
+          success: true,
+          configured: false,
+          data: null,
+          message: 'Reseller ID is not configured'
+        });
       }
 
       const [creditBalance, paymentMethods] = await Promise.all([
@@ -765,6 +781,7 @@ class ServiceController {
 
       return res.json({
         success: true,
+        configured: true,
         data: {
           resellerId,
           creditBalance: creditBalance || { credit_balance: 0, enable_credit_balance: "0" },
