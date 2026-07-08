@@ -1171,8 +1171,8 @@ model CustomerOrderManagement {
   paymentMethodId Int?
   accountingProvider String?
   accountingInvoiceId String?
-  accountingInvoiceUrl String?
-  accountingSyncError String?
+  accountingInvoiceUrl String? @db.Text
+  accountingSyncError String? @db.Text
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }
