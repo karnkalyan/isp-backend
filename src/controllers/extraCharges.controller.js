@@ -303,8 +303,17 @@ async function syncOneTimeCharges(req, res, next) {
       if (isPackage) continue;
 
       // Ensure referenceId and code are present
-      const referenceId = item.ReferenceId || `INT-${item.Code || item.Id}`;
-      const code = item.Code || referenceId.replace('INT-', '');
+      let referenceId = item.ReferenceId;
+      let code = item.Code;
+      
+      if (!referenceId) {
+        if (code && code.startsWith('INT-')) {
+          referenceId = code;
+          code = code.replace('INT-', '');
+        } else {
+          referenceId = `INT-${code || item.Id || item.id || ''}`;
+        }
+      }
 
       // Check if a non-deleted OneTimeCharge already exists with this referenceId/code
       const existing = await req.prisma.OneTimeCharge.findFirst({

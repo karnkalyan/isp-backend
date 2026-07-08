@@ -1102,6 +1102,8 @@ async function listInvoices(req, res, next) {
                 customerPan: order.customer?.panNo || '',
                 date: order.orderDate,
                 dueDate: order.packageEnd,
+                packageStart: order.packageStart,
+                packageEnd: order.packageEnd,
                 amount: order.totalAmount,
                 status: order.isPaid ? 'paid' : (new Date(order.packageEnd) < new Date() ? 'overdue' : 'pending'),
                 packageName: order.packagePrice?.packageName || 'Package Renewal',

@@ -321,7 +321,16 @@ class NepurixClient {
       return this.#normalizeResult(res);
     },
     create: async (payload) => {
-      const res = await this.#apiRequest('/api/v1/item', 'POST', payload);
+      const nepurixPayload = {
+        Name: payload.Name || payload.name,
+        Code: payload.ReferenceId || payload.referenceId || payload.Code || payload.code || "",
+        Unit: payload.Unit || payload.unit || 'Pcs',
+        ItemGroup: 'Internet'
+      };
+      if (nepurixPayload.Unit === 'Psc') {
+        nepurixPayload.Unit = 'Pcs';
+      }
+      const res = await this.#apiRequest('/api/v1/item', 'POST', nepurixPayload);
       return this.#normalizeResult(res);
     },
     get: async (id) => {

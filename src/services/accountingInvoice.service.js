@@ -1,5 +1,6 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
+const { convertToNepaliDate } = require('../utils/dateHelper');
 
 const number = value => Number(value || 0);
 const round = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -164,7 +165,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
     paymentMode: paymentMode(order.paymentId),
     customer: customerName,
     UserName: radiusUsername,
-    date: dateOnly(order.orderDate),
+    date: convertToNepaliDate(order.orderDate),
     remarks: `ISP invoice ${order.invoiceId || order.id}`,
     subTotal: round(subTotal),
     taxableAmount: round(taxableAmount),
@@ -172,8 +173,8 @@ async function buildNepurixPayload(prisma, ispId, order) {
     netAmount: round(order.totalAmount || calculatedNet),
     package: packageName,
     packageAmount: round(order.totalAmount || calculatedNet),
-    activationDate: dateOnly(order.packageStart),
-    deactivationDate: dateOnly(order.packageEnd),
+    activationDate: convertToNepaliDate(order.packageStart),
+    deactivationDate: convertToNepaliDate(order.packageEnd),
     detail,
     finTagDetail
   };

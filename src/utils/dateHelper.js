@@ -84,6 +84,24 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   return date;
 }
 
+/**
+ * Convert standard Gregorian Date to Nepali Date (BS) YYYY-MM-DD
+ */
+function convertToNepaliDate(dateStringOrObject) {
+  if (!dateStringOrObject) return '';
+  try {
+    const NepaliDate = require('nepali-date-converter');
+    const d = new Date(dateStringOrObject);
+    if (isNaN(d.getTime())) return '';
+    const nepaliDate = new NepaliDate(d);
+    return nepaliDate.format('YYYY-MM-DD');
+  } catch (err) {
+    console.error('Error converting date to Nepali:', err);
+    return '';
+  }
+}
+
 module.exports = {
-  computeExpiryFromBase
+  computeExpiryFromBase,
+  convertToNepaliDate
 };
