@@ -320,6 +320,7 @@ async function me(req, res) {
           }
         },
         branch: true,
+        isp: true,
         department: {
           select: { id: true, name: true }
         }
