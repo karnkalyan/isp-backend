@@ -203,6 +203,31 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
 
   const service = await getEnabledAccountingClient(prisma, ispId);
   if (!service) return null;
+
+  if (service.code === SERVICE_CODES.NEPURIX) {
+    try {
+      const invoices = await service.client.sales.list();
+      const remarkToMatch = `ISP invoice ${order.invoiceId || order.id}`.toLowerCase().trim();
+      const existing = Array.isArray(invoices)
+        ? invoices.find(inv => (inv.Remarks || inv.remarks || '').toLowerCase().trim() === remarkToMatch)
+        : null;
+      if (existing) {
+        const id = existing.Id ?? existing.id ?? existing.ReferenceId ?? existing.referenceId;
+        const url = existing.InvoicePrintUrl ?? existing.invoicePrintUrl ?? existing.PrintUrl ?? null;
+        if (id) {
+          console.log('[NEPURIX] Found existing invoice for order, reusing:', id);
+          await prisma.customerOrderManagement.update({
+            where: { id: order.id },
+            data: { accountingProvider: service.code, accountingInvoiceId: String(id), accountingInvoiceUrl: url, accountingSyncError: null }
+          });
+          return { provider: service.code, id: String(id), url };
+        }
+      }
+    } catch (err) {
+      console.error('[NEPURIX] Failed to check existing invoices list:', err.message);
+    }
+  }
+
   try {
     const payload = service.code === SERVICE_CODES.NEPURIX
       ? await buildNepurixPayload(prisma, ispId, order)
