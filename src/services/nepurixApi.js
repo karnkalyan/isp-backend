@@ -130,9 +130,12 @@ class NepurixClient {
     }
   }
 
-  // prefer Error/Errors/message field, fallback to Message
-  static #pickApiError(data) {
+  // prefer Error/Errors/message field, fallback to Message only if status is not 2xx
+  static #pickApiError(data, status = 200) {
     if (!data) return null;
+    if (status >= 200 && status < 300) {
+      return data?.Error ?? data?.Errors ?? null;
+    }
     return data?.Error ?? data?.Errors ?? data?.message ?? data?.Message ?? null;
   }
 
@@ -148,7 +151,7 @@ class NepurixClient {
           password: this.#config.password,
         });
 
-        const apiErr = NepurixClient.#pickApiError(res.data);
+        const apiErr = NepurixClient.#pickApiError(res.data, res.status);
         if (res.status === 200 && res.data?.token && !apiErr) {
           const { token, expires_utc } = res.data;
           this.#cache.token = token;
@@ -161,11 +164,11 @@ class NepurixClient {
             companyRes = await this.#api.get(cp, {
               headers: { Authorization: `Bearer ${token}` },
             });
-            const companyErr = NepurixClient.#pickApiError(companyRes.data);
+            const companyErr = NepurixClient.#pickApiError(companyRes.data, companyRes.status);
             if (companyRes.status === 200 && !companyErr && Array.isArray(companyRes.data?.Data)) break;
           }
 
-          const companyErr = NepurixClient.#pickApiError(companyRes?.data);
+          const companyErr = NepurixClient.#pickApiError(companyRes?.data, companyRes?.status);
           if (companyRes?.status !== 200 || companyErr) {
             const msg = companyErr || `Failed to fetch company: ${companyRes?.status}`;
             return { Error: msg, Status: companyRes?.status, Data: companyRes?.data };
@@ -224,7 +227,7 @@ class NepurixClient {
       const urlPath = path.startsWith('/') ? path : `/${path}`;
       const res = await this.#api.request({ url: urlPath, method, headers, data });
 
-      const apiErr = NepurixClient.#pickApiError(res.data);
+      const apiErr = NepurixClient.#pickApiError(res.data, res.status);
       if (res.status >= 200 && res.status < 300 && !apiErr) {
         return res.data;
       }
@@ -233,7 +236,7 @@ class NepurixClient {
       return { Error: errMsg, Status: res.status, Data: res.data };
     } catch (err) {
       if (err?.response?.data) {
-        const apiErr = NepurixClient.#pickApiError(err.response.data) || JSON.stringify(err.response.data);
+        const apiErr = NepurixClient.#pickApiError(err.response.data, err.response.status) || JSON.stringify(err.response.data);
         return { Error: apiErr, Status: err.response.status, Data: err.response.data };
       }
       return { Error: err.message || 'Network or unknown error' };
