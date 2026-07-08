@@ -81,8 +81,8 @@ class NetTVClient {
             apiSecret: apiSecret,
             apiVersion: nettvService.apiVersion || 'v1',
             config: nettvService.config || {},
-            resellerId: credentials.reseller_id || nettvService.config?.resellerId || null,
-            createdBy: credentials.reseller_username || nettvService.config?.createdBy || 'kisannet',
+            resellerId: credentials.reseller_id || credentials.resellerId || nettvService.config?.resellerId || nettvService.config?.reseller_id || null,
+            createdBy: credentials.reseller_username || credentials.resellerUsername || credentials.createdBy || nettvService.config?.createdBy || 'kisannet',
             defaultPackageId: nettvService.config?.packageId || nettvService.config?.defaultPackageId || 145,
             btbnBaseUrl: nettvService.config?.btbnBaseUrl || 'https://btbn.geniustv.geniussystems.com.np'
         });
