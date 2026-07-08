@@ -1118,9 +1118,9 @@ const processPayment = async (req, res, next) => {
       });
     }
 
-    // 3. Check if payment already exists
-    const existingPayment = await req.prisma.eSewaTokenPayment.findUnique({
-      where: { requestId: String(requestId) }
+    // 3. Check if payment already exists by transactionCode
+    const existingPayment = await req.prisma.eSewaTokenPayment.findFirst({
+      where: { eSewaTransactionCode: transactionCode }
     });
 
     // If payment exists and is completed, check if we should reprocess

@@ -1484,7 +1484,7 @@ model ESewaTokenPayment {
   ispId                Int
   customerId           Int
   customerUniqueId     String    @db.VarChar(100)
-  requestId            String    @unique @db.VarChar(191)
+  requestId            String    @db.VarChar(191)
   amount               Float
   status               String    @db.VarChar(50)
   eSewaTransactionCode String?   @db.VarChar(191)
