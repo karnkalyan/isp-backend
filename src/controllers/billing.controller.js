@@ -1070,8 +1070,23 @@ async function listInvoices(req, res, next) {
             firstOrders.map(row => [`${row.customerId}:${row.package}`, row._min.id])
         );
 
+        const orderIdsStr = orders.map(order => String(order.id));
+        const esewaPayments = await prisma.eSewaTokenPayment.findMany({
+            where: {
+                orderId: { in: orderIdsStr },
+                status: 'COMPLETED'
+            },
+            select: {
+                orderId: true,
+                eSewaTransactionCode: true,
+                referenceCode: true
+            }
+        });
+        const esewaPaymentByOrderId = new Map(esewaPayments.map(p => [p.orderId, p]));
+
         const accountingInvoices = await fetchAccountingInvoices(prisma, req.ispId, orders);
         const formattedInvoices = orders.map(order => {
+            const esewaPayment = esewaPaymentByOrderId.get(String(order.id)) || null;
             const accountingInvoice = accountingInvoices.get(order.id) || null;
             const customerName = order.customer?.lead 
                 ? `${order.customer.lead.firstName} ${order.customer.lead.lastName || ''}`.trim()
@@ -1118,6 +1133,8 @@ async function listInvoices(req, res, next) {
                 isTscApplicable: order.packagePrice?.isTscApplicable || false,
                 paymentMethod: order.isPaid ? (paymentMethodById.get(order.paymentMethodId)?.name || order.paymentId || 'Payment') : null,
                 paymentMethodId: order.paymentMethodId || null,
+                paymentTransactionCode: esewaPayment ? (esewaPayment.eSewaTransactionCode || esewaPayment.referenceCode) : null,
+                paymentReferenceCode: esewaPayment ? esewaPayment.referenceCode : null,
                 accountingProvider: order.accountingProvider || null,
                 accountingInvoiceId: order.accountingInvoiceId || null,
                 accountingInvoiceUrl: order.accountingInvoiceUrl || accountingInvoice?.InvoicePrintUrl || accountingInvoice?.invoicePrintUrl || null,
