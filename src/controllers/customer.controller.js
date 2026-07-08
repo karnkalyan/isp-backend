@@ -2369,12 +2369,17 @@ async function getCustomerById(req, res, next) {
     customer.orders = (customer.orders || []).map(order => {
       const isTrialOrder = Number(order.totalAmount || 0) === 0;
       const isRenewalOrder = !isTrialOrder && firstOrderIdByPackage.has(order.package) && order.id !== firstOrderIdByPackage.get(order.package);
+      const customPrices = order.packagePrice?.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
       return {
         ...order,
         isTrialOrder,
         isRenewalOrder,
         packageItems: isTrialOrder ? [] : (chargesByPackage.get(order.package) || order.packagePrice?.oneTimeCharges || [])
           .filter(item => !isRenewalOrder || item.isRenewal)
+          .map(item => ({
+            ...item,
+            amount: customPrices[String(item.id)] !== undefined ? customPrices[String(item.id)] : item.amount
+          }))
       };
     });
 

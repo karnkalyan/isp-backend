@@ -86,9 +86,10 @@ async function buildNepurixPayload(prisma, ispId, order) {
       isTscApplicable: false
     }];
   } else if (order.packagePrice?.oneTimeCharges && order.packagePrice.oneTimeCharges.length > 0) {
+    const customPrices = order.packagePrice.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
     itemsToUse = order.packagePrice.oneTimeCharges.map(charge => ({
       itemName: charge.name || 'Package Item',
-      itemPrice: Number(charge.amount || 0),
+      itemPrice: customPrices[String(charge.id)] !== undefined ? customPrices[String(charge.id)] : Number(charge.amount || 0),
       isTaxable: charge.isTaxable !== false,
       isTscApplicable: charge.isTscApplicable === true
     }));

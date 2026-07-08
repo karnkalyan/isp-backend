@@ -9,8 +9,6 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
 
   for (const item of requestedCharges) {
     const id = (typeof item === 'object' && item !== null) ? item.id : item;
-    const amount = (typeof item === 'object' && item !== null) ? item.amount : undefined;
-
     if (!id) continue;
 
     const original = await prisma.OneTimeCharge.findFirst({
@@ -18,7 +16,6 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
     });
     if (!original) continue;
 
-    // Resolve relative to the root catalog charge (which has forPackageCreation: true)
     let baseCharge = original;
     if (!original.forPackageCreation) {
       const cleanName = original.name.split(' (')[0].trim();
@@ -34,89 +31,9 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
         baseCharge = catalogCharge;
       }
     }
-
-    // Check if amount is overridden and differs from the base amount
-    const isAmountChanged = amount !== undefined && amount !== null && amount !== '' && parseFloat(amount) !== baseCharge.amount;
-
-    if (isAmountChanged) {
-      // Create a new OneTimeCharge item for this specific overridden amount
-      const cleanCode = baseCharge.code ? baseCharge.code.replace(/[\s-]/g, '') : 'ADDON';
-      const cleanAmount = String(amount).replace('.', '_');
-      const newCode = `${cleanCode}${cleanAmount}`;
-      const referenceId = `INT-${newCode}`;
-
-      // Check if it already exists to avoid collision
-      const exists = await prisma.OneTimeCharge.findFirst({
-        where: { referenceId, ispId, isDeleted: false }
-      });
-
-      if (exists) {
-        finalIds.push(exists.id);
-      } else {
-        const newRecord = await prisma.OneTimeCharge.create({
-          data: {
-            name: `${baseCharge.name} (${amount})`,
-            code: newCode,
-            referenceId,
-            description: `SYSTEM_OVERRIDE: ${baseCharge.description || ''}`,
-            amount: parseFloat(amount),
-            isTaxable: baseCharge.isTaxable,
-            isTscApplicable: baseCharge.isTscApplicable,
-            isRenewal: baseCharge.isRenewal,
-            forPackageCreation: false,
-            ispId,
-            isActive: true,
-            isDeleted: false,
-            updatedAt: new Date()
-          }
-        });
-        
-        // Sync it to all active billing clients!
-        try {
-          const billingClients = await ServiceFactory.getActiveBillingClients(ispId, prisma);
-          for (const { code, client } of billingClients) {
-            try {
-              const itemPayload = {
-                Name: newRecord.name,
-                Code: newCode,
-                Unit: 'Psc',
-                ReferenceId: referenceId,
-                ItemGroupReferenceId: 'TI-001',
-                IsTaxable: newRecord.isTaxable,
-                IsExcisable: false,
-                IsPurchaseItem: false,
-                IsSalesItem: true,
-                IsServiceItem: true,
-                ReorderLevel: 0,
-                ReorderQty: 0,
-                IsBatchApplied: false,
-                IsBatchPerQuantity: false,
-                IsExpirable: false,
-                PurchaseRate: 0.00,
-                SalesMargin: 0.00,
-                SalesRate: newRecord.amount || 0,
-                IsBOM: false
-              };
-              const providerPayload = code === SERVICE_CODES.NEPURIX
-                ? { ...itemPayload, IsTSCApplied: newRecord.isTscApplicable }
-                : itemPayload;
-              await client.item.create(providerPayload);
-            } catch (syncErr) {
-              console.warn(`[WARNING] ${code} sync failed for new custom addon charge:`, syncErr.message);
-            }
-          }
-        } catch (err) {
-          console.warn('[WARNING] Failed to fetch active billing clients for custom addon charge sync:', err.message);
-        }
-
-        finalIds.push(newRecord.id);
-      }
-    } else {
-      // Amount is unchanged or not overridden, use the base catalog ID
-      finalIds.push(baseCharge.id);
-    }
+    finalIds.push(baseCharge.id);
   }
-  return finalIds;
+  return [...new Set(finalIds)];
 }
 
 async function createPackagePrice(req, res, next) {
@@ -158,6 +75,17 @@ async function createPackagePrice(req, res, next) {
     const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId } });
     if (exists) return res.status(400).json({ error: 'Reference ID collision, try again' });
 
+    const addonPrices = {};
+    const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
+    if (Array.isArray(chargesToResolve)) {
+      for (const charge of chargesToResolve) {
+        if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
+          addonPrices[String(charge.id)] = Number(charge.amount);
+        }
+      }
+    }
+    const addonPricesJson = Object.keys(addonPrices).length > 0 ? JSON.stringify(addonPrices) : null;
+
     // Create DB record
     const record = await req.prisma.PackagePrice.create({
       data: {
@@ -173,12 +101,12 @@ async function createPackagePrice(req, res, next) {
         ispId: ispId,
         referenceId,
         isTrial: isTrial === true,
+        addonPricesJson,
         updatedAt: new Date()
       }
     });
 
     // Link addon charges (oneTimeCharges)
-    const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
     const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
     if (resolvedChargeIds.length > 0) {
       await req.prisma.packageonetimecharges.createMany({
@@ -310,13 +238,18 @@ async function getPackagePriceById(req, res, next) {
       where: { A: item.id }
     }).catch(() => []);
     const chargeIds = links.map(link => link.B);
+    const customPrices = item.addonPricesJson ? JSON.parse(item.addonPricesJson) : {};
     const charges = chargeIds.length ? await req.prisma.OneTimeCharge.findMany({
       where: { id: { in: chargeIds }, isDeleted: false }
     }) : [];
+    const mappedCharges = charges.map(c => ({
+      ...c,
+      amount: customPrices[String(c.id)] !== undefined ? customPrices[String(c.id)] : c.amount
+    }));
 
     return res.json({
       ...item,
-      oneTimeCharges: charges
+      oneTimeCharges: mappedCharges
     });
   } catch (err) {
     return next(err);
@@ -348,6 +281,20 @@ async function updatePackagePrice(req, res, next) {
     });
     if (!existing) return res.status(404).json({ error: 'NOT_FOUND' });
 
+    const chargesToResolve = oneTimeCharges !== undefined ? oneTimeCharges : oneTimeChargeIds;
+    let addonPricesJson = undefined;
+    if (chargesToResolve !== undefined) {
+      const addonPrices = {};
+      if (Array.isArray(chargesToResolve)) {
+        for (const charge of chargesToResolve) {
+          if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
+            addonPrices[String(charge.id)] = Number(charge.amount);
+          }
+        }
+      }
+      addonPricesJson = Object.keys(addonPrices).length > 0 ? JSON.stringify(addonPrices) : null;
+    }
+
     const updated = await req.prisma.PackagePrice.update({
       where: { id },
       data: {
@@ -360,11 +307,11 @@ async function updatePackagePrice(req, res, next) {
         isActive: isActive !== undefined ? Boolean(isActive) : undefined,
         isOnline: isOnline !== undefined ? Boolean(isOnline) : undefined,
         isTrial: isTrial !== undefined ? isTrial : undefined,
+        addonPricesJson: addonPricesJson !== undefined ? addonPricesJson : undefined,
         updatedAt: new Date()
       }
     });
 
-    const chargesToResolve = oneTimeCharges !== undefined ? oneTimeCharges : oneTimeChargeIds;
     if (chargesToResolve !== undefined) {
       const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, Number(req.ispId || updated.ispId), chargesToResolve);
       await req.prisma.packageonetimecharges.deleteMany({ where: { A: id } });
@@ -478,6 +425,16 @@ async function createBulkPackagePrices(req, res, next) {
       const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
       const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
 
+      const addonPrices = {};
+      if (Array.isArray(chargesToResolve)) {
+        for (const charge of chargesToResolve) {
+          if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
+            addonPrices[String(charge.id)] = Number(charge.amount);
+          }
+        }
+      }
+      const addonPricesJson = Object.keys(addonPrices).length > 0 ? JSON.stringify(addonPrices) : null;
+
       const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId, isDeleted: false } });
       if (exists) {
         const record = await req.prisma.PackagePrice.update({
@@ -486,11 +443,11 @@ async function createBulkPackagePrices(req, res, next) {
             price: parseFloat(price),
             initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
             renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
-            isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : undefined,
+            isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
             packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
             isActive: isActive !== false,
             isOnline: isOnline === true,
-            isDeleted: false,
+            addonPricesJson,
             updatedAt: new Date()
           }
         });
@@ -521,6 +478,7 @@ async function createBulkPackagePrices(req, res, next) {
           ispId: ispId,
           referenceId,
           isTrial: false,
+          addonPricesJson,
           updatedAt: new Date()
         }
       });

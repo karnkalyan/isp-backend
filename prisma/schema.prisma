@@ -356,6 +356,7 @@ model PackagePrice {
   isActive              Boolean                   @default(true)
   isOnline              Boolean                   @default(false)
   isDeleted             Boolean                   @default(false)
+  addonPricesJson       String?
   createdAt             DateTime                  @default(now())
   updatedAt             DateTime                  @updatedAt
   ispId                 Int?

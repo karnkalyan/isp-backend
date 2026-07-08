@@ -1087,9 +1087,13 @@ async function listInvoices(req, res, next) {
             const configuredAddons = legacyChargesByPackage.get(order.package)
                 || order.packagePrice?.oneTimeCharges
                 || [];
+            const customPrices = order.packagePrice?.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
             const packageItems = isTrialInvoice
                 ? []
-                : configuredAddons.filter(item => !isRenewalInvoice || item.isRenewal);
+                : configuredAddons.filter(item => !isRenewalInvoice || item.isRenewal).map(charge => ({
+                    ...charge,
+                    amount: customPrices[String(charge.id)] !== undefined ? customPrices[String(charge.id)] : charge.amount
+                }));
 
             return {
                 id: order.id,
