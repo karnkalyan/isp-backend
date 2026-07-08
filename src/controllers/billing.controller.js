@@ -1,4 +1,4 @@
-const { computeExpiryFromBase } = require('../utils/dateHelper');
+const { computeExpiryFromBase, convertToNepaliDate } = require('../utils/dateHelper');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const { RadiusClient } = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
@@ -1106,8 +1106,8 @@ async function listInvoices(req, res, next) {
                 customerPan: order.customer?.panNo || '',
                 date: order.orderDate,
                 dueDate: order.packageEnd,
-                packageStart: order.packageStart,
-                packageEnd: order.packageEnd,
+                packageStart: convertToNepaliDate(order.packageStart, 'DD/MM/YYYY'),
+                packageEnd: convertToNepaliDate(order.packageEnd, 'DD/MM/YYYY'),
                 amount: order.totalAmount,
                 status: order.isPaid ? 'paid' : (new Date(order.packageEnd) < new Date() ? 'overdue' : 'pending'),
                 packageName: order.packagePrice?.packageName || 'Package Renewal',
