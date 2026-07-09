@@ -80,7 +80,25 @@ async function createPackagePrice(req, res, next) {
     if (Array.isArray(chargesToResolve)) {
       for (const charge of chargesToResolve) {
         if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
-          addonPrices[String(charge.id)] = Number(charge.amount);
+          const original = await req.prisma.OneTimeCharge.findFirst({
+            where: { id: Number(charge.id), isDeleted: false }
+          });
+          let targetId = charge.id;
+          if (original && !original.forPackageCreation) {
+            const cleanName = original.name.split(' (')[0].trim();
+            const catalogCharge = await req.prisma.OneTimeCharge.findFirst({
+              where: {
+                name: cleanName,
+                forPackageCreation: true,
+                ispId,
+                isDeleted: false
+              }
+            });
+            if (catalogCharge) {
+              targetId = catalogCharge.id;
+            }
+          }
+          addonPrices[String(targetId)] = Number(charge.amount);
         }
       }
     }
@@ -183,6 +201,7 @@ async function listPackagePrices(req, res, next) {
         planId: true,
         referenceId: true,
         isTrial: true,
+        addonPricesJson: true,
         packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } }
       }
     });
@@ -193,12 +212,17 @@ async function listPackagePrices(req, res, next) {
         where: { A: p.id }
       }).catch(() => []);
       const chargeIds = links.map(link => link.B);
+      const customPrices = p.addonPricesJson ? JSON.parse(p.addonPricesJson) : {};
       const charges = chargeIds.length ? await req.prisma.OneTimeCharge.findMany({
         where: { id: { in: chargeIds }, isDeleted: false }
       }) : [];
+      const mappedCharges = charges.map(c => ({
+        ...c,
+        amount: customPrices[String(c.id)] !== undefined ? customPrices[String(c.id)] : c.amount
+      }));
       return {
         ...p,
-        oneTimeCharges: charges
+        oneTimeCharges: mappedCharges
       };
     }));
 
@@ -288,7 +312,25 @@ async function updatePackagePrice(req, res, next) {
       if (Array.isArray(chargesToResolve)) {
         for (const charge of chargesToResolve) {
           if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
-            addonPrices[String(charge.id)] = Number(charge.amount);
+            const original = await req.prisma.OneTimeCharge.findFirst({
+              where: { id: Number(charge.id), isDeleted: false }
+            });
+            let targetId = charge.id;
+            if (original && !original.forPackageCreation) {
+              const cleanName = original.name.split(' (')[0].trim();
+              const catalogCharge = await req.prisma.OneTimeCharge.findFirst({
+                where: {
+                  name: cleanName,
+                  forPackageCreation: true,
+                  ispId: Number(req.ispId || original.ispId),
+                  isDeleted: false
+                }
+              });
+              if (catalogCharge) {
+                targetId = catalogCharge.id;
+              }
+            }
+            addonPrices[String(targetId)] = Number(charge.amount);
           }
         }
       }
