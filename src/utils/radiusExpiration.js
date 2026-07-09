@@ -13,7 +13,7 @@ function formatRadiusExpiration(date) {
     hourCycle: 'h23'
   }).formatToParts(expirationDate);
   const value = type => parts.find(part => part.type === type)?.value;
-  return `${value('day')} ${value('month')} ${value('year')} ${value('hour')}:${value('minute')}:${value('second')}`;
+  return `${value('day')} ${value('month')} ${value('year')} 23:59:59`;
 }
 
 module.exports = { formatRadiusExpiration };

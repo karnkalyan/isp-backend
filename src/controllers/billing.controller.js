@@ -215,6 +215,31 @@ async function extendSubscription(req, res, next) {
                 }
             });
 
+            // If customer is inactive, set them back to active
+            const customerObj = await tx.customer.findUnique({
+                where: { id: Number(customerId) },
+                select: { status: true }
+            });
+
+            if (customerObj && customerObj.status !== 'active') {
+                await tx.customer.update({
+                    where: { id: Number(customerId) },
+                    data: {
+                        status: 'active',
+                        onboardStatus: 'fully_onboarded'
+                    }
+                });
+
+                await tx.customerServiceConnection.updateMany({
+                    where: { customerId: Number(customerId), status: { not: 'active' } },
+                    data: { status: 'active' }
+                });
+
+                await tx.connectionUser.updateMany({
+                    where: { customerId: Number(customerId), isDeleted: false, isActive: false },
+                    data: { isActive: true }
+                });
+            }
         });
         await syncRadiusExpirationAndDisconnect(req.ispId, subscription.customer.connectionUsers, newPlanEnd, `${type} extension`);
 

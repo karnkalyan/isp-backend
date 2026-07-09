@@ -157,7 +157,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
     invoiceType: 'Cash',
     paymentMode: paymentMode(order.paymentId),
     customer: customerName,
-    UserName: radiusUsername,
+    UserName: order.customer?.customerUniqueId || radiusUsername,
     date: convertToNepaliDate(order.orderDate),
     remarks: `ISP invoice ${order.invoiceId || order.id}`,
     subTotal: round(subTotal),
