@@ -19,23 +19,13 @@ const safeUrl = url => {
 };
 
 async function getEnabledAccountingClient(prisma, ispId) {
-  const enabled = await prisma.iSPService.findFirst({
-    where: {
-      ispId: Number(ispId),
-      isActive: true,
-      isEnabled: true,
-      isDeleted: false,
-      service: { code: { in: [SERVICE_CODES.TSHUL, SERVICE_CODES.NEPURIX] } }
-    }
-  });
-  if (!enabled) return null;
   const [service] = await ServiceFactory.getActiveBillingClients(Number(ispId), prisma);
   return service || null;
 }
 
 function taxName(isTaxable, isTscApplicable) {
   if (isTaxable && isTscApplicable) return 'TSC + VAT';
-  if (isTaxable) return 'TAX';
+  if (isTaxable) return 'VAT';
   return null;
 }
 
