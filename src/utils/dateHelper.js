@@ -90,10 +90,10 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
   if (!dateStringOrObject) return '';
 
-  // If it's already a Nepali date string (e.g., year >= 2035)
+  // If it's already a Nepali date string (e.g., year >= 2060 BS)
   if (typeof dateStringOrObject === 'string') {
     const yearMatch = dateStringOrObject.match(/^(\d{4})[-/]/);
-    if (yearMatch && parseInt(yearMatch[1], 10) >= 2035) {
+    if (yearMatch && parseInt(yearMatch[1], 10) >= 2060) {
       return dateStringOrObject;
     }
   }
@@ -103,7 +103,7 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
     if (isNaN(d.getTime())) return '';
 
     // If parsed year is already a BS year, format and return directly
-    if (d.getFullYear() >= 2035) {
+    if (d.getFullYear() >= 2060) {
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth() + 1).padStart(2, '0');
       const dd = String(d.getDate()).padStart(2, '0');
@@ -111,8 +111,28 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
     }
 
     const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
-    const nepaliDate = new NepaliDate(d);
-    return nepaliDate.format(format);
+
+    // Shift future dates past 2033 AD to avoid library range exception
+    let targetDate = d;
+    let yearShift = 0;
+    if (d.getFullYear() > 2033) {
+      yearShift = d.getFullYear() - 2033;
+      targetDate = new Date(d);
+      targetDate.setFullYear(2033);
+    }
+
+    const nepaliDate = new NepaliDate(targetDate);
+    const formatted = nepaliDate.format(format);
+
+    if (yearShift > 0) {
+      // Find the year component in the formatted string and shift it back up
+      const modified = formatted.replace(/\b\d{4}\b/, (yearStr) => {
+        return String(parseInt(yearStr, 10) + yearShift);
+      });
+      return modified;
+    }
+
+    return formatted;
   } catch (err) {
     console.error('Error converting date to Nepali:', err);
     return '';
