@@ -2902,20 +2902,72 @@ async function deleteCustomer(req, res, next) {
       return res.status(404).json({ error: "Customer not found" });
     }
 
+    // Fetch all active inventory items assigned to this customer
     const assignedInventory = await req.prisma.InventoryItem.findMany({
       where: { customerId: id, ispId: req.ispId },
-      select: { id: true, name: true, type: true, serialNumber: true, macAddress: true, status: true }
+      select: { id: true, name: true, type: true, serialNumber: true, macAddress: true, status: true, branchId: true }
     });
 
-    if (assignedInventory.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: "Customer cannot be deleted while hardware is assigned. Return or refund assigned devices to stock/office/staff before deleting or inactivating this customer.",
-        assignedInventory
-      });
-    }
+    // Fetch all customer device records
+    const customerDevices = await req.prisma.customerDevice.findMany({
+      where: { customerId: id },
+      select: { id: true, deviceType: true, brand: true, model: true, serialNumber: true, macAddress: true, ponSerial: true }
+    });
 
     await req.prisma.$transaction(async (tx) => {
+      // 1. Automatically release assigned inventory items
+      for (const item of assignedInventory) {
+        const targetStatus = item.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
+        await tx.InventoryItem.update({
+          where: { id: item.id },
+          data: {
+            status: targetStatus,
+            customerId: null,
+            updatedAt: new Date()
+          }
+        });
+
+        await tx.InventoryLog.create({
+          data: {
+            inventoryItemId: item.id,
+            fromStatus: item.status,
+            toStatus: targetStatus,
+            toEntityId: item.branchId,
+            entityType: item.branchId ? 'BRANCH' : 'HEAD_OFFICE',
+            actionByUserId: req.user.id,
+            note: `Released automatically via customer deletion/reversion`
+          }
+        });
+      }
+
+      // 2. Automatically delete customer device links and clean up ONT records
+      for (const device of customerDevices) {
+        await tx.customerDevice.delete({
+          where: { id: device.id }
+        });
+
+        if (device.serialNumber) {
+          const ont = await tx.oNT.findFirst({
+            where: { serialNumber: device.serialNumber }
+          });
+          if (ont) {
+            await tx.oNT.update({
+              where: { id: ont.id },
+              data: { isDeleted: true, updatedAt: new Date() }
+            });
+          }
+        }
+
+        const tr069Serials = [...new Set([device.serialNumber, device.ponSerial || device.serialNumber].filter(Boolean))];
+        if (tr069Serials.length > 0) {
+          await tx.tr069Device.updateMany({
+            where: { ispId: req.ispId, serialNumber: { in: tr069Serials } },
+            data: { leadId: null, updatedAt: new Date() }
+          });
+        }
+      }
+
+      // 3. Mark customer as deleted
       await tx.customer.update({
         where: { id },
         data: { isDeleted: true, status: 'deleted', onboardStatus: 'reverted_to_lead' }
@@ -2950,16 +3002,32 @@ async function deleteCustomer(req, res, next) {
         });
       }
 
+      // 4. Log audit event with full details of released inventory and devices
       await logAudit(tx, req.user.id, 'CUSTOMER_DELETE_REVERT_LEAD', {
         id,
         leadId: existing.leadId,
-        releasedInventory: []
+        releasedInventory: assignedInventory.map(item => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          serialNumber: item.serialNumber,
+          macAddress: item.macAddress,
+          releasedStatus: item.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK'
+        })),
+        customerDevices: customerDevices.map(d => ({
+          id: d.id,
+          type: d.deviceType,
+          brand: d.brand,
+          model: d.model,
+          serialNumber: d.serialNumber,
+          macAddress: d.macAddress
+        }))
       }, req);
     });
 
     return res.json({
       success: true,
-      message: "Customer removed and lead reverted to qualified",
+      message: "Customer removed, lead reverted, and assigned inventory released",
       id
     });
   } catch (err) {
