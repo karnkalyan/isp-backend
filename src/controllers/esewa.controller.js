@@ -3,6 +3,7 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');
 const crypto = require('crypto');
 const axios = require('axios');
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
+const { logAudit } = require('../utils/auditLogger');
 
 async function syncEsewaAccounting(prisma, ispId, orderId) {
   try {
@@ -1270,6 +1271,16 @@ const processPayment = async (req, res, next) => {
         }
       });
 
+      // F. Log renewal audit entry
+      await logAudit(tx, null, 'CUSTOMER_PACKAGE_RENEW', {
+        id: customer.id,
+        packageId: pkg.id,
+        packageName: pkg.packageName,
+        totalAmount,
+        paymentMethod: 'eSewa (API)',
+        transactionCode
+      }, req);
+
       return { order: newOrder, payment: updatedPayment };
     });
 
@@ -1778,6 +1789,17 @@ const completeEpayRenewal = async (req, res, next) => {
       await tx.customer.update({ where: { id: customerId }, data: customerUpdateData });
       
       await tx.eSewaTokenPayment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', paidAt: new Date(), eSewaTransactionCode: response.transaction_code, referenceCode: statusResponse.data.ref_id || response.transaction_code, orderId: String(createdOrder.id) } });
+
+      // Log renewal audit entry
+      await logAudit(tx, req.user?.id || null, 'CUSTOMER_PACKAGE_RENEW', {
+        id: customerId,
+        packageId: pkg.id,
+        packageName: pkg.packageName,
+        totalAmount: payment.amount,
+        paymentMethod: 'eSewa (ePay)',
+        transactionCode: response.transaction_code
+      }, req);
+
       return createdOrder;
     });
     try {
