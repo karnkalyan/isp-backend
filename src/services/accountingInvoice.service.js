@@ -131,8 +131,25 @@ async function buildAccountingItems(prisma, ispId, order) {
   // Map charges to itemsToUse using custom prices or charge amounts
   const customPrices = order.packagePrice?.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
 
+  // Resolve original/custom charge IDs by name splits to handle "INTERNET (3000)" vs "INTERNET" mismatches!
+  const customPriceKeys = Object.keys(customPrices);
+  const resolvedCustomPrices = {};
+  if (customPriceKeys.length > 0) {
+    const originalCharges = await prisma.OneTimeCharge.findMany({
+      where: { id: { in: customPriceKeys.map(Number) } }
+    });
+    for (const oc of originalCharges) {
+      const cleanName = (oc.name || '').split(' (')[0].trim().toUpperCase();
+      resolvedCustomPrices[cleanName] = Number(customPrices[String(oc.id)]);
+    }
+  }
+
   let itemsToUse = charges.map(charge => {
-    const customVal = customPrices[String(charge.id)];
+    const cleanChargeName = (charge.name || '').split(' (')[0].trim().toUpperCase();
+    const customVal = resolvedCustomPrices[cleanChargeName] !== undefined
+      ? resolvedCustomPrices[cleanChargeName]
+      : customPrices[String(charge.id)];
+
     return {
       itemName: charge.name || 'Package Item',
       referenceId: charge.referenceId || null,
@@ -146,27 +163,30 @@ async function buildAccountingItems(prisma, ispId, order) {
   const sumOfPrices = itemsToUse.reduce((s, it) => s + it.itemPrice, 0);
   if (!isTrial && sumOfPrices === 0) {
     const netAmount = Number(order.totalAmount || 0);
-    const hasTv = itemsToUse.some(it => /tv|nettv/i.test(it.itemName));
+    const tvItem = itemsToUse.find(it => /tv|nettv/i.test(it.itemName));
 
     let allocatedNets = itemsToUse.map(it => {
-      let pct = 0;
-      if (hasTv) {
-        if (/internet/i.test(it.itemName)) pct = 0.375;
-        else if (/support/i.test(it.itemName)) pct = 0.375;
-        else if (/tv|nettv/i.test(it.itemName)) pct = 0.25;
-        else pct = 1.0 / itemsToUse.length;
+      if (tvItem) {
+        if (/internet/i.test(it.itemName)) return round(netAmount * 0.375);
+        if (/support/i.test(it.itemName)) return round(netAmount * 0.375);
+        if (/tv|nettv/i.test(it.itemName)) return round(netAmount * 0.25);
       } else {
-        if (/internet/i.test(it.itemName)) pct = 0.50;
-        else if (/support/i.test(it.itemName)) pct = 0.50;
-        else pct = 1.0 / itemsToUse.length;
+        if (/internet/i.test(it.itemName)) return round(netAmount * 0.50);
+        if (/support/i.test(it.itemName)) return round(netAmount * 0.50);
       }
-      return round(netAmount * pct);
+      return 0;
     });
+
+    const totalAllocated = allocatedNets.reduce((s, v) => s + v, 0);
+    if (totalAllocated === 0) {
+      allocatedNets = itemsToUse.map(() => round(netAmount / itemsToUse.length));
+    }
 
     const sumAllocated = allocatedNets.reduce((s, v) => s + v, 0);
     const diff = round(netAmount - sumAllocated);
     if (diff !== 0 && allocatedNets.length > 0) {
-      allocatedNets[allocatedNets.length - 1] = round(allocatedNets[allocatedNets.length - 1] + diff);
+      const adjustIdx = allocatedNets.findIndex(v => v > 0) !== -1 ? allocatedNets.findIndex(v => v > 0) : allocatedNets.length - 1;
+      allocatedNets[adjustIdx] = round(allocatedNets[adjustIdx] + diff);
     }
 
     itemsToUse = itemsToUse.map((it, idx) => {
