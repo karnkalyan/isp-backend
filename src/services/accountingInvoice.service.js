@@ -35,7 +35,7 @@ async function getEnabledAccountingClient(prisma, ispId) {
 
 function taxName(isTaxable, isTscApplicable) {
   if (isTaxable && isTscApplicable) return 'TSC + VAT';
-  if (isTaxable) return 'VAT';
+  if (isTaxable) return 'TAX';
   return null;
 }
 
@@ -187,8 +187,9 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
 
       if (match) {
         if (match.Name) finalName = match.Name;
-        if (match.IsTaxable !== undefined) finalIsTaxable = match.IsTaxable === true;
-        if (match.IsExcisable !== undefined) finalIsTscApplicable = match.IsExcisable === true;
+        // Prioritize logical OR combining so demo sandbox mismatch flags do not disable taxes
+        if (match.IsTaxable !== undefined) finalIsTaxable = match.IsTaxable === true || finalIsTaxable;
+        if (match.IsExcisable !== undefined) finalIsTscApplicable = match.IsExcisable === true || finalIsTscApplicable;
         console.log(`[ACCOUNTING ITEM] "${finalName}" Nepurix match: IsTaxable=${match.IsTaxable}, IsExcisable=${match.IsExcisable} => final: taxable=${finalIsTaxable}, tsc=${finalIsTscApplicable}`);
       }
     }
