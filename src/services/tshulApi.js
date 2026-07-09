@@ -155,7 +155,20 @@ class TshulClient {
         if (res.status === 200 && res.data?.token && !apiErr) {
           const { token, expires_utc } = res.data;
           this.#cache.token = token;
-          this.#cache.expiresUtc = expires_utc ? new Date(expires_utc) : null;
+          
+          let expires = expires_utc ? new Date(expires_utc) : null;
+          if (!expires) {
+            try {
+              const jwt = require('jsonwebtoken');
+              const decoded = jwt.decode(token);
+              if (decoded && decoded.exp) {
+                expires = new Date(decoded.exp * 1000);
+              }
+            } catch (jwtErr) {
+              // ignore
+            }
+          }
+          this.#cache.expiresUtc = expires;
           console.log(`[TSHUL LOGIN SUCCESS] POST ${p} - Token received successfully`);
 
           // fetch company (try both /company and /api/company)
@@ -208,7 +221,7 @@ class TshulClient {
     const now = Date.now();
     const expiresMs = this.#cache.expiresUtc ? new Date(this.#cache.expiresUtc).getTime() : null;
 
-    if (!this.#cache.token || !expiresMs || now >= (expiresMs - bufferMs)) {
+    if (!this.#cache.token || (expiresMs && now >= (expiresMs - bufferMs))) {
       const loginResult = await this.#login();
       if (loginResult && typeof loginResult === 'object' && loginResult.Error) return loginResult;
       return loginResult;
@@ -236,6 +249,32 @@ class TshulClient {
       const urlPath = path.startsWith('/') ? path : `/${path}`;
       console.log(`[TSHUL REQUEST] ${method} ${urlPath} - Data: ${JSON.stringify(data)}`);
       const res = await this.#api.request({ url: urlPath, method, headers, data });
+
+      const isListEndpoint = 
+        urlPath.endsWith('/company') ||
+        urlPath.endsWith('/customers') ||
+        urlPath.endsWith('/branches') ||
+        urlPath.endsWith('/sales');
+
+      if (method === 'GET' && res.status === 404 && isListEndpoint) {
+        console.log(`[TSHUL RESPONSE SUCCESS] ${method} ${urlPath} - Status: 404 (Empty List) - Data: {"Data":[]}`);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'TSHUL',
+            operation: `${method} ${urlPath}`,
+            status: 'success',
+            message: 'Status: 404 (Empty List)',
+            data: {
+              request: { data },
+              response: { Data: [], Message: 'Empty List normalized from 404' }
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
+        return { Data: [], Success: true, Message: 'Empty list' };
+      }
 
       const apiErr = TshulClient.#pickApiError(res.data);
       if (res.status >= 200 && res.status < 300 && !apiErr) {
@@ -317,8 +356,8 @@ class TshulClient {
   }
 
   // helper: if result is error object, return as-is, otherwise return Data if present else raw
-  #normalizeResult(res) {
-    if (res == null) return res;
+  #normalizeResult(res, fallback = null) {
+    if (res == null) return fallback;
     if (res && typeof res === 'object' && res.Error) return res;
     return res?.Data ?? res;
   }
@@ -353,14 +392,14 @@ class TshulClient {
   company = {
     list: async () => {
       const res = await this.#apiRequest('/company', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   customer = {
     list: async () => {
       const res = await this.#apiRequest('/customers', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const res = await this.#apiRequest('/customers', 'POST', payload);
@@ -386,7 +425,7 @@ class TshulClient {
   branch = {
     list: async () => {
       const res = await this.#apiRequest('/branches', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const res = await this.#apiRequest('/branches', 'POST', payload);
@@ -412,7 +451,7 @@ class TshulClient {
   sales = {
     list: async () => {
       const res = await this.#apiRequest('/sales', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const res = await this.#apiRequest('/sales', 'POST', payload);

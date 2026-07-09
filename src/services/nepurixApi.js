@@ -157,7 +157,20 @@ class NepurixClient {
         if (res.status === 200 && res.data?.token && !apiErr) {
           const { token, expires_utc } = res.data;
           this.#cache.token = token;
-          this.#cache.expiresUtc = expires_utc ? new Date(expires_utc) : null;
+          
+          let expires = expires_utc ? new Date(expires_utc) : null;
+          if (!expires) {
+            try {
+              const jwt = require('jsonwebtoken');
+              const decoded = jwt.decode(token);
+              if (decoded && decoded.exp) {
+                expires = new Date(decoded.exp * 1000);
+              }
+            } catch (jwtErr) {
+              // ignore
+            }
+          }
+          this.#cache.expiresUtc = expires;
           console.log(`[NEPURIX LOGIN SUCCESS] POST ${p} - Token received successfully`);
 
           // fetch company
@@ -210,7 +223,7 @@ class NepurixClient {
     const now = Date.now();
     const expiresMs = this.#cache.expiresUtc ? new Date(this.#cache.expiresUtc).getTime() : null;
 
-    if (!this.#cache.token || !expiresMs || now >= (expiresMs - bufferMs)) {
+    if (!this.#cache.token || (expiresMs && now >= (expiresMs - bufferMs))) {
       const loginResult = await this.#login();
       if (loginResult && typeof loginResult === 'object' && loginResult.Error) return loginResult;
       return loginResult;
@@ -238,6 +251,37 @@ class NepurixClient {
       const urlPath = path.startsWith('/') ? path : `/${path}`;
       console.log(`[NEPURIX REQUEST] ${method} ${urlPath} - Data: ${JSON.stringify(data)}`);
       const res = await this.#api.request({ url: urlPath, method, headers, data });
+
+      const isListEndpoint = 
+        urlPath.includes('/sales-invoices') ||
+        urlPath.includes('/customer') ||
+        urlPath.includes('/item') ||
+        urlPath.includes('/payment-mode') ||
+        urlPath.includes('/package') ||
+        urlPath.includes('/tax') ||
+        urlPath.includes('/fintag') ||
+        urlPath.includes('/company');
+      const isSingleGet = urlPath.includes('id=') || urlPath.includes('invoiceId=');
+
+      if (method === 'GET' && res.status === 404 && isListEndpoint && !isSingleGet) {
+        console.log(`[NEPURIX RESPONSE SUCCESS] ${method} ${urlPath} - Status: 404 (Empty List) - Data: {"Data":[]}`);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'NEPURIX',
+            operation: `${method} ${urlPath}`,
+            status: 'success',
+            message: 'Status: 404 (Empty List)',
+            data: {
+              request: { data },
+              response: { Data: [], Message: 'Empty List normalized from 404' }
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
+        return { Data: [], Success: true, Message: 'Empty list' };
+      }
 
       const apiErr = NepurixClient.#pickApiError(res.data, res.status);
       if (res.status >= 200 && res.status < 300 && !apiErr) {
@@ -318,8 +362,8 @@ class NepurixClient {
     }
   }
 
-  #normalizeResult(res) {
-    if (res == null) return res;
+  #normalizeResult(res, fallback = null) {
+    if (res == null) return fallback;
     if (res && typeof res === 'object' && res.Error) return res;
     return res?.Data ?? res;
   }
@@ -354,14 +398,14 @@ class NepurixClient {
   company = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/company', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   customer = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/customer', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       try {
@@ -396,7 +440,7 @@ class NepurixClient {
   item = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/item', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const nepurixPayload = {
@@ -428,14 +472,14 @@ class NepurixClient {
   paymentMode = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/payment-mode', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   package = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/package', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const res = await this.#apiRequest('/api/v1/package', 'POST', payload);
@@ -458,28 +502,28 @@ class NepurixClient {
   tax = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/tax', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   fintagCategory = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/fintag-category', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   fintag = {
     list: async (category) => {
       const res = await this.#apiRequest(`/api/v1/fintag?category=${category}`, 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
   };
 
   sales = {
     list: async () => {
       const res = await this.#apiRequest('/api/v1/sales-invoices', 'GET');
-      return this.#normalizeResult(res);
+      return this.#normalizeResult(res, []);
     },
     create: async (payload) => {
       const res = await this.#apiRequest('/api/v1/sales-invoices', 'POST', payload);
