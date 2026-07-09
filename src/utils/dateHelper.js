@@ -89,10 +89,28 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
  */
 function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
   if (!dateStringOrObject) return '';
+
+  // If it's already a Nepali date string (e.g., year >= 2035)
+  if (typeof dateStringOrObject === 'string') {
+    const yearMatch = dateStringOrObject.match(/^(\d{4})[-/]/);
+    if (yearMatch && parseInt(yearMatch[1], 10) >= 2035) {
+      return dateStringOrObject;
+    }
+  }
+
   try {
-    const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
     const d = new Date(dateStringOrObject);
     if (isNaN(d.getTime())) return '';
+
+    // If parsed year is already a BS year, format and return directly
+    if (d.getFullYear() >= 2035) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
     const nepaliDate = new NepaliDate(d);
     return nepaliDate.format(format);
   } catch (err) {
