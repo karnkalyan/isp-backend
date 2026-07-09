@@ -163,20 +163,13 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
 
     let finalName = charge.name || 'Package Item';
     
-    // Default tax rules based on standard database values
+    // Tax rules from database OneTimeCharge record
     let finalIsTaxable = charge.isTaxable !== false;
     let finalIsTscApplicable = charge.isTscApplicable === true;
 
-    // Enforce name-based standard tax rule fallbacks to be absolutely safe
-    const nameUpper = finalName.toUpperCase();
-    if (nameUpper.includes('INTERNET')) {
-      finalIsTaxable = true;
-      finalIsTscApplicable = true;
-    } else if (nameUpper.includes('SUPPORT') || nameUpper.includes('MAINTENANCE') || nameUpper.includes('NETTV') || nameUpper.includes('NET TV')) {
-      finalIsTaxable = true;
-      finalIsTscApplicable = false;
-    }
+    console.log(`[ACCOUNTING ITEM] "${finalName}" DB: isTaxable=${charge.isTaxable}, isTscApplicable=${charge.isTscApplicable} => resolved: taxable=${finalIsTaxable}, tsc=${finalIsTscApplicable}`);
 
+    // Override with Nepurix catalog item properties if matched
     if (Array.isArray(nepurixItems) && nepurixItems.length > 0) {
       const match = nepurixItems.find(ni => {
         const niCode = String(ni.Code || '').toUpperCase().trim();
@@ -194,9 +187,9 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
 
       if (match) {
         if (match.Name) finalName = match.Name;
-        // If matched from Nepurix, also use Nepurix's exact tax configuration if defined
         if (match.IsTaxable !== undefined) finalIsTaxable = match.IsTaxable === true;
         if (match.IsExcisable !== undefined) finalIsTscApplicable = match.IsExcisable === true;
+        console.log(`[ACCOUNTING ITEM] "${finalName}" Nepurix match: IsTaxable=${match.IsTaxable}, IsExcisable=${match.IsExcisable} => final: taxable=${finalIsTaxable}, tsc=${finalIsTscApplicable}`);
       }
     }
 
