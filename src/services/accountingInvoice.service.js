@@ -150,8 +150,18 @@ async function buildAccountingItems(prisma, ispId, order) {
       ? resolvedCustomPrices[cleanChargeName]
       : customPrices[String(charge.id)];
 
+    let finalName = charge.name || 'Package Item';
+    const upperName = finalName.toUpperCase();
+    if (upperName.includes('SUPPORT') && (upperName.includes('&') || upperName.includes('AND'))) {
+      finalName = 'Support and Maintenance';
+    } else if (upperName.includes('INTERNET')) {
+      finalName = 'INTERNET';
+    } else if (upperName.includes('NETTV') || upperName.includes('NET TV')) {
+      finalName = 'NETTV CHARGE';
+    }
+
     return {
-      itemName: charge.name || 'Package Item',
+      itemName: finalName,
       referenceId: charge.referenceId || null,
       itemPrice: customVal !== undefined ? Number(customVal) : Number(charge.amount || 0),
       isTaxable: charge.isTaxable !== false,
