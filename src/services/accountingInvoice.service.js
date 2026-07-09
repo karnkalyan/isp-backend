@@ -162,6 +162,21 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
       : customPrices[String(charge.id)];
 
     let finalName = charge.name || 'Package Item';
+    
+    // Default tax rules based on standard database values
+    let finalIsTaxable = charge.isTaxable !== false;
+    let finalIsTscApplicable = charge.isTscApplicable === true;
+
+    // Enforce name-based standard tax rule fallbacks to be absolutely safe
+    const nameUpper = finalName.toUpperCase();
+    if (nameUpper.includes('INTERNET')) {
+      finalIsTaxable = true;
+      finalIsTscApplicable = true;
+    } else if (nameUpper.includes('SUPPORT') || nameUpper.includes('MAINTENANCE') || nameUpper.includes('NETTV') || nameUpper.includes('NET TV')) {
+      finalIsTaxable = true;
+      finalIsTscApplicable = false;
+    }
+
     if (Array.isArray(nepurixItems) && nepurixItems.length > 0) {
       const match = nepurixItems.find(ni => {
         const niCode = String(ni.Code || '').toUpperCase().trim();
@@ -177,8 +192,11 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
                (chargeName && niName === chargeName);
       });
 
-      if (match && match.Name) {
-        finalName = match.Name;
+      if (match) {
+        if (match.Name) finalName = match.Name;
+        // If matched from Nepurix, also use Nepurix's exact tax configuration if defined
+        if (match.IsTaxable !== undefined) finalIsTaxable = match.IsTaxable === true;
+        if (match.IsExcisable !== undefined) finalIsTscApplicable = match.IsExcisable === true;
       }
     }
 
@@ -186,8 +204,8 @@ async function buildAccountingItems(prisma, ispId, order, service = null) {
       itemName: finalName,
       referenceId: charge.referenceId || null,
       itemPrice: customVal !== undefined ? Number(customVal) : Number(charge.amount || 0),
-      isTaxable: charge.isTaxable !== false,
-      isTscApplicable: charge.isTscApplicable === true
+      isTaxable: finalIsTaxable,
+      isTscApplicable: finalIsTscApplicable
     };
   });
 
