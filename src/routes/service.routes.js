@@ -18,6 +18,7 @@ module.exports = (prisma) => {
     router.get('/isp', checkPermission('services_read'), serviceController.getISPActiveServices.bind(serviceController));
     router.get('/isp/status', checkPermission('services_read'), serviceController.getAllServiceStatuses.bind(serviceController));
     router.get('/isp/status/:serviceCode', checkPermission('services_read'), serviceController.getServiceStatus.bind(serviceController));
+    router.get('/logs', checkPermission('services_read'), serviceController.getServiceLogs.bind(serviceController));
 
     router.post('/isp/configure', checkPermission('services_manage'), serviceController.configureServiceForISP.bind(serviceController));
     router.post('/isp/:serviceCode/credentials', checkPermission('services_manage'), serviceController.setServiceCredentials.bind(serviceController));

@@ -73,7 +73,8 @@ class NepurixClient {
       username: username,
       password: password,
       apiVersion: nepurixService.apiVersion || 'v1',
-      config: nepurixService.config || {}
+      config: nepurixService.config || {},
+      ispId: ispId
     });
   }
 
@@ -146,6 +147,7 @@ class NepurixClient {
 
     for (const p of tryPaths) {
       try {
+        console.log(`[NEPURIX LOGIN REQUEST] POST ${p}`);
         const res = await this.#api.post(p, {
           userName: this.#config.username,
           password: this.#config.password,
@@ -156,26 +158,33 @@ class NepurixClient {
           const { token, expires_utc } = res.data;
           this.#cache.token = token;
           this.#cache.expiresUtc = expires_utc ? new Date(expires_utc) : null;
+          console.log(`[NEPURIX LOGIN SUCCESS] POST ${p} - Token received successfully`);
 
           // fetch company
           const companyPaths = ['/api/v1/company', '/company'];
           let companyRes = null;
           for (const cp of companyPaths) {
+            console.log(`[NEPURIX COMPANY REQUEST] GET ${cp}`);
             companyRes = await this.#api.get(cp, {
               headers: { Authorization: `Bearer ${token}` },
             });
             const companyErr = NepurixClient.#pickApiError(companyRes.data, companyRes.status);
-            if (companyRes.status === 200 && !companyErr && Array.isArray(companyRes.data?.Data)) break;
+            if (companyRes.status === 200 && !companyErr && Array.isArray(companyRes.data?.Data)) {
+              console.log(`[NEPURIX COMPANY SUCCESS] GET ${cp} - Details: ${JSON.stringify(companyRes.data)}`);
+              break;
+            }
           }
 
           const companyErr = NepurixClient.#pickApiError(companyRes?.data, companyRes?.status);
           if (companyRes?.status !== 200 || companyErr) {
             const msg = companyErr || `Failed to fetch company: ${companyRes?.status}`;
+            console.error(`[NEPURIX COMPANY ERROR] - Error:`, msg, companyRes?.data);
             return { Error: msg, Status: companyRes?.status, Data: companyRes?.data };
           }
 
           const companies = companyRes.data?.Data;
           if (!Array.isArray(companies) || companies.length === 0) {
+            console.error(`[NEPURIX COMPANY ERROR] - No company found for account`);
             return { Error: 'No company found for this account', Status: companyRes.status, Data: companyRes.data };
           }
 
@@ -184,8 +193,10 @@ class NepurixClient {
         }
 
         const msg = apiErr || `Login failed: ${res.status}`;
+        console.error(`[NEPURIX LOGIN FAIL] POST ${p} - Status: ${res.status} - Response:`, JSON.stringify(res.data));
         continue;
       } catch (err) {
+        console.error(`[NEPURIX LOGIN EXCEPTION] POST ${p} - Error:`, err.message);
         continue;
       }
     }
@@ -225,20 +236,84 @@ class NepurixClient {
       };
 
       const urlPath = path.startsWith('/') ? path : `/${path}`;
+      console.log(`[NEPURIX REQUEST] ${method} ${urlPath} - Data: ${JSON.stringify(data)}`);
       const res = await this.#api.request({ url: urlPath, method, headers, data });
 
       const apiErr = NepurixClient.#pickApiError(res.data, res.status);
       if (res.status >= 200 && res.status < 300 && !apiErr) {
+        console.log(`[NEPURIX RESPONSE SUCCESS] ${method} ${urlPath} - Status: ${res.status} - Data: ${JSON.stringify(res.data)}`);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'NEPURIX',
+            operation: `${method} ${urlPath}`,
+            status: 'success',
+            message: `Status: ${res.status}`,
+            data: {
+              request: { data },
+              response: res.data
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
         return res.data;
       }
 
       const errMsg = apiErr || `Unexpected API error: ${res.status}`;
+      console.error(`[NEPURIX RESPONSE ERROR] ${method} ${urlPath} - Status: ${res.status} - Error:`, errMsg, `Response Data: ${JSON.stringify(res.data)}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'NEPURIX',
+          operation: `${method} ${urlPath}`,
+          status: 'failed',
+          message: String(errMsg),
+          data: {
+            request: { data },
+            response: res.data
+          }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return { Error: errMsg, Status: res.status, Data: res.data };
     } catch (err) {
       if (err?.response?.data) {
         const apiErr = NepurixClient.#pickApiError(err.response.data, err.response.status) || JSON.stringify(err.response.data);
+        console.error(`[NEPURIX API EXCEPTION ERROR] ${method} ${path} - Status: ${err.response.status} - Error:`, apiErr);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'NEPURIX',
+            operation: `${method} ${path}`,
+            status: 'failed',
+            message: String(apiErr),
+            data: {
+              request: { data },
+              errorResponse: err.response.data
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
         return { Error: apiErr, Status: err.response.status, Data: err.response.data };
       }
+      console.error(`[NEPURIX API NETWORK ERROR] ${method} ${path} - Error:`, err.message);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'NEPURIX',
+          operation: `${method} ${path}`,
+          status: 'failed',
+          message: err.message,
+          data: {
+            request: { data }
+          }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return { Error: err.message || 'Network or unknown error' };
     }
   }

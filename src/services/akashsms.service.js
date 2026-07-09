@@ -50,7 +50,8 @@ class AakashSmsClient {
       authToken: credentials.auth_token,
       senderId: credentials.sender_id,
       baseUrl: smsService.baseUrl,
-      apiVersion: smsService.apiVersion || 'v4'
+      apiVersion: smsService.apiVersion || 'v4',
+      ispId: ispId
     });
   }
 
@@ -92,12 +93,39 @@ class AakashSmsClient {
 
   async testConnection() {
     try {
+      console.log(`[AKASHSMS TEST CONNECTION REQUEST] POST ${this.credit_url}`);
       const response = await axios.post(this.credit_url, {}, {
         headers: { 'auth-token': this.#config.authToken }
       });
+      console.log(`[AKASHSMS TEST CONNECTION SUCCESS] Response:`, JSON.stringify(response.data));
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'testConnection',
+          status: 'success',
+          message: 'Connection successful',
+          data: response.data
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return { connected: true, message: 'Successfully connected to Aakash SMS', data: response.data };
     } catch (error) {
       const errorMsg = error.response?.data?.response || error.response?.data?.message || error.message;
+      console.error(`[AKASHSMS TEST CONNECTION ERROR] Response:`, error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'testConnection',
+          status: 'failed',
+          message: String(errorMsg),
+          data: { errorResponse: error.response?.data || null }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       if (typeof errorMsg === 'string' && errorMsg.includes('total_credit')) {
         return {
           connected: true,
@@ -114,14 +142,40 @@ class AakashSmsClient {
 
   async sendSms(to, text) {
     try {
+      console.log(`[AKASHSMS SEND REQUEST] POST ${this.v3_url} - To: ${to} - Text: ${text}`);
       const response = await axios.post(this.v3_url, {
         auth_token: this.#config.authToken,
         to: to,
         text: text
       });
+      console.log(`[AKASHSMS SEND SUCCESS] Response:`, JSON.stringify(response.data));
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'sendSms',
+          status: 'success',
+          message: `Sent to: ${to}`,
+          data: { to, response: response.data }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return response.data;
     } catch (error) {
-      console.error('AakashSmsClient Error (v3):', error.response?.data || error.message);
+      console.error('[AKASHSMS SEND ERROR] (v3) Response:', error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'sendSms',
+          status: 'failed',
+          message: error.message,
+          data: { to, errorResponse: error.response?.data || null }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       throw error;
     }
   }
@@ -134,33 +188,87 @@ class AakashSmsClient {
         text: Array.isArray(textArray) ? textArray : [textArray]
       };
 
+      console.log(`[AKASHSMS BULK SEND REQUEST] POST ${this.v4_url} - Data: ${JSON.stringify(data)}`);
       const response = await axios.post(this.v4_url, data, {
         headers: { 'auth-token': this.#config.authToken }
       });
+      console.log(`[AKASHSMS BULK SEND SUCCESS] Response:`, JSON.stringify(response.data));
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'sendBulkSms',
+          status: 'success',
+          message: `Sent bulk to ${data.to.length} recipients`,
+          data: { data, response: response.data }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return response.data;
     } catch (error) {
-      console.error('AakashSmsClient Error (v4):', error.response?.data || error.message);
+      console.error('[AKASHSMS BULK SEND ERROR] (v4) Response:', error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'sendBulkSms',
+          status: 'failed',
+          message: error.message,
+          data: { errorResponse: error.response?.data || null }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       throw error;
     }
   }
 
   async getCredit() {
     try {
+      console.log(`[AKASHSMS CREDIT REQUEST] POST ${this.credit_url}`);
       const response = await axios.post(this.credit_url, {}, {
         headers: { 'auth-token': this.#config.authToken }
       });
+      console.log(`[AKASHSMS CREDIT SUCCESS] Response:`, JSON.stringify(response.data));
+      
+      const available_credit = response.data?.available_credit || response.data?.credit || 0;
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'getCredit',
+          status: 'success',
+          message: `Credit fetched: ${available_credit}`,
+          data: response.data
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return {
-        available_credit: response.data?.available_credit || response.data?.credit || 0
+        available_credit
       };
     } catch (error) {
       const errorMsg = error.response?.data?.response || error.response?.data?.message || error.message;
+      console.error('[AKASHSMS CREDIT ERROR] Response:', error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'AAKASHSMS',
+          operation: 'getCredit',
+          status: 'failed',
+          message: String(errorMsg),
+          data: { errorResponse: error.response?.data || null }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       if (typeof errorMsg === 'string' && errorMsg.includes('total_credit')) {
         return {
           available_credit: 0,
           note: errorMsg
         };
       }
-      console.error('AakashSmsClient Credit Error:', error.response?.data || error.message);
       return {
         available_credit: 0,
         error: errorMsg

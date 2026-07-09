@@ -66,6 +66,49 @@ class ServiceController {
     this.scheduleSmsCampaignProcessing(2000);
   }
 
+  async getServiceLogs(req, res, next) {
+    try {
+      const { serviceCode, status, page = 1, limit = 50 } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
+      const take = Number(limit);
+
+      const where = {
+        ispId: req.ispId,
+      };
+
+      if (serviceCode && serviceCode !== 'all') {
+        where.serviceCode = serviceCode.toUpperCase();
+      }
+
+      if (status && status !== 'all') {
+        where.status = status.toLowerCase();
+      }
+
+      const [logs, total] = await Promise.all([
+        this.prisma.serviceLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+        this.prisma.serviceLog.count({ where }),
+      ]);
+
+      return res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+          totalPages: Math.ceil(total / Number(limit)),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async findCustomerForSerial(serialNumber, req) {
     if (req?.customerProfile) return req.customerProfile;
     if (!this.prisma || !serialNumber) return null;

@@ -74,7 +74,8 @@ class TshulClient {
       username: username,
       password: password,
       apiVersion: tshulService.apiVersion || 'v1',
-      config: tshulService.config || {}
+      config: tshulService.config || {},
+      ispId: ispId
     });
   }
 
@@ -132,8 +133,6 @@ class TshulClient {
     }
   }
 
-  // ... [rest of the methods remain the same as your original, but I'll fix the key error] ...
-
   // prefer Error field, fallback to Message
   static #pickApiError(data) {
     if (!data) return null;
@@ -146,6 +145,7 @@ class TshulClient {
 
     for (const p of tryPaths) {
       try {
+        console.log(`[TSHUL LOGIN REQUEST] POST ${p}`);
         const res = await this.#api.post(p, {
           userName: this.#config.username,
           password: this.#config.password,
@@ -156,26 +156,33 @@ class TshulClient {
           const { token, expires_utc } = res.data;
           this.#cache.token = token;
           this.#cache.expiresUtc = expires_utc ? new Date(expires_utc) : null;
+          console.log(`[TSHUL LOGIN SUCCESS] POST ${p} - Token received successfully`);
 
           // fetch company (try both /company and /api/company)
           const companyPaths = ['/company', '/api/company'];
           let companyRes = null;
           for (const cp of companyPaths) {
+            console.log(`[TSHUL COMPANY REQUEST] GET ${cp}`);
             companyRes = await this.#api.get(cp, {
               headers: { Authorization: `Bearer ${token}` },
             });
             const companyErr = TshulClient.#pickApiError(companyRes.data);
-            if (companyRes.status === 200 && !companyErr && Array.isArray(companyRes.data?.Data)) break;
+            if (companyRes.status === 200 && !companyErr && Array.isArray(companyRes.data?.Data)) {
+              console.log(`[TSHUL COMPANY SUCCESS] GET ${cp} - Details: ${JSON.stringify(companyRes.data)}`);
+              break;
+            }
           }
 
           const companyErr = TshulClient.#pickApiError(companyRes.data);
           if (companyRes.status !== 200 || companyErr) {
             const msg = companyErr || `Failed to fetch company: ${companyRes?.status}`;
+            console.error(`[TSHUL COMPANY ERROR] - Error:`, msg, companyRes?.data);
             return { Error: msg, Status: companyRes?.status, Data: companyRes?.data };
           }
 
           const companies = companyRes.data?.Data;
           if (!Array.isArray(companies) || companies.length === 0) {
+            console.error(`[TSHUL COMPANY ERROR] - No company found for account`);
             return { Error: 'No company found for this account', Status: companyRes.status, Data: companyRes.data };
           }
 
@@ -184,8 +191,10 @@ class TshulClient {
         }
 
         const msg = apiErr || `Login failed: ${res.status}`;
+        console.error(`[TSHUL LOGIN FAIL] POST ${p} - Status: ${res.status} - Response:`, JSON.stringify(res.data));
         continue;
       } catch (err) {
+        console.error(`[TSHUL LOGIN EXCEPTION] POST ${p} - Error:`, err.message);
         continue;
       }
     }
@@ -225,20 +234,84 @@ class TshulClient {
       };
 
       const urlPath = path.startsWith('/') ? path : `/${path}`;
+      console.log(`[TSHUL REQUEST] ${method} ${urlPath} - Data: ${JSON.stringify(data)}`);
       const res = await this.#api.request({ url: urlPath, method, headers, data });
 
       const apiErr = TshulClient.#pickApiError(res.data);
       if (res.status >= 200 && res.status < 300 && !apiErr) {
+        console.log(`[TSHUL RESPONSE SUCCESS] ${method} ${urlPath} - Status: ${res.status} - Data: ${JSON.stringify(res.data)}`);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'TSHUL',
+            operation: `${method} ${urlPath}`,
+            status: 'success',
+            message: `Status: ${res.status}`,
+            data: {
+              request: { data },
+              response: res.data
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
         return res.data;
       }
 
       const errMsg = apiErr || `Unexpected API error: ${res.status}`;
+      console.error(`[TSHUL RESPONSE ERROR] ${method} ${urlPath} - Status: ${res.status} - Error:`, errMsg, `Response Data: ${JSON.stringify(res.data)}`);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'TSHUL',
+          operation: `${method} ${urlPath}`,
+          status: 'failed',
+          message: String(errMsg),
+          data: {
+            request: { data },
+            response: res.data
+          }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return { Error: errMsg, Status: res.status, Data: res.data };
     } catch (err) {
       if (err?.response?.data) {
         const apiErr = TshulClient.#pickApiError(err.response.data) || JSON.stringify(err.response.data);
+        console.error(`[TSHUL API EXCEPTION ERROR] ${method} ${path} - Status: ${err.response.status} - Error:`, apiErr);
+        
+        await prisma.serviceLog.create({
+          data: {
+            ispId: Number(this.#config.ispId || 1),
+            serviceCode: 'TSHUL',
+            operation: `${method} ${path}`,
+            status: 'failed',
+            message: String(apiErr),
+            data: {
+              request: { data },
+              errorResponse: err.response.data
+            }
+          }
+        }).catch(e => console.error('Failed to save service log', e));
+
         return { Error: apiErr, Status: err.response.status, Data: err.response.data };
       }
+      console.error(`[TSHUL API NETWORK ERROR] ${method} ${path} - Error:`, err.message);
+      
+      await prisma.serviceLog.create({
+        data: {
+          ispId: Number(this.#config.ispId || 1),
+          serviceCode: 'TSHUL',
+          operation: `${method} ${path}`,
+          status: 'failed',
+          message: err.message,
+          data: {
+            request: { data }
+          }
+        }
+      }).catch(e => console.error('Failed to save service log', e));
+
       return { Error: err.message || 'Network or unknown error' };
     }
   }
@@ -336,44 +409,28 @@ class TshulClient {
     },
   };
 
-  item = {
+  sales = {
     list: async () => {
-      const res = await this.#apiRequest('/items', 'GET');
+      const res = await this.#apiRequest('/sales', 'GET');
       return this.#normalizeResult(res);
     },
     create: async (payload) => {
-      const res = await this.#apiRequest('/items', 'POST', payload);
+      const res = await this.#apiRequest('/sales', 'POST', payload);
       return this.#normalizeResult(res);
     },
     get: async (referenceId) => {
-      const res = await this.#apiRequest(`/items/${referenceId}`, 'GET');
+      const res = await this.#apiRequest(`/sales/${referenceId}`, 'GET');
       return this.#normalizeResult(res);
     },
     update: async (referenceId, payload) => {
-      const res = await this.#apiRequest(`/items/${referenceId}`, 'PUT', payload);
+      const existing = await this.#apiRequest(`/sales/${referenceId}`, 'GET');
+      if (existing && typeof existing === 'object' && existing.Error) return existing;
+      const updatedPayload = { ...(existing?.Data ?? existing ?? {}), ...payload };
+      const res = await this.#apiRequest(`/sales/${referenceId}`, 'PUT', updatedPayload);
       return this.#normalizeResult(res);
     },
     delete: async (referenceId) => {
-      const res = await this.#apiRequest(`/items/${referenceId}`, 'DELETE');
-      return this.#normalizeResult(res);
-    },
-  };
-
-  sales = {
-    list: async () => {
-      const res = await this.#apiRequest('/salesinvoice', 'GET');
-      return this.#normalizeResult(res);
-    },
-    create: async (payload) => {
-      const res = await this.#apiRequest('/salesinvoice', 'POST', payload);
-      return this.#normalizeResult(res);
-    },
-    get: async (id) => {
-      const res = await this.#apiRequest(`/salesinvoice/${id}`, 'GET');
-      return this.#normalizeResult(res);
-    },
-    update: async (id, payload) => {
-      const res = await this.#apiRequest(`/salesinvoice/${id}`, 'PUT', payload);
+      const res = await this.#apiRequest(`/sales/${referenceId}`, 'DELETE');
       return this.#normalizeResult(res);
     },
   };

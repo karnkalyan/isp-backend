@@ -207,10 +207,16 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
   if (order.accountingInvoiceId) return { provider: order.accountingProvider, id: order.accountingInvoiceId, url: order.accountingInvoiceUrl };
 
   const service = await getEnabledAccountingClient(prisma, ispId);
-  if (!service) return null;
+  if (!service) {
+    console.log(`[ACCOUNTING SYNC] No billing/accounting provider enabled for ispId: ${ispId}`);
+    return null;
+  }
+
+  console.log(`[ACCOUNTING SYNC REQUEST] Syncing order ${orderId} to provider ${service.code}...`);
 
   if (service.code === SERVICE_CODES.NEPURIX) {
     try {
+      console.log(`[ACCOUNTING SYNC] Listing existing Nepurix invoices...`);
       const invoices = await service.client.sales.list();
       const remarkToMatch = `ISP invoice ${order.invoiceId || order.id}`.toLowerCase().trim();
       const existing = Array.isArray(invoices)
@@ -237,20 +243,33 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
     const payload = service.code === SERVICE_CODES.NEPURIX
       ? await buildNepurixPayload(prisma, ispId, order)
       : buildTshulPayload(order);
+    
+    console.log(`[ACCOUNTING SYNC] Creating invoice on ${service.code} with payload:`, JSON.stringify(payload));
     const result = await service.client.sales.create(payload);
+    
     if (result && result.Error) {
+      console.error(`[ACCOUNTING SYNC ERROR] ${service.code} API error:`, result.Error);
       throw new Error(`Nepurix API Error: ${result.Error}`);
     }
+    
     const data = result?.Data || result?.data || result || {};
     const id = data.Id ?? data.id ?? data.ReferenceId ?? data.referenceId;
     const url = safeUrl(data.InvoicePrintUrl ?? data.invoicePrintUrl ?? data.PrintUrl ?? null);
-    if (!id) throw new Error(result?.Message || 'Accounting service did not return a sales invoice ID');
+    
+    if (!id) {
+      console.error(`[ACCOUNTING SYNC ERROR] No invoice ID returned from ${service.code}. Response:`, JSON.stringify(result));
+      throw new Error(result?.Message || 'Accounting service did not return a sales invoice ID');
+    }
+    
+    console.log(`[ACCOUNTING SYNC SUCCESS] Invoice successfully synced to ${service.code}. Invoice ID: ${id}`);
+    
     await prisma.customerOrderManagement.update({
       where: { id: order.id },
       data: { accountingProvider: service.code, accountingInvoiceId: String(id), accountingInvoiceUrl: url, accountingSyncError: null }
     });
     return { provider: service.code, id: String(id), url, data };
   } catch (error) {
+    console.error(`[ACCOUNTING SYNC ERROR] Exception during sync for order ${orderId}:`, error.message);
     await prisma.customerOrderManagement.update({
       where: { id: order.id },
       data: { accountingProvider: service.code, accountingSyncError: String(error.message || error).slice(0, 2000) }
@@ -264,12 +283,18 @@ async function fetchAccountingInvoices(prisma, ispId, orders) {
   if (!eligible.length) return new Map();
   const service = await getEnabledAccountingClient(prisma, ispId);
   if (!service) return new Map();
+  
+  console.log(`[ACCOUNTING FETCH] Fetching ${eligible.length} invoices using provider ${service.code}...`);
+  
   const pairs = await Promise.all(eligible.map(async order => {
     if (order.accountingProvider && order.accountingProvider !== service.code) return [order.id, null];
     try {
+      console.log(`[ACCOUNTING FETCH REQUEST] Fetching invoice ${order.accountingInvoiceId} from ${service.code}...`);
       const invoice = await service.client.sales.get(order.accountingInvoiceId);
+      console.log(`[ACCOUNTING FETCH SUCCESS] Invoice ${order.accountingInvoiceId} fetched successfully`);
       return [order.id, invoice?.Data || invoice?.data || invoice];
     } catch (error) {
+      console.error(`[ACCOUNTING FETCH ERROR] Failed to fetch invoice ${order.accountingInvoiceId}:`, error.message);
       return [order.id, { id: order.accountingInvoiceId, invoicePrintUrl: order.accountingInvoiceUrl, fetchError: error.message }];
     }
   }));

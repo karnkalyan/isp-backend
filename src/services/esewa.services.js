@@ -73,7 +73,8 @@ class EsewaClient {
             apiVersion: esewaService.apiVersion || 'v1',
             config: serviceConfig,
             integrationMode,
-            environment: (esewaService.baseUrl || '').includes('uat') ? 'uat' : (serviceConfig.environment || 'production')
+            environment: (esewaService.baseUrl || '').includes('uat') ? 'uat' : (serviceConfig.environment || 'production'),
+            ispId: ispId
         });
     }
 
@@ -140,6 +141,17 @@ class EsewaClient {
     async testConnection() {
         try {
             if (this.#config.integrationMode === 'TOKEN_BASED') {
+                await prisma.serviceLog.create({
+                    data: {
+                        ispId: Number(this.#config.ispId || 1),
+                        serviceCode: 'ESEWA',
+                        operation: 'testConnection',
+                        status: 'success',
+                        message: 'Token-based eSewa integration ready',
+                        data: { integrationMode: 'TOKEN_BASED' }
+                    }
+                }).catch(e => console.error('Failed to save service log', e));
+
                 return {
                     connected: true,
                     message: 'Token-based eSewa routes are ready for inbound requests',
@@ -154,16 +166,42 @@ class EsewaClient {
                 }
             });
 
-            return {
+            const result = {
                 connected: response.status === 200,
                 message: 'Successfully connected to eSewa API',
                 environment: this.#config.environment,
                 timestamp: new Date().toISOString()
             };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'testConnection',
+                    status: 'success',
+                    message: 'Connection successful',
+                    data: result
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
+            const errorMsg = error.response?.data?.message || error.message;
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'testConnection',
+                    status: 'failed',
+                    message: String(errorMsg),
+                    data: { errorResponse: error.response?.data || null }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             return {
                 connected: false,
-                message: error.response?.data?.message || error.message,
+                message: errorMsg,
                 environment: this.#config.environment,
                 timestamp: new Date().toISOString()
             };
@@ -204,15 +242,40 @@ class EsewaClient {
                 }
             });
 
-            return {
+            const result = {
                 success: true,
                 paymentUrl: response.data?.payment_url || `${this.#config.baseUrl}/payment`,
                 transactionId: transactionId,
                 amount: amount,
                 timestamp: new Date().toISOString()
             };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'processPayment',
+                    status: 'success',
+                    message: `Initiated transaction ${transactionId} for ${amount}`,
+                    data: { payload, result }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
             console.error('Error processing eSewa payment:', error);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'processPayment',
+                    status: 'failed',
+                    message: error.message,
+                    data: { paymentData }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             throw new Error(`Payment processing failed: ${error.message}`);
         }
     }
@@ -228,8 +291,7 @@ class EsewaClient {
             });
 
             const transaction = response.data;
-
-            return {
+            const result = {
                 success: transaction.status === 'COMPLETED',
                 transactionId: transactionId,
                 status: transaction.status,
@@ -240,15 +302,39 @@ class EsewaClient {
                 verified: transaction.status === 'COMPLETED',
                 rawData: transaction
             };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'verifyPayment',
+                    status: result.success ? 'success' : 'failed',
+                    message: `Transaction ${transactionId} verification status: ${transaction.status}`,
+                    data: { transactionId, response: response.data }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
             console.error('Error verifying eSewa payment:', error);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'verifyPayment',
+                    status: 'failed',
+                    message: error.message,
+                    data: { transactionId }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             throw new Error(`Payment verification failed: ${error.message}`);
         }
     }
 
     // Generate signature for payment
     #generateSignature(data) {
-        const crypto = require('crypto');
         const message = Object.keys(data)
             .map(key => `${key}=${data[key]}`)
             .join(',');

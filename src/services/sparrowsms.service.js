@@ -49,7 +49,8 @@ class SparrowSmsClient {
             authToken: credentials.auth_token,
             senderId: credentials.sender_id || 'InfoSMS',
             baseUrl: smsService.baseUrl || 'http://api.sparrowsms.com/v2',
-            apiVersion: smsService.apiVersion || 'v2'
+            apiVersion: smsService.apiVersion || 'v2',
+            ispId: ispId
         });
     }
 
@@ -91,9 +92,36 @@ class SparrowSmsClient {
 
     async testConnection() {
         try {
+            console.log(`[SPARROWSMS TEST CONNECTION REQUEST]`);
             const result = await this.getCredit();
+            console.log(`[SPARROWSMS TEST CONNECTION SUCCESS] Response:`, JSON.stringify(result));
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'testConnection',
+                    status: 'success',
+                    message: 'Connection successful',
+                    data: result
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             return { connected: true, message: 'Successfully connected to Sparrow SMS', data: result };
         } catch (error) {
+            console.error(`[SPARROWSMS TEST CONNECTION ERROR] Response:`, error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'testConnection',
+                    status: 'failed',
+                    message: error.message,
+                    data: { errorResponse: error.response?.data || null }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             return { 
                 connected: false, 
                 message: error.response?.data?.message || error.message 
@@ -110,18 +138,47 @@ class SparrowSmsClient {
             form.append('to', Array.isArray(to) ? to.join(',') : to);
             form.append('text', text);
 
+            console.log(`[SPARROWSMS SEND REQUEST] POST ${this.send_url} - From: ${this.#config.senderId} - To: ${Array.isArray(to) ? to.join(',') : to} - Text: ${text}`);
+
             const response = await axios.post(this.send_url, form, {
                 headers: form.getHeaders()
             });
             
+            console.log(`[SPARROWSMS SEND SUCCESS] Response:`, JSON.stringify(response.data));
+
             // Standardize return structure
-            return {
+            const result = {
                 count: response.data?.count || 1,
                 response_code: response.data?.response_code || 200,
                 response: response.data?.response || "Sent successfully"
             };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'sendSms',
+                    status: 'success',
+                    message: `Sent to: ${to}`,
+                    data: { to, response: response.data }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
-            console.error('SparrowSmsClient Error (Send):', error.response?.data || error.message);
+            console.error('[SPARROWSMS SEND ERROR] Response:', error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'sendSms',
+                    status: 'failed',
+                    message: error.message,
+                    data: { to, errorResponse: error.response?.data || null }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             throw error;
         }
     }
@@ -130,27 +187,81 @@ class SparrowSmsClient {
         try {
             const toStr = Array.isArray(toArray) ? toArray.join(',') : toArray;
             const textStr = Array.isArray(textArray) ? textArray[0] : textArray;
-            return await this.sendSms(toStr, textStr);
+            console.log(`[SPARROWSMS BULK SEND REQUEST] - To: ${toStr} - Text: ${textStr}`);
+            const result = await this.sendSms(toStr, textStr);
+            console.log(`[SPARROWSMS BULK SEND SUCCESS] Response:`, JSON.stringify(result));
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'sendBulkSms',
+                    status: 'success',
+                    message: `Sent bulk to ${toArray.length} recipients`,
+                    data: { toArray, result }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
-            console.error('SparrowSmsClient Error (Bulk Send):', error.response?.data || error.message);
+            console.error('[SPARROWSMS BULK SEND ERROR]:', error.message);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'sendBulkSms',
+                    status: 'failed',
+                    message: error.message
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             throw error;
         }
     }
 
     async getCredit() {
         try {
+            console.log(`[SPARROWSMS CREDIT REQUEST] GET ${this.credit_url}`);
             // Sparrow expects credit query
             const response = await axios.get(this.credit_url, {
                 params: {
                     token: this.#config.authToken
                 }
             });
-            return {
+            console.log(`[SPARROWSMS CREDIT SUCCESS] Response:`, JSON.stringify(response.data));
+            
+            const result = {
                 available_credit: response.data?.credits_available || 0,
                 consumed_credit: response.data?.credits_consumed || 0
             };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'getCredit',
+                    status: 'success',
+                    message: `Credit fetched: ${result.available_credit}`,
+                    data: response.data
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
         } catch (error) {
-            console.error('SparrowSmsClient Error (Credit):', error.response?.data || error.message);
+            console.error('[SPARROWSMS CREDIT ERROR] Response:', error.response?.data ? JSON.stringify(error.response.data) : 'No response data', `Error Message: ${error.message}`);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'SPARROWSMS',
+                    operation: 'getCredit',
+                    status: 'failed',
+                    message: error.message,
+                    data: { errorResponse: error.response?.data || null }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             throw error;
         }
     }

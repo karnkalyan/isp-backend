@@ -84,7 +84,8 @@ class NetTVClient {
             resellerId: credentials.reseller_id || credentials.resellerId || nettvService.config?.resellerId || nettvService.config?.reseller_id || null,
             createdBy: credentials.reseller_username || credentials.resellerUsername || credentials.createdBy || nettvService.config?.createdBy || 'kisannet',
             defaultPackageId: nettvService.config?.packageId || nettvService.config?.defaultPackageId || 145,
-            btbnBaseUrl: nettvService.config?.btbnBaseUrl || 'https://btbn.geniustv.geniussystems.com.np'
+            btbnBaseUrl: nettvService.config?.btbnBaseUrl || 'https://btbn.geniustv.geniussystems.com.np',
+            ispId: ispId
         });
     }
 
@@ -191,16 +192,64 @@ class NetTVClient {
                 config.data = data;
             }
 
+            console.log(`[NETTV REQUEST] ${method.toUpperCase()} ${endpoint} - Params: ${JSON.stringify(params)} - Data: ${JSON.stringify(data)}`);
+
             const response = await this.#api.request(config);
 
             // Check for API errors
             if (response.data && response.data.error) {
+                console.error(`[NETTV RESPONSE ERROR] ${method.toUpperCase()} ${endpoint} - Error:`, response.data.error);
+                
+                await prisma.serviceLog.create({
+                    data: {
+                        ispId: Number(this.#config.ispId || 1),
+                        serviceCode: 'NETTV',
+                        operation: `${method.toUpperCase()} ${endpoint}`,
+                        status: 'failed',
+                        message: String(response.data.error),
+                        data: {
+                            request: { params, data },
+                            response: response.data
+                        }
+                    }
+                }).catch(e => console.error('Failed to save service log', e));
+
                 throw new Error(response.data.error);
             }
 
+            console.log(`[NETTV RESPONSE SUCCESS] ${method.toUpperCase()} ${endpoint} - Status: ${response.status} - Data: ${JSON.stringify(response.data)}`);
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'NETTV',
+                    operation: `${method.toUpperCase()} ${endpoint}`,
+                    status: 'success',
+                    message: `Status: ${response.status}`,
+                    data: {
+                        request: { params, data },
+                        response: response.data
+                    }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
             return response.data;
         } catch (error) {
-            console.error(`[NETTV API ERROR] ${method} ${endpoint}:`, error.response?.data || error.message);
+            console.error(`[NETTV API ERROR] ${method.toUpperCase()} ${endpoint} - Message: ${error.message} - Response:`, error.response?.data ? JSON.stringify(error.response.data) : 'No response data');
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'NETTV',
+                    operation: `${method.toUpperCase()} ${endpoint}`,
+                    status: 'failed',
+                    message: error.message,
+                    data: {
+                        request: { params, data },
+                        errorResponse: error.response?.data || null
+                    }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
 
             if (error.response) {
                 const status = error.response.status;
@@ -224,8 +273,6 @@ class NetTVClient {
         }
     }
 
-    // Test connection
-    // services/nettvClient.js - Updated testConnection method
     async testConnection() {
         try {
             // Try to get subscribers list to test connection
