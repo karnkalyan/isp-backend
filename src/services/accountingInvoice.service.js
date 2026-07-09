@@ -81,7 +81,7 @@ function isStandardItemName(name) {
   return n.includes('INTERNET') || n.includes('SUPPORT') || n.includes('NETTV') || n.includes('NET TV') || n.includes('CHARGE') || n.includes('INSTALLATION') || n.includes('DEPOSIT') || n.includes('WIRE');
 }
 
-async function buildAccountingItems(prisma, ispId, order) {
+async function buildAccountingItems(prisma, ispId, order, service = null) {
   const tscSetting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'tscPercentage' } });
   const tscRate = number(tscSetting?.value || 10) / 100;
 
@@ -100,6 +100,7 @@ async function buildAccountingItems(prisma, ispId, order) {
         id: it.id || 0,
         name: it.itemName,
         referenceId: it.referenceId,
+        code: it.referenceId ? it.referenceId.replace(/^INT-/, '') : null,
         isTaxable: true,
         isTscApplicable: it.itemName.toUpperCase().includes('INTERNET'),
         amount: Number(it.itemPrice || 0)
@@ -116,14 +117,14 @@ async function buildAccountingItems(prisma, ispId, order) {
       where: { ispId: Number(ispId), forPackageCreation: true, isDeleted: false }
     });
 
-    const internetCharge = catalogCharges.find(c => c.name.toUpperCase().includes('INTERNET')) || { id: 10001, name: 'INTERNET', referenceId: 'INT-INT', isTaxable: true, isTscApplicable: true, amount: 0 };
-    const supportCharge = catalogCharges.find(c => c.name.toUpperCase().includes('SUPPORT') || c.name.toUpperCase().includes('MAINTENANCE')) || { id: 10002, name: 'SUPPORT & MAINTENANCE', referenceId: 'INT-SM', isTaxable: true, isTscApplicable: false, amount: 0 };
+    const internetCharge = catalogCharges.find(c => c.name.toUpperCase().includes('INTERNET')) || { id: 10001, name: 'INTERNET', referenceId: 'INT-INT', code: 'INT', isTaxable: true, isTscApplicable: true, amount: 0 };
+    const supportCharge = catalogCharges.find(c => c.name.toUpperCase().includes('SUPPORT') || c.name.toUpperCase().includes('MAINTENANCE')) || { id: 10002, name: 'SUPPORT & MAINTENANCE', referenceId: 'INT-SM', code: 'SM', isTaxable: true, isTscApplicable: false, amount: 0 };
     
     charges.push(internetCharge);
     charges.push(supportCharge);
 
     if (isTvBundle) {
-      const nettvCharge = catalogCharges.find(c => c.name.toUpperCase().includes('NETTV') || c.name.toUpperCase().includes('NET TV')) || { id: 10003, name: 'NETTV CHARGE', referenceId: 'INT-NETTVKSN75', isTaxable: true, isTscApplicable: false, amount: 0 };
+      const nettvCharge = catalogCharges.find(c => c.name.toUpperCase().includes('NETTV') || c.name.toUpperCase().includes('NET TV')) || { id: 10003, name: 'NETTV CHARGE', referenceId: 'INT-NETTVKSN75', code: 'NETTVKSN75', isTaxable: true, isTscApplicable: false, amount: 0 };
       charges.push(nettvCharge);
     }
   }
@@ -144,6 +145,16 @@ async function buildAccountingItems(prisma, ispId, order) {
     }
   }
 
+  // Fetch Nepurix catalog items for exact code/reference ID matching
+  let nepurixItems = [];
+  if (service && service.code === SERVICE_CODES.NEPURIX && service.client?.item?.list) {
+    try {
+      nepurixItems = await service.client.item.list().catch(() => []);
+    } catch (e) {
+      console.warn('[NEPURIX] Failed to fetch items list for matching:', e.message);
+    }
+  }
+
   let itemsToUse = charges.map(charge => {
     const cleanChargeName = (charge.name || '').split(' (')[0].trim().toUpperCase();
     const customVal = resolvedCustomPrices[cleanChargeName] !== undefined
@@ -151,13 +162,24 @@ async function buildAccountingItems(prisma, ispId, order) {
       : customPrices[String(charge.id)];
 
     let finalName = charge.name || 'Package Item';
-    const upperName = finalName.toUpperCase();
-    if (upperName.includes('SUPPORT') && (upperName.includes('&') || upperName.includes('AND'))) {
-      finalName = 'Support and Maintenance';
-    } else if (upperName.includes('INTERNET')) {
-      finalName = 'INTERNET';
-    } else if (upperName.includes('NETTV') || upperName.includes('NET TV')) {
-      finalName = 'NETTV CHARGE';
+    if (Array.isArray(nepurixItems) && nepurixItems.length > 0) {
+      const match = nepurixItems.find(ni => {
+        const niCode = String(ni.Code || '').toUpperCase().trim();
+        const niRef = String(ni.ReferenceId || '').toUpperCase().trim();
+        const niName = String(ni.Name || '').toUpperCase().trim();
+
+        const chargeCode = String(charge.code || '').toUpperCase().trim();
+        const chargeRef = String(charge.referenceId || '').toUpperCase().trim();
+        const chargeName = String(charge.name || '').toUpperCase().trim();
+
+        return (chargeCode && niCode === chargeCode) ||
+               (chargeRef && niRef === chargeRef) ||
+               (chargeName && niName === chargeName);
+      });
+
+      if (match && match.Name) {
+        finalName = match.Name;
+      }
     }
 
     return {
@@ -220,12 +242,12 @@ async function buildAccountingItems(prisma, ispId, order) {
   return itemsToUse;
 }
 
-async function buildNepurixPayload(prisma, ispId, order, customItemsToUse = null) {
+async function buildNepurixPayload(prisma, ispId, order, customItemsToUse = null, service = null) {
   const tscSetting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'tscPercentage' } });
   const tscRate = number(tscSetting?.value || 10) / 100;
 
   const isTrial = Number(order.totalAmount || 0) === 0;
-  const itemsToUse = customItemsToUse || await buildAccountingItems(prisma, ispId, order);
+  const itemsToUse = customItemsToUse || await buildAccountingItems(prisma, ispId, order, service);
 
   let taxableAmount = 0;
   let calculatedNet = 0;
@@ -361,9 +383,9 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
   }
 
   try {
-    const itemsToUse = await buildAccountingItems(prisma, ispId, order);
+    const itemsToUse = await buildAccountingItems(prisma, ispId, order, service);
     const payload = service.code === SERVICE_CODES.NEPURIX
-      ? await buildNepurixPayload(prisma, ispId, order, itemsToUse)
+      ? await buildNepurixPayload(prisma, ispId, order, itemsToUse, service)
       : buildTshulPayload(order, itemsToUse);
     
     console.log(`[ACCOUNTING SYNC] Creating invoice on ${service.code} with payload:`, JSON.stringify(payload));
