@@ -75,59 +75,127 @@ async function loadOrder(prisma, ispId, orderId) {
   return order;
 }
 
-async function buildNepurixPayload(prisma, ispId, order) {
+function isStandardItemName(name) {
+  if (!name) return false;
+  const n = name.toUpperCase();
+  return n.includes('INTERNET') || n.includes('SUPPORT') || n.includes('NETTV') || n.includes('NET TV') || n.includes('CHARGE') || n.includes('INSTALLATION') || n.includes('DEPOSIT') || n.includes('WIRE');
+}
+
+async function buildAccountingItems(prisma, ispId, order) {
   const tscSetting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'tscPercentage' } });
   const tscRate = number(tscSetting?.value || 10) / 100;
 
   const isTrial = Number(order.totalAmount || 0) === 0;
 
-  let itemsToUse = [];
-  if (isTrial) {
-    itemsToUse = [{
-      itemName: order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || 'Trial Package',
-      itemPrice: 0,
-      isTaxable: false,
-      isTscApplicable: false
-    }];
-  } else if (order.packagePrice?.oneTimeCharges && order.packagePrice.oneTimeCharges.length > 0) {
-    const customPrices = order.packagePrice.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
-    itemsToUse = order.packagePrice.oneTimeCharges.map(charge => ({
+  let charges = [];
+  if (order.packagePrice?.oneTimeCharges && order.packagePrice.oneTimeCharges.length > 0) {
+    charges = order.packagePrice.oneTimeCharges;
+  }
+
+  // If no charges from packagePrice, check order.items for standard items
+  if (charges.length === 0 && order.items && order.items.length > 0) {
+    const standardItemsInOrder = order.items.filter(it => isStandardItemName(it.itemName));
+    if (standardItemsInOrder.length > 0) {
+      charges = standardItemsInOrder.map(it => ({
+        id: it.id || 0,
+        name: it.itemName,
+        referenceId: it.referenceId,
+        isTaxable: true,
+        isTscApplicable: it.itemName.toUpperCase().includes('INTERNET'),
+        amount: Number(it.itemPrice || 0)
+      }));
+    }
+  }
+
+  // If we still have no charges, create the standard ones based on plan/package name
+  if (charges.length === 0) {
+    const packName = order.packagePrice?.packageName || order.packagePrice?.packagePlanDetails?.planName || order.package || '';
+    const isTvBundle = /tv|nettv/i.test(packName);
+
+    const catalogCharges = await prisma.OneTimeCharge.findMany({
+      where: { ispId: Number(ispId), forPackageCreation: true, isDeleted: false }
+    });
+
+    const internetCharge = catalogCharges.find(c => c.name.toUpperCase().includes('INTERNET')) || { id: 10001, name: 'INTERNET', referenceId: 'INT-INT', isTaxable: true, isTscApplicable: true, amount: 0 };
+    const supportCharge = catalogCharges.find(c => c.name.toUpperCase().includes('SUPPORT') || c.name.toUpperCase().includes('MAINTENANCE')) || { id: 10002, name: 'SUPPORT & MAINTENANCE', referenceId: 'INT-SM', isTaxable: true, isTscApplicable: false, amount: 0 };
+    
+    charges.push(internetCharge);
+    charges.push(supportCharge);
+
+    if (isTvBundle) {
+      const nettvCharge = catalogCharges.find(c => c.name.toUpperCase().includes('NETTV') || c.name.toUpperCase().includes('NET TV')) || { id: 10003, name: 'NETTV CHARGE', referenceId: 'INT-NETTVKSN75', isTaxable: true, isTscApplicable: false, amount: 0 };
+      charges.push(nettvCharge);
+    }
+  }
+
+  // Map charges to itemsToUse using custom prices or charge amounts
+  const customPrices = order.packagePrice?.addonPricesJson ? JSON.parse(order.packagePrice.addonPricesJson) : {};
+
+  let itemsToUse = charges.map(charge => {
+    const customVal = customPrices[String(charge.id)];
+    return {
       itemName: charge.name || 'Package Item',
-      itemPrice: customPrices[String(charge.id)] !== undefined ? customPrices[String(charge.id)] : Number(charge.amount || 0),
+      referenceId: charge.referenceId || null,
+      itemPrice: customVal !== undefined ? Number(customVal) : Number(charge.amount || 0),
       isTaxable: charge.isTaxable !== false,
       isTscApplicable: charge.isTscApplicable === true
-    }));
-  } else {
-    itemsToUse = order.items.map(item => ({
-      itemName: item.itemName,
-      itemPrice: Number(item.itemPrice || 0),
-      isTaxable: true,
-      isTscApplicable: order.packagePrice?.isTscApplicable === true
-    }));
-  }
+    };
+  });
 
-  // Fallback: If not a trial, but itemsToUse is empty or all items have 0 price,
-  // we fallback to the package itself with the net total amount (adjusted for tax).
-  if (!isTrial && (itemsToUse.length === 0 || itemsToUse.every(it => Number(it.itemPrice) === 0))) {
+  // Distribute total net amount if it's not a trial and sum of items is 0
+  const sumOfPrices = itemsToUse.reduce((s, it) => s + it.itemPrice, 0);
+  if (!isTrial && sumOfPrices === 0) {
     const netAmount = Number(order.totalAmount || 0);
-    const isTscApplicable = order.packagePrice?.isTscApplicable === true;
-    
-    // Reverse calculate basic price from netAmount.
-    // basic + tsc + vat = net
-    // If TSC is applicable:
-    // basic * (1 + tscRate) * 1.13 = net => basic = net / ((1 + tscRate) * 1.13)
-    // If TSC is NOT applicable:
-    // basic * 1.13 = net => basic = net / 1.13
-    const divisor = isTscApplicable ? ((1 + tscRate) * 1.13) : 1.13;
-    const basicPrice = netAmount / divisor;
+    const hasTv = itemsToUse.some(it => /tv|nettv/i.test(it.itemName));
 
-    itemsToUse = [{
-      itemName: order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || 'Base Package',
-      itemPrice: basicPrice,
-      isTaxable: true,
-      isTscApplicable
-    }];
+    let allocatedNets = itemsToUse.map(it => {
+      let pct = 0;
+      if (hasTv) {
+        if (/internet/i.test(it.itemName)) pct = 0.375;
+        else if (/support/i.test(it.itemName)) pct = 0.375;
+        else if (/tv|nettv/i.test(it.itemName)) pct = 0.25;
+        else pct = 1.0 / itemsToUse.length;
+      } else {
+        if (/internet/i.test(it.itemName)) pct = 0.50;
+        else if (/support/i.test(it.itemName)) pct = 0.50;
+        else pct = 1.0 / itemsToUse.length;
+      }
+      return round(netAmount * pct);
+    });
+
+    const sumAllocated = allocatedNets.reduce((s, v) => s + v, 0);
+    const diff = round(netAmount - sumAllocated);
+    if (diff !== 0 && allocatedNets.length > 0) {
+      allocatedNets[allocatedNets.length - 1] = round(allocatedNets[allocatedNets.length - 1] + diff);
+    }
+
+    itemsToUse = itemsToUse.map((it, idx) => {
+      const allocatedNet = allocatedNets[idx];
+      let basicPrice = 0;
+      if (it.isTaxable && it.isTscApplicable) {
+        basicPrice = allocatedNet / ((1 + tscRate) * 1.13);
+      } else if (it.isTaxable) {
+        basicPrice = allocatedNet / 1.13;
+      } else {
+        basicPrice = allocatedNet;
+      }
+
+      return {
+        ...it,
+        itemPrice: round(basicPrice)
+      };
+    });
   }
+
+  return itemsToUse;
+}
+
+async function buildNepurixPayload(prisma, ispId, order, customItemsToUse = null) {
+  const tscSetting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'tscPercentage' } });
+  const tscRate = number(tscSetting?.value || 10) / 100;
+
+  const isTrial = Number(order.totalAmount || 0) === 0;
+  const itemsToUse = customItemsToUse || await buildAccountingItems(prisma, ispId, order);
 
   let taxableAmount = 0;
   let calculatedNet = 0;
@@ -200,20 +268,20 @@ async function buildNepurixPayload(prisma, ispId, order) {
   return payload;
 }
 
-function buildTshulPayload(order) {
+function buildTshulPayload(order, itemsToUse) {
   const lead = order.customer?.lead || {};
   const customerReferenceId = order.customer?.customerUniqueId || `CUST-${order.customerId}`;
   return {
     InvoiceType: 'Cash',
     PaymentMode: paymentMode(order.paymentId),
     Date: dateOnly(order.orderDate),
-    SubTotal: round(order.items.reduce((sum, item) => sum + number(item.itemPrice), 0)),
+    SubTotal: round(itemsToUse.reduce((sum, item) => sum + number(item.itemPrice), 0)),
     TaxableAmount: round(order.totalAmount),
     NetAmount: round(order.totalAmount),
     CustomerReferenceId: customerReferenceId,
     OtherCustomerName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
     OtherCustomerMobile: lead.phoneNumber || '',
-    Detail: order.items.map(item => ({
+    Detail: itemsToUse.map(item => ({
       ItemReferenceId: item.referenceId,
       Quantity: 1,
       Rate: round(item.itemPrice),
@@ -263,9 +331,10 @@ async function syncOrderToAccounting(prisma, ispId, orderId) {
   }
 
   try {
+    const itemsToUse = await buildAccountingItems(prisma, ispId, order);
     const payload = service.code === SERVICE_CODES.NEPURIX
-      ? await buildNepurixPayload(prisma, ispId, order)
-      : buildTshulPayload(order);
+      ? await buildNepurixPayload(prisma, ispId, order, itemsToUse)
+      : buildTshulPayload(order, itemsToUse);
     
     console.log(`[ACCOUNTING SYNC] Creating invoice on ${service.code} with payload:`, JSON.stringify(payload));
     const result = await service.client.sales.create(payload);
