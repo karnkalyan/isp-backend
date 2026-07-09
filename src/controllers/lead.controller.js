@@ -1,6 +1,7 @@
 // leadController.js (updated backend)
 const csv = require('csv-parser');
 const stream = require('stream');
+const { logAudit } = require('../utils/auditLogger');
 
 async function createLead(req, res, next) {
   try {
@@ -113,6 +114,8 @@ async function createLead(req, res, next) {
         interestedPackage: true
       }
     });
+
+    await logAudit(req.prisma, req.user?.id, 'LEAD_CREATE', { id: newLead.id, firstName: newLead.firstName, lastName: newLead.lastName }, req);
 
     return res.status(201).json(newLead);
   } catch (err) {
@@ -585,6 +588,8 @@ async function updateLead(req, res, next) {
       }
     });
 
+    await logAudit(req.prisma, req.user?.id, 'LEAD_UPDATE', { id: updatedLead.id, firstName: updatedLead.firstName, lastName: updatedLead.lastName }, req);
+
     return res.status(200).json(updatedLead);
   } catch (err) {
     console.error("Update Lead Error:", err.message);
@@ -614,6 +619,8 @@ async function deleteLead(req, res, next) {
       where: { id: id },
       data: { isDeleted: true }
     });
+
+    await logAudit(req.prisma, req.user?.id, 'LEAD_DELETE', { id, firstName: existingLead.firstName, lastName: existingLead.lastName }, req);
 
     return res.status(200).json({ message: "Lead deleted successfully", id });
   } catch (err) {
@@ -781,6 +788,8 @@ async function convertLeadToCustomer(req, res, next) {
     } catch (notifyErr) {
       console.error('Lead conversion notification dispatch error:', notifyErr.message);
     }
+
+    await logAudit(req.prisma, req.user?.id, 'LEAD_CONVERTED', { id: leadId, customerId: newCustomer.id, customerUniqueId: newCustomer.customerUniqueId }, req);
 
     return res.status(201).json({
       message: "Lead successfully converted to customer",

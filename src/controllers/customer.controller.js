@@ -3141,6 +3141,8 @@ const subscribePackage = async (req, res, next) => {
       console.error('[CUSTOMER RECHARGE ACCOUNTING] Sales invoice sync failed:', accountingError.message);
     }
 
+    await logAudit(req.prisma, req.user?.id, 'CUSTOMER_PACKAGE_RENEW', { id: customer.id, packageId: pkg.id, packageName: pkg.packageName, totalAmount }, req);
+
     return res.status(201).json({
       success: true,
       customerId: customer.id,
@@ -3496,6 +3498,8 @@ async function changePackage(req, res, next) {
         }
       });
     });
+
+    await logAudit(req.prisma, req.user?.id, 'CUSTOMER_PACKAGE_CHANGE', { id: customerId, newPackageId: Number(newPackageId), packageName: newPackage.packageName }, req);
 
     return res.json({
       success: true,

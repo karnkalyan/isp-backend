@@ -77,7 +77,91 @@ async function getDistinctActions(req, res, next) {
     }
 }
 
+async function getCustomerAuditLogs(req, res, next) {
+    try {
+        const customerId = parseInt(req.params.customerId);
+        if (isNaN(customerId)) return res.status(400).json({ error: "Invalid customer ID" });
+
+        const customer = await req.prisma.customer.findUnique({
+            where: { id: customerId },
+            select: { leadId: true }
+        });
+
+        const leadId = customer?.leadId;
+
+        const OR = [
+            { details: { contains: `"id":${customerId}` } },
+            { details: { contains: `"id": ${customerId}` } },
+            { details: { contains: `"customerId":${customerId}` } },
+            { details: { contains: `"customerId": ${customerId}` } }
+        ];
+
+        if (leadId) {
+            OR.push(
+                { details: { contains: `"id":${leadId}` } },
+                { details: { contains: `"id": ${leadId}` } },
+                { details: { contains: `"leadId":${leadId}` } },
+                { details: { contains: `"leadId": ${leadId}` } }
+            );
+        }
+
+        const logs = await req.prisma.auditLog.findMany({
+            where: { OR },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        role: { select: { name: true } }
+                    }
+                }
+            },
+            orderBy: { timestamp: 'desc' }
+        });
+
+        res.json({ success: true, data: logs });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function getLeadAuditLogs(req, res, next) {
+    try {
+        const leadId = parseInt(req.params.leadId);
+        if (isNaN(leadId)) return res.status(400).json({ error: "Invalid lead ID" });
+
+        const OR = [
+            { details: { contains: `"id":${leadId}` } },
+            { details: { contains: `"id": ${leadId}` } },
+            { details: { contains: `"leadId":${leadId}` } },
+            { details: { contains: `"leadId": ${leadId}` } }
+        ];
+
+        const logs = await req.prisma.auditLog.findMany({
+            where: { OR },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        role: { select: { name: true } }
+                    }
+                }
+            },
+            orderBy: { timestamp: 'desc' }
+        });
+
+        res.json({ success: true, data: logs });
+    } catch (err) {
+        next(err);
+    }
+}
+
 module.exports = {
     getAuditLogs,
-    getDistinctActions
+    getDistinctActions,
+    getCustomerAuditLogs,
+    getLeadAuditLogs
 };

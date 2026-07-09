@@ -124,6 +124,9 @@ async function createFollowUp(req, res, next) {
       });
     }
 
+    const { logAudit } = require('../utils/auditLogger');
+    await logAudit(req.prisma, req.user?.id, 'FOLLOWUP_CREATE', { id: followUp.id, leadId, title: followUp.title }, req);
+
     return res.status(201).json({
       success: true,
       data: followUp

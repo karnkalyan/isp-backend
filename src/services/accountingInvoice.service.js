@@ -106,6 +106,29 @@ async function buildNepurixPayload(prisma, ispId, order) {
     }));
   }
 
+  // Fallback: If not a trial, but itemsToUse is empty or all items have 0 price,
+  // we fallback to the package itself with the net total amount (adjusted for tax).
+  if (!isTrial && (itemsToUse.length === 0 || itemsToUse.every(it => Number(it.itemPrice) === 0))) {
+    const netAmount = Number(order.totalAmount || 0);
+    const isTscApplicable = order.packagePrice?.isTscApplicable === true;
+    
+    // Reverse calculate basic price from netAmount.
+    // basic + tsc + vat = net
+    // If TSC is applicable:
+    // basic * (1 + tscRate) * 1.13 = net => basic = net / ((1 + tscRate) * 1.13)
+    // If TSC is NOT applicable:
+    // basic * 1.13 = net => basic = net / 1.13
+    const divisor = isTscApplicable ? ((1 + tscRate) * 1.13) : 1.13;
+    const basicPrice = netAmount / divisor;
+
+    itemsToUse = [{
+      itemName: order.packagePrice?.packagePlanDetails?.planName || order.packagePrice?.packageName || 'Base Package',
+      itemPrice: basicPrice,
+      isTaxable: true,
+      isTscApplicable
+    }];
+  }
+
   let taxableAmount = 0;
   let calculatedNet = 0;
   let subTotal = 0;
@@ -132,7 +155,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
       amount: basicAmount,
       tax: taxName(isTaxable, isTscApplicable)
     };
-  }).filter(d => d.rate > 0);
+  }).filter(d => d.rate > 0 || isTrial);
 
   const lead = order.customer?.lead || {};
   const customerName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || order.customer?.customerUniqueId;
@@ -169,7 +192,7 @@ async function buildNepurixPayload(prisma, ispId, order) {
     activationDate: convertToNepaliDate(order.packageStart),
     deActivationDate: convertToNepaliDate(order.packageEnd),
     detail,
-    finTagDetail
+    ...(finTagDetail.length > 0 ? { finTagDetail } : {})
   };
 
   console.log('[NEPURIX PAYLOAD DEBUG]:', JSON.stringify(payload, null, 2));
