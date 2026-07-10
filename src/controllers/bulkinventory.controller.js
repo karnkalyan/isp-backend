@@ -11,7 +11,7 @@ async function getBulkInventory(req, res, next) {
         const where = {
             ispId,
             ...(search ? {
-                name: { contains: search, mode: 'insensitive' }
+                name: { contains: search }
             } : {})
         };
 

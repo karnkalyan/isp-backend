@@ -11,9 +11,9 @@ async function getDrums(req, res, next) {
             ...(status ? { status } : {}),
             ...(search ? {
                 OR: [
-                    { serialNumber: { contains: search, mode: 'insensitive' } },
-                    { drumType: { contains: search, mode: 'insensitive' } },
-                    { fiberType: { contains: search, mode: 'insensitive' } }
+                    { serialNumber: { contains: search } },
+                    { drumType: { contains: search } },
+                    { fiberType: { contains: search } }
                 ]
             } : {})
         };

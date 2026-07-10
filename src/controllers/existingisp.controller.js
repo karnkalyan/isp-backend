@@ -140,12 +140,12 @@ const getAllExistingISPs = async (req, res) => {
     if (search && search.trim() !== '') {
       const searchTerm = search.trim();
       where.OR = [
-        { name: { contains: searchTerm, mode: 'insensitive' } },
-        { code: { contains: searchTerm, mode: 'insensitive' } },
-        { email: { contains: searchTerm, mode: 'insensitive' } },
-        { phone: { contains: searchTerm, mode: 'insensitive' } },
-        { city: { contains: searchTerm, mode: 'insensitive' } },
-        { state: { contains: searchTerm, mode: 'insensitive' } }
+        { name: { contains: searchTerm } },
+        { code: { contains: searchTerm } },
+        { email: { contains: searchTerm } },
+        { phone: { contains: searchTerm } },
+        { city: { contains: searchTerm } },
+        { state: { contains: searchTerm } }
       ];
     }
 

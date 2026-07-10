@@ -422,7 +422,7 @@ async function getInventoryReport(req, res, next) {
 
         const where = {
             ispId,
-            ...(search ? { name: { contains: search, mode: 'insensitive' } } : {})
+            ...(search ? { name: { contains: search } } : {})
         };
 
         const inventory = await req.prisma.bulkInventory.findMany({
@@ -477,9 +477,9 @@ async function getDrumsReport(req, res, next) {
             ...(status ? { status } : {}),
             ...(search ? {
                 OR: [
-                    { serialNumber: { contains: search, mode: 'insensitive' } },
-                    { drumType: { contains: search, mode: 'insensitive' } },
-                    { fiberType: { contains: search, mode: 'insensitive' } }
+                    { serialNumber: { contains: search } },
+                    { drumType: { contains: search } },
+                    { fiberType: { contains: search } }
                 ]
             } : {})
         };

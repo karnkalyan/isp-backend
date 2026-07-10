@@ -620,14 +620,12 @@ async function searchDepartments(req, res, next) {
             whereClause.OR = [
                 {
                     name: {
-                        contains: searchTerm,
-                        mode: 'insensitive'
+                        contains: searchTerm
                     }
                 },
                 {
                     description: {
-                        contains: searchTerm,
-                        mode: 'insensitive'
+                        contains: searchTerm
                     }
                 }
             ];

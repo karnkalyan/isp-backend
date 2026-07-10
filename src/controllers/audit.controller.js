@@ -16,10 +16,10 @@ async function getAuditLogs(req, res, next) {
             } : {}),
             ...(search ? {
                 OR: [
-                    { action: { contains: search, mode: 'insensitive' } },
-                    { details: { contains: search, mode: 'insensitive' } },
-                    { ip: { contains: search, mode: 'insensitive' } },
-                    { browser: { contains: search, mode: 'insensitive' } }
+                    { action: { contains: search } },
+                    { details: { contains: search } },
+                    { ip: { contains: search } },
+                    { browser: { contains: search } }
                 ]
             } : {})
         };

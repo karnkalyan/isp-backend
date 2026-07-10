@@ -511,17 +511,17 @@ async function getAllFollowUps(req, res, next) {
     // Search
     if (search) {
       where.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-        { notes: { contains: search, mode: 'insensitive' } },
-        { outcome: { contains: search, mode: 'insensitive' } },
+        { title: { contains: search } },
+        { description: { contains: search } },
+        { notes: { contains: search } },
+        { outcome: { contains: search } },
         {
           lead: {
             OR: [
-              { firstName: { contains: search, mode: 'insensitive' } },
-              { lastName: { contains: search, mode: 'insensitive' } },
-              { phoneNumber: { contains: search, mode: 'insensitive' } },
-              { email: { contains: search, mode: 'insensitive' } }
+              { firstName: { contains: search } },
+              { lastName: { contains: search } },
+              { phoneNumber: { contains: search } },
+              { email: { contains: search } }
             ]
           }
         }
