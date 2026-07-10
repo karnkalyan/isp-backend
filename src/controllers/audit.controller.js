@@ -89,19 +89,26 @@ async function getCustomerAuditLogs(req, res, next) {
 
         const leadId = customer?.leadId;
 
+        const buildExactIdFilters = (field, id) => [
+            { details: { contains: `"${field}":${id},` } },
+            { details: { contains: `"${field}":${id}}` } },
+            { details: { contains: `"${field}": ${id},` } },
+            { details: { contains: `"${field}": ${id}}` } },
+            { details: { contains: `"${field}":"${id}",` } },
+            { details: { contains: `"${field}":"${id}"}` } },
+            { details: { contains: `"${field}": "${id}",` } },
+            { details: { contains: `"${field}": "${id}"}` } }
+        ];
+
         const OR = [
-            { details: { contains: `"id":${customerId}` } },
-            { details: { contains: `"id": ${customerId}` } },
-            { details: { contains: `"customerId":${customerId}` } },
-            { details: { contains: `"customerId": ${customerId}` } }
+            ...buildExactIdFilters("id", customerId),
+            ...buildExactIdFilters("customerId", customerId)
         ];
 
         if (leadId) {
             OR.push(
-                { details: { contains: `"id":${leadId}` } },
-                { details: { contains: `"id": ${leadId}` } },
-                { details: { contains: `"leadId":${leadId}` } },
-                { details: { contains: `"leadId": ${leadId}` } }
+                ...buildExactIdFilters("id", leadId),
+                ...buildExactIdFilters("leadId", leadId)
             );
         }
 
@@ -131,11 +138,20 @@ async function getLeadAuditLogs(req, res, next) {
         const leadId = parseInt(req.params.leadId);
         if (isNaN(leadId)) return res.status(400).json({ error: "Invalid lead ID" });
 
+        const buildExactIdFilters = (field, id) => [
+            { details: { contains: `"${field}":${id},` } },
+            { details: { contains: `"${field}":${id}}` } },
+            { details: { contains: `"${field}": ${id},` } },
+            { details: { contains: `"${field}": ${id}}` } },
+            { details: { contains: `"${field}":"${id}",` } },
+            { details: { contains: `"${field}":"${id}"}` } },
+            { details: { contains: `"${field}": "${id}",` } },
+            { details: { contains: `"${field}": "${id}"}` } }
+        ];
+
         const OR = [
-            { details: { contains: `"id":${leadId}` } },
-            { details: { contains: `"id": ${leadId}` } },
-            { details: { contains: `"leadId":${leadId}` } },
-            { details: { contains: `"leadId": ${leadId}` } }
+            ...buildExactIdFilters("id", leadId),
+            ...buildExactIdFilters("leadId", leadId)
         ];
 
         const logs = await req.prisma.auditLog.findMany({
