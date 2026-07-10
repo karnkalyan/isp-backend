@@ -127,7 +127,63 @@ async function getCustomerAuditLogs(req, res, next) {
             orderBy: { timestamp: 'desc' }
         });
 
-        res.json({ success: true, data: logs });
+        // 100% precise post-filtering in JS by parsing JSON details
+        const filteredLogs = logs.filter(log => {
+            let details = null;
+            try {
+                details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+            } catch (e) {
+                return false;
+            }
+            
+            if (!details) return false;
+
+            // 1. Explicit customerId match
+            if (details.customerId !== undefined && String(details.customerId) === String(customerId)) {
+                return true;
+            }
+
+            // 2. Customer profile action and id matches customerId
+            const customerProfileActions = [
+                'CUSTOMER_CREATE', 'CUSTOMER_UPDATE', 'CUSTOMER_DELETE', 
+                'CUSTOMER_STATUS_CHANGE', 'CUSTOMER_PASSWORD_CHANGE', 
+                'CUSTOMER_RENEW', 'CUSTOMER_MAC_RESET', 'SESSION_DISCONNECT'
+            ];
+            const actionUpper = log.action.toUpperCase();
+            if (customerProfileActions.some(act => actionUpper.startsWith(act)) && 
+                details.id !== undefined && String(details.id) === String(customerId)) {
+                return true;
+            }
+
+            // 3. Explicit leadId match
+            if (leadId && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                return true;
+            }
+
+            // 4. Lead profile action and id matches leadId
+            const leadProfileActions = [
+                'LEAD_CREATE', 'LEAD_UPDATE', 'LEAD_DELETE', 
+                'LEAD_STATUS_CHANGE', 'LEAD_CONVERT'
+            ];
+            if (leadId && leadProfileActions.some(act => actionUpper.startsWith(act)) && 
+                details.id !== undefined && String(details.id) === String(leadId)) {
+                return true;
+            }
+
+            // 5. Task action matching customerId or leadId
+            if (actionUpper.includes('TASK')) {
+                if (details.customerId !== undefined && String(details.customerId) === String(customerId)) {
+                    return true;
+                }
+                if (leadId && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+            }
+
+            return false;
+        });
+
+        res.json({ success: true, data: filteredLogs });
     } catch (err) {
         next(err);
     }
@@ -169,7 +225,43 @@ async function getLeadAuditLogs(req, res, next) {
             orderBy: { timestamp: 'desc' }
         });
 
-        res.json({ success: true, data: logs });
+        // 100% precise post-filtering in JS by parsing JSON details
+        const filteredLogs = logs.filter(log => {
+            let details = null;
+            try {
+                details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+            } catch (e) {
+                return false;
+            }
+            
+            if (!details) return false;
+
+            const actionUpper = log.action.toUpperCase();
+
+            // 1. Explicit leadId match
+            if (details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                return true;
+            }
+
+            // 2. Lead profile action and id matches leadId
+            const leadProfileActions = [
+                'LEAD_CREATE', 'LEAD_UPDATE', 'LEAD_DELETE', 
+                'LEAD_STATUS_CHANGE', 'LEAD_CONVERT'
+            ];
+            if (leadProfileActions.some(act => actionUpper.startsWith(act)) && 
+                details.id !== undefined && String(details.id) === String(leadId)) {
+                return true;
+            }
+
+            // 3. Task action and leadId matches leadId
+            if (actionUpper.includes('TASK') && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                return true;
+            }
+
+            return false;
+        });
+
+        res.json({ success: true, data: filteredLogs });
     } catch (err) {
         next(err);
     }
