@@ -46,7 +46,7 @@ function taskLogger() {
                         const title = `${userName} ${action} ${resourceName}`;
                         const description = `A ${resourceName.toLowerCase()} was ${action.toLowerCase()} via ${req.method} ${req.originalUrl}`;
 
-                        await logAudit(prisma, userId, `${req.method}_${resourceName.toUpperCase()}`, {
+                        const details = {
                             action,
                             resource: resourceName,
                             method: req.method,
@@ -54,7 +54,22 @@ function taskLogger() {
                             statusCode: res.statusCode,
                             branchId,
                             ispId
-                        }, req);
+                        };
+
+                        if (req.body) {
+                            if (req.body.customerId) details.customerId = Number(req.body.customerId);
+                            if (req.body.leadId) details.leadId = Number(req.body.leadId);
+                        }
+                        if (req.query) {
+                            if (req.query.customerId) details.customerId = Number(req.query.customerId);
+                            if (req.query.leadId) details.leadId = Number(req.query.leadId);
+                        }
+                        if (req.params) {
+                            if (req.params.customerId) details.customerId = Number(req.params.customerId);
+                            if (req.params.leadId) details.leadId = Number(req.params.leadId);
+                        }
+
+                        await logAudit(prisma, userId, `${req.method}_${resourceName.toUpperCase()}`, details, req);
 
                         // Skip system notifications for communication endpoints (SMS, email, messages)
                         const url = req.originalUrl.toLowerCase();

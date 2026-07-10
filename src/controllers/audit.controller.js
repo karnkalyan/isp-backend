@@ -87,7 +87,37 @@ async function getCustomerAuditLogs(req, res, next) {
             select: { leadId: true }
         });
 
+        if (!customer) return res.status(404).json({ error: "Customer not found" });
         const leadId = customer?.leadId;
+
+        // Fetch all task IDs related to this customer
+        const tasks = await req.prisma.task.findMany({
+            where: { customerId },
+            select: { id: true }
+        });
+        const taskIds = tasks.map(t => t.id);
+
+        // Fetch all ticket IDs related to this customer or lead
+        const tickets = await req.prisma.ticket.findMany({
+            where: {
+                OR: [
+                    { customerId },
+                    ...(leadId ? [{ leadId }] : [])
+                ]
+            },
+            select: { id: true }
+        });
+        const ticketIds = tickets.map(t => t.id);
+
+        // Fetch all followup IDs related to the lead
+        let followupIds = [];
+        if (leadId) {
+            const followups = await req.prisma.followUp.findMany({
+                where: { leadId },
+                select: { id: true }
+            });
+            followupIds = followups.map(f => f.id);
+        }
 
         const buildExactIdFilters = (field, id) => [
             { details: { contains: `"${field}":${id},` } },
@@ -100,17 +130,46 @@ async function getCustomerAuditLogs(req, res, next) {
             { details: { contains: `"${field}": "${id}"}` } }
         ];
 
+        // Combine all DB candidate search filters
         const OR = [
             ...buildExactIdFilters("id", customerId),
-            ...buildExactIdFilters("customerId", customerId)
+            ...buildExactIdFilters("customerId", customerId),
+            { details: { contains: `/customers/${customerId}` } },
+            { details: { contains: `/customer/${customerId}` } }
         ];
 
         if (leadId) {
             OR.push(
                 ...buildExactIdFilters("id", leadId),
-                ...buildExactIdFilters("leadId", leadId)
+                ...buildExactIdFilters("leadId", leadId),
+                { details: { contains: `/leads/${leadId}` } },
+                { details: { contains: `/lead/${leadId}` } }
             );
         }
+
+        taskIds.forEach(id => {
+            OR.push(
+                ...buildExactIdFilters("id", id),
+                { details: { contains: `/tasks/${id}` } },
+                { details: { contains: `/task/${id}` } }
+            );
+        });
+
+        ticketIds.forEach(id => {
+            OR.push(
+                ...buildExactIdFilters("id", id),
+                { details: { contains: `/tickets/${id}` } },
+                { details: { contains: `/ticket/${id}` } }
+            );
+        });
+
+        followupIds.forEach(id => {
+            OR.push(
+                ...buildExactIdFilters("id", id),
+                { details: { contains: `/followups/${id}` } },
+                { details: { contains: `/followup/${id}` } }
+            );
+        });
 
         const logs = await req.prisma.auditLog.findMany({
             where: { OR },
@@ -127,7 +186,12 @@ async function getCustomerAuditLogs(req, res, next) {
             orderBy: { timestamp: 'desc' }
         });
 
-        // 100% precise post-filtering in JS by parsing JSON details
+        const urlMatchesId = (url, pathSegment, id) => {
+            if (!url) return false;
+            const regex = new RegExp(`/${pathSegment}/${id}(?:/|\\?|$)`, 'i');
+            return regex.test(url);
+        };
+
         const filteredLogs = logs.filter(log => {
             let details = null;
             try {
@@ -135,47 +199,76 @@ async function getCustomerAuditLogs(req, res, next) {
             } catch (e) {
                 return false;
             }
-            
             if (!details) return false;
 
-            // 1. Explicit customerId match
+            const actionUpper = log.action.toUpperCase();
+
+            // 1. Check Customer direct attributes
             if (details.customerId !== undefined && String(details.customerId) === String(customerId)) {
                 return true;
             }
-
-            // 2. Customer profile action and id matches customerId
-            const customerProfileActions = [
-                'CUSTOMER_CREATE', 'CUSTOMER_UPDATE', 'CUSTOMER_DELETE', 
-                'CUSTOMER_STATUS_CHANGE', 'CUSTOMER_PASSWORD_CHANGE', 
-                'CUSTOMER_RENEW', 'CUSTOMER_MAC_RESET', 'SESSION_DISCONNECT'
-            ];
-            const actionUpper = log.action.toUpperCase();
-            if (customerProfileActions.some(act => actionUpper.startsWith(act)) && 
-                details.id !== undefined && String(details.id) === String(customerId)) {
+            if (actionUpper.startsWith('CUSTOMER') && !actionUpper.startsWith('CUSTOMER_TYPE') && !actionUpper.startsWith('CUSTOMER_GROUP')) {
+                if (details.id !== undefined && String(details.id) === String(customerId)) {
+                    return true;
+                }
+            }
+            if (urlMatchesId(details.url, 'customers', customerId) || urlMatchesId(details.url, 'customer', customerId)) {
                 return true;
             }
 
-            // 3. Explicit leadId match
-            if (leadId && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
-                return true;
+            // 2. Check Lead direct attributes (if converted)
+            if (leadId) {
+                if (details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+                if (actionUpper.startsWith('LEAD')) {
+                    if (details.id !== undefined && String(details.id) === String(leadId)) {
+                        return true;
+                    }
+                }
+                if (urlMatchesId(details.url, 'leads', leadId) || urlMatchesId(details.url, 'lead', leadId)) {
+                    return true;
+                }
             }
 
-            // 4. Lead profile action and id matches leadId
-            const leadProfileActions = [
-                'LEAD_CREATE', 'LEAD_UPDATE', 'LEAD_DELETE', 
-                'LEAD_STATUS_CHANGE', 'LEAD_CONVERT'
-            ];
-            if (leadId && leadProfileActions.some(act => actionUpper.startsWith(act)) && 
-                details.id !== undefined && String(details.id) === String(leadId)) {
-                return true;
-            }
-
-            // 5. Task action matching customerId or leadId
+            // 3. Check Tasks
             if (actionUpper.includes('TASK')) {
                 if (details.customerId !== undefined && String(details.customerId) === String(customerId)) {
                     return true;
                 }
+                if (details.id !== undefined && taskIds.includes(Number(details.id))) {
+                    return true;
+                }
+                if (taskIds.some(tid => urlMatchesId(details.url, 'tasks', tid) || urlMatchesId(details.url, 'task', tid))) {
+                    return true;
+                }
+            }
+
+            // 4. Check Tickets
+            if (actionUpper.includes('TICKET')) {
+                if (details.customerId !== undefined && String(details.customerId) === String(customerId)) {
+                    return true;
+                }
                 if (leadId && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+                if (details.id !== undefined && ticketIds.includes(Number(details.id))) {
+                    return true;
+                }
+                if (ticketIds.some(tid => urlMatchesId(details.url, 'tickets', tid) || urlMatchesId(details.url, 'ticket', tid))) {
+                    return true;
+                }
+            }
+
+            // 5. Check FollowUps
+            if (actionUpper.includes('FOLLOWUP')) {
+                if (leadId && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+                if (details.id !== undefined && followupIds.includes(Number(details.id))) {
+                    return true;
+                }
+                if (followupIds.some(fid => urlMatchesId(details.url, 'followups', fid) || urlMatchesId(details.url, 'followup', fid))) {
                     return true;
                 }
             }
@@ -194,6 +287,20 @@ async function getLeadAuditLogs(req, res, next) {
         const leadId = parseInt(req.params.leadId);
         if (isNaN(leadId)) return res.status(400).json({ error: "Invalid lead ID" });
 
+        // Fetch all ticket IDs related to this lead
+        const tickets = await req.prisma.ticket.findMany({
+            where: { leadId },
+            select: { id: true }
+        });
+        const ticketIds = tickets.map(t => t.id);
+
+        // Fetch all followup IDs related to this lead
+        const followups = await req.prisma.followUp.findMany({
+            where: { leadId },
+            select: { id: true }
+        });
+        const followupIds = followups.map(f => f.id);
+
         const buildExactIdFilters = (field, id) => [
             { details: { contains: `"${field}":${id},` } },
             { details: { contains: `"${field}":${id}}` } },
@@ -207,8 +314,26 @@ async function getLeadAuditLogs(req, res, next) {
 
         const OR = [
             ...buildExactIdFilters("id", leadId),
-            ...buildExactIdFilters("leadId", leadId)
+            ...buildExactIdFilters("leadId", leadId),
+            { details: { contains: `/leads/${leadId}` } },
+            { details: { contains: `/lead/${leadId}` } }
         ];
+
+        ticketIds.forEach(id => {
+            OR.push(
+                ...buildExactIdFilters("id", id),
+                { details: { contains: `/tickets/${id}` } },
+                { details: { contains: `/ticket/${id}` } }
+            );
+        });
+
+        followupIds.forEach(id => {
+            OR.push(
+                ...buildExactIdFilters("id", id),
+                { details: { contains: `/followups/${id}` } },
+                { details: { contains: `/followup/${id}` } }
+            );
+        });
 
         const logs = await req.prisma.auditLog.findMany({
             where: { OR },
@@ -225,7 +350,12 @@ async function getLeadAuditLogs(req, res, next) {
             orderBy: { timestamp: 'desc' }
         });
 
-        // 100% precise post-filtering in JS by parsing JSON details
+        const urlMatchesId = (url, pathSegment, id) => {
+            if (!url) return false;
+            const regex = new RegExp(`/${pathSegment}/${id}(?:/|\\?|$)`, 'i');
+            return regex.test(url);
+        };
+
         const filteredLogs = logs.filter(log => {
             let details = null;
             try {
@@ -233,29 +363,47 @@ async function getLeadAuditLogs(req, res, next) {
             } catch (e) {
                 return false;
             }
-            
             if (!details) return false;
 
             const actionUpper = log.action.toUpperCase();
 
-            // 1. Explicit leadId match
+            // 1. Check Lead direct attributes
             if (details.leadId !== undefined && String(details.leadId) === String(leadId)) {
                 return true;
             }
-
-            // 2. Lead profile action and id matches leadId
-            const leadProfileActions = [
-                'LEAD_CREATE', 'LEAD_UPDATE', 'LEAD_DELETE', 
-                'LEAD_STATUS_CHANGE', 'LEAD_CONVERT'
-            ];
-            if (leadProfileActions.some(act => actionUpper.startsWith(act)) && 
-                details.id !== undefined && String(details.id) === String(leadId)) {
+            if (actionUpper.startsWith('LEAD')) {
+                if (details.id !== undefined && String(details.id) === String(leadId)) {
+                    return true;
+                }
+            }
+            if (urlMatchesId(details.url, 'leads', leadId) || urlMatchesId(details.url, 'lead', leadId)) {
                 return true;
             }
 
-            // 3. Task action and leadId matches leadId
-            if (actionUpper.includes('TASK') && details.leadId !== undefined && String(details.leadId) === String(leadId)) {
-                return true;
+            // 2. Check Tickets
+            if (actionUpper.includes('TICKET')) {
+                if (details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+                if (details.id !== undefined && ticketIds.includes(Number(details.id))) {
+                    return true;
+                }
+                if (ticketIds.some(tid => urlMatchesId(details.url, 'tickets', tid) || urlMatchesId(details.url, 'ticket', tid))) {
+                    return true;
+                }
+            }
+
+            // 3. Check FollowUps
+            if (actionUpper.includes('FOLLOWUP')) {
+                if (details.leadId !== undefined && String(details.leadId) === String(leadId)) {
+                    return true;
+                }
+                if (details.id !== undefined && followupIds.includes(Number(details.id))) {
+                    return true;
+                }
+                if (followupIds.some(fid => urlMatchesId(details.url, 'followups', fid) || urlMatchesId(details.url, 'followup', fid))) {
+                    return true;
+                }
             }
 
             return false;
