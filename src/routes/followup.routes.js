@@ -46,10 +46,14 @@ module.exports = (prisma) => {
   // Update a specific follow-up
   router.put('/:followUpId', checkPermission('lead_update'), updateFollowUp);
   router.put('/follow-ups/:followUpId', checkPermission('lead_update'), updateFollowUp);
+  router.put('/leads/:leadId/follow-ups/:followUpId', checkPermission('lead_update'), updateFollowUp);
+  router.put('/leads/follow-ups/:followUpId', checkPermission('lead_update'), updateFollowUp);
 
   // Delete a specific follow-up
   router.delete('/:followUpId', checkPermission('lead_delete'), deleteFollowUp);
   router.delete('/follow-ups/:followUpId', checkPermission('lead_delete'), deleteFollowUp);
+  router.delete('/leads/:leadId/follow-ups/:followUpId', checkPermission('lead_delete'), deleteFollowUp);
+  router.delete('/leads/follow-ups/:followUpId', checkPermission('lead_delete'), deleteFollowUp);
 
   // Get upcoming follow-ups for the current user
   router.get('/upcoming', checkPermission('lead_read'), getUpcomingFollowUps);
