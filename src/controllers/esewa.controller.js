@@ -1701,6 +1701,12 @@ const initiateEpayRenewal = async (req, res, next) => {
         packageDetails: { packageId: pkg.id, packageName: pkg.packageName, source: 'EPAY_V2' }
       }
     });
+
+    console.info('[eSewa ePay] Initiate request', {
+      url: epay.formUrl,
+      payload: fields
+    });
+
     res.json({ success: true, formUrl: epay.formUrl, fields, testCredentials: { ids: ['9711111111', '9711111112', '9711111113', '9711111114'], password: 'Nepal@123', token: '123456' } });
   } catch (error) { next(error); }
 };
