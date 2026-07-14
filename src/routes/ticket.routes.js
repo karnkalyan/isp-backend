@@ -9,7 +9,7 @@ module.exports = (prisma) => {
     const auth = isAuthenticated(prisma);
 
     router.post('/', auth, checkPermission('tickets_create'), ticketController.createTicket);
-    router.get('/types', auth, checkAnyPermission(['tickets_read', 'tickets_create']), ticketController.listTicketTypes);
+    router.get('/types', auth, checkAnyPermission(['tickets_read', 'tickets_read_self', 'tickets_create', 'customer_read']), ticketController.listTicketTypes);
     router.post('/types', auth, checkPermission('settings_update'), ticketController.saveTicketType);
     router.patch('/types/:id', auth, checkPermission('settings_update'), ticketController.saveTicketType);
     router.get('/sla-policies', auth, checkAnyPermission(['tickets_read', 'tickets_create']), ticketController.listSlaPolicies);

@@ -1,6 +1,59 @@
 const prisma = require('../../prisma/client');
 const { createSystemNotification } = require('../utils/notificationHelper');
 
+const DEFAULT_TICKET_TAXONOMY = {
+    'New Connection': ['Coverage Check', 'Plan Inquiry', 'New Installation', 'Installation Reschedule', 'Activation Issue'],
+    'Internet Connectivity': ['No Internet', 'Slow Internet', 'Frequent Disconnection', 'High Latency', 'Packet Loss', 'Website/Application Not Working'],
+    'Wi-Fi Issue': ['Weak Signal', 'Wi-Fi Not Connecting', 'Password Reset', 'Limited Coverage', 'Too Many Connected Devices'],
+    'Fiber/Line Issue': ['LOS Red Light', 'Low Optical Power', 'Fiber Cable Damage', 'Drop Cable Issue', 'Distribution Box Issue'],
+    'Router/Device Issue': ['Router Not Powering On', 'Router Configuration', 'Router Reset', 'Router Replacement', 'ONU/ONT Issue'],
+    'Billing and Payment': ['Payment Not Updated', 'Incorrect Bill', 'Duplicate Payment', 'Invoice Request', 'Receipt Request', 'Refund Request'],
+    'Renewal': ['Package Renewal', 'Account Expired', 'Auto-Renewal Issue', 'Renewal Confirmation'],
+    'Package Change': ['Package Upgrade', 'Package Downgrade', 'Bandwidth Change', 'Package Information', 'Usage Inquiry'],
+    'Account Management': ['Mobile Number Change', 'Email Change', 'Password Reset', 'Ownership Transfer', 'Customer Details Update'],
+    'Relocation': ['Address Relocation', 'Internal Cable Relocation', 'Router Relocation', 'New Location Feasibility'],
+    'Suspension/Termination': ['Temporary Suspension', 'Service Reactivation', 'Permanent Termination', 'Equipment Return'],
+    'Network Services': ['Public IP Request', 'Static IP Issue', 'Port Forwarding', 'CGNAT Issue', 'DNS Issue', 'VPN Issue', 'CCTV/Gaming Issue'],
+    'IPTV/Value-Added Services': ['IPTV Not Working', 'Set-Top Box Issue', 'Missing Channel', 'OTT Activation', 'Voice Service Issue'],
+    'Outage': ['Area Outage', 'Planned Maintenance', 'Backbone Issue', 'Upstream Issue', 'Power Failure'],
+    'Complaint/Escalation': ['Technician Delay', 'Unresolved Issue', 'Poor Customer Service', 'Installation Delay', 'Billing Dispute', 'Supervisor Escalation'],
+    'Other': ['Other']
+};
+
+const normalizeTicketTypeText = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\bor\b/g, ' ').replace(/\s+/g, ' ').trim();
+const makeTicketTypeCode = (category, subtype) => `SUPPORT_${category}_${subtype}`.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+async function ensureDefaultTicketTypes(prismaClient, ispId) {
+    const existing = await prismaClient.ticketType.findMany({ where: { ispId } });
+    const missing = [];
+    const updates = [];
+    for (const [category, subtypes] of Object.entries(DEFAULT_TICKET_TAXONOMY)) {
+        for (const subtype of subtypes) {
+            const found = existing.find(type => {
+                const storedCategory = normalizeTicketTypeText(type.description || String(type.name).split('/')[0]);
+                const storedSubtype = normalizeTicketTypeText(String(type.name).split('/').pop());
+                return storedCategory === normalizeTicketTypeText(category) && storedSubtype === normalizeTicketTypeText(subtype);
+            });
+            const canonicalName = category === 'Other' ? 'Other' : `${category} / ${subtype}`;
+            if (found) {
+                if (found.name !== canonicalName || found.description !== category || !found.isActive) {
+                    updates.push(prismaClient.ticketType.update({ where: { id: found.id }, data: { name: canonicalName, description: category, isActive: true } }));
+                }
+            } else {
+                missing.push({
+                    ispId,
+                    name: canonicalName,
+                    code: makeTicketTypeCode(category, subtype),
+                    description: category,
+                    isActive: true
+                });
+            }
+        }
+    }
+    if (updates.length) await Promise.all(updates);
+    if (missing.length) await prismaClient.ticketType.createMany({ data: missing, skipDuplicates: true });
+}
+
 // Reusable customer include that resolves name via lead
 const customerInclude = {
     select: {
@@ -110,11 +163,10 @@ async function findTicketAutoAssignee(prisma, ispId, branchId) {
         'admin'
     ];
 
-    const roleNameFilter = { in: supportRoles };
     const select = { id: true };
 
     if (branchId) {
-        const branchUser = await prisma.user.findFirst({
+        const branchUsers = await prisma.user.findMany({
             where: {
                 ispId,
                 isDeleted: false,
@@ -123,11 +175,16 @@ async function findTicketAutoAssignee(prisma, ispId, branchId) {
                     { branchId },
                     { userBranches: { some: { branchId } } }
                 ],
-                role: { name: roleNameFilter, isActive: true }
+                role: { isActive: true }
             },
             orderBy: { id: 'asc' },
-            select
+            select: { id: true, role: { select: { name: true } } }
         });
+        const branchUser = branchUsers.sort((a, b) => {
+            const aIndex = supportRoles.indexOf(String(a.role?.name || '').toLowerCase());
+            const bIndex = supportRoles.indexOf(String(b.role?.name || '').toLowerCase());
+            return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex) || a.id - b.id;
+        }).find(user => supportRoles.includes(String(user.role?.name || '').toLowerCase()));
         if (branchUser) return branchUser.id;
     }
 
@@ -179,6 +236,9 @@ async function createTicket(req, res, next) {
 
         if (!customerId && !leadId && !String(contactName || '').trim()) {
             return res.status(400).json({ error: 'Select a lead/customer or enter the contact name.' });
+        }
+        if (!ticketTypeId) {
+            return res.status(400).json({ error: 'Complaint type is required.' });
         }
 
         const selectedPriority = priority || 'MEDIUM';
@@ -826,7 +886,10 @@ async function getTicketsByCustomer(req, res, next) {
 }
 
 async function listTicketTypes(req, res, next) {
-    try { res.json(await req.prisma.ticketType.findMany({ where: { ispId: req.ispId, ...(req.query.active === 'true' ? { isActive: true } : {}) }, orderBy: { name: 'asc' } })); } catch (err) { next(err); }
+    try {
+        await ensureDefaultTicketTypes(req.prisma, req.ispId);
+        res.json(await req.prisma.ticketType.findMany({ where: { ispId: req.ispId, ...(req.query.active === 'true' ? { isActive: true } : {}) }, orderBy: { name: 'asc' } }));
+    } catch (err) { next(err); }
 }
 
 async function saveTicketType(req, res, next) {
