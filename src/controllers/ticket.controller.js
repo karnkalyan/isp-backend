@@ -81,6 +81,9 @@ const leadInclude = {
         lastName: true,
         email: true,
         phoneNumber: true,
+        status: true,
+        convertedToCustomer: true,
+        convertedAt: true,
         address: true,
         street: true,
         district: true,
@@ -134,6 +137,9 @@ function flattenCustomer(ticket) {
             lastName: ticket.lead.lastName || '',
             email: ticket.lead.email || '',
             phoneNumber: ticket.lead.phoneNumber || '',
+            status: ticket.lead.status,
+            convertedToCustomer: Boolean(ticket.lead.convertedToCustomer),
+            convertedAt: ticket.lead.convertedAt,
             address: [ticket.lead.address, ticket.lead.street, ticket.lead.district, ticket.lead.province].filter(Boolean).join(', '),
         };
     } else if (ticket.contactName || ticket.contactPhone || ticket.contactEmail) {
@@ -302,11 +308,12 @@ async function createTicket(req, res, next) {
                         ]
                     } : {})
                 },
-                select: { id: true }
+                select: { id: true, departmentId: true }
             });
             if (!assignee) {
                 return res.status(400).json({ error: 'Assigned user must belong to the ticket branch.' });
             }
+            if (!departmentId && assignee.departmentId) departmentId = assignee.departmentId;
         }
 
         // Generate ticket number
