@@ -1,0 +1,3 @@
+ALTER TABLE `Branch` ADD COLUMN `smsEnabled` BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN `smsUseParentProvider` BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN `smsProviderCode` VARCHAR(191) NULL;

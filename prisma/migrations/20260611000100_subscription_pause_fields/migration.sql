@@ -1,0 +1,6 @@
+ALTER TABLE `CustomerSubscription`
+  ADD COLUMN `isPaused` BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN `pauseDate` DATETIME(3) NULL,
+  ADD COLUMN `extensionCount` INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN `graceDaysBalance` INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN `compensationDays` INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,660 @@
+const { TaskStatus, TaskPriority } = require('@prisma/client');
+const { logAudit } = require('../utils/auditLogger');
+const { createSystemNotification } = require('../utils/notificationHelper');
+
+// Helper to check for task overlaps
+async function checkOverlap(prisma, assignedToId, startTime, durationMinutes, excludeTaskId = null) {
+    if (!assignedToId || !startTime) return null;
+    
+    const start = new Date(startTime);
+    const end = new Date(start.getTime() + (Number(durationMinutes || 60)) * 60 * 1000);
+    
+    const overlap = await prisma.task.findFirst({
+        where: {
+            id: excludeTaskId ? { not: Number(excludeTaskId) } : undefined,
+            assignedToId: Number(assignedToId),
+            status: { notIn: ['CANCELLED', 'COMPLETED'] },
+            startTime: { not: null },
+            OR: [
+                {
+                    startTime: { lte: start },
+                    endTime: { gte: start }
+                },
+                {
+                    startTime: { lte: end },
+                    endTime: { gte: end }
+                },
+                {
+                    startTime: { gte: start },
+                    endTime: { lte: end }
+                }
+            ]
+        },
+        include: {
+            assignedTo: { select: { name: true } }
+        }
+    });
+    
+    if (overlap) {
+        return `Technician ${overlap.assignedTo?.name || 'assigned'} is already scheduled for "${overlap.title}" from ${new Date(overlap.startTime).toLocaleTimeString()} to ${new Date(overlap.endTime || start).toLocaleTimeString()}.`;
+    }
+    return null;
+}
+
+/**
+ * List all tasks with filtering
+ */
+async function listTasks(req, res, next) {
+    try {
+        const { status, priority, assignedToId, customerId, ticketId, branchId } = req.query;
+        const ispId = req.ispId;
+
+        const roleName = String(req.user.role || '').toLowerCase();
+        const isFieldStaff = roleName.includes('field staff');
+        const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName.includes('global admin');
+
+        const queryBranchId = req.branchId || (branchId ? Number(branchId) : null);
+
+        const where = {
+            ispId,
+            ...(status && { status }),
+            ...(priority && { priority }),
+            ...(assignedToId && { assignedToId: Number(assignedToId) }),
+            ...(customerId && { customerId: Number(customerId) }),
+            ...(ticketId && { ticketId: Number(ticketId) }),
+            ...(queryBranchId && { branchId: queryBranchId }),
+            // If field staff, only show their own tasks unless they are admin
+            ...(isFieldStaff && !isAdmin && { assignedToId: req.user.id })
+        };
+
+        const tasks = await req.prisma.task.findMany({
+            where,
+            include: {
+                assignedTo: { select: { id: true, name: true, email: true } },
+                customer: { select: { id: true, customerUniqueId: true, lead: { select: { firstName: true, lastName: true, phoneNumber: true, address: true, street: true } } } },
+                ticket: { 
+                    select: { 
+                        id: true, 
+                        ticketNumber: true, 
+                        title: true, 
+                        lead: { 
+                            select: { 
+                                id: true,
+                                firstName: true,
+                                lastName: true,
+                                phoneNumber: true,
+                                address: true,
+                                street: true
+                            } 
+                        }, 
+                        customer: { 
+                            select: { 
+                                id: true,
+                                customerUniqueId: true,
+                                lead: { 
+                                    select: { 
+                                        firstName: true,
+                                        lastName: true,
+                                        phoneNumber: true,
+                                        address: true,
+                                        street: true
+                                    } 
+                                } 
+                            } 
+                        } 
+                    } 
+                },
+                branch: { select: { id: true, name: true } }
+            },
+            orderBy: { startTime: 'asc' }
+        });
+
+        const creatorIds = [...new Set(tasks.map(task => task.createdById).filter(Boolean))];
+        const creators = creatorIds.length
+            ? await req.prisma.user.findMany({
+                where: { id: { in: creatorIds } },
+                select: { id: true, name: true }
+            })
+            : [];
+        const creatorById = new Map(creators.map(user => [user.id, user]));
+        tasks.forEach(task => {
+            task.createdBy = task.createdById ? creatorById.get(task.createdById) || null : null;
+        });
+
+        res.json(tasks);
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Create a new task
+ */
+async function createTask(req, res, next) {
+    try {
+        const { 
+            title, 
+            description, 
+            startTime, 
+            endTime, 
+            duration, 
+            status, 
+            priority, 
+            assignedToId, 
+            customerId, 
+            ticketId, 
+            branchId,
+            notes
+        } = req.body;
+        
+        const ispId = req.ispId;
+        const createdById = req.user.id;
+        let resolvedCustomerId = customerId ? Number(customerId) : null;
+        let resolvedBranchId = branchId ? Number(branchId) : (req.selectedBranchId || req.branchId || null);
+        if (ticketId) {
+            const ticket = await req.prisma.ticket.findFirst({ where: { id: Number(ticketId), ispId, isDeleted: false }, select: { id: true, customerId: true, branchId: true } });
+            if (!ticket) return res.status(400).json({ error: 'Selected ticket is not available' });
+            resolvedCustomerId = resolvedCustomerId || ticket.customerId;
+            resolvedBranchId = resolvedBranchId || ticket.branchId;
+        }
+        if (resolvedCustomerId) {
+            const customer = await req.prisma.customer.findFirst({ where: { id: resolvedCustomerId, ispId, isDeleted: false }, select: { id: true, branchId: true, subBranchId: true } });
+            if (!customer) return res.status(400).json({ error: 'Selected customer is not available' });
+            resolvedBranchId = resolvedBranchId || customer.subBranchId || customer.branchId;
+        }
+
+        // Duplicate check: Same title and same startTime
+        if (title && startTime) {
+            const duplicate = await req.prisma.task.findFirst({
+                where: {
+                    title: title.trim(),
+                    startTime: new Date(startTime),
+                    ispId,
+                    status: { not: 'CANCELLED' }
+                }
+            });
+            if (duplicate) {
+                const errPayload = {
+                    type: 'DUPLICATE',
+                    title: title,
+                    startTime: new Date(startTime).toISOString()
+                };
+                return res.status(400).json({ error: JSON.stringify(errPayload) });
+            }
+        }
+
+        // Overlap validation check - block creation
+        if (assignedToId && startTime) {
+            const start = new Date(startTime);
+            const end = new Date(start.getTime() + (Number(duration || 60)) * 60 * 1000);
+            
+            const overlap = await req.prisma.task.findFirst({
+                where: {
+                    assignedToId: Number(assignedToId),
+                    status: { notIn: ['CANCELLED', 'COMPLETED'] },
+                    startTime: { not: null },
+                    OR: [
+                        {
+                            startTime: { lte: start },
+                            endTime: { gte: start }
+                        },
+                        {
+                            startTime: { lte: end },
+                            endTime: { gte: end }
+                        },
+                        {
+                            startTime: { gte: start },
+                            endTime: { lte: end }
+                        }
+                    ]
+                },
+                include: {
+                    assignedTo: { select: { name: true } }
+                }
+            });
+
+            if (overlap) {
+                const errPayload = {
+                    type: 'OVERLAP',
+                    technicianName: overlap.assignedTo?.name || 'assigned',
+                    title: overlap.title,
+                    startTime: overlap.startTime.toISOString(),
+                    endTime: (overlap.endTime || start).toISOString()
+                };
+                return res.status(400).json({ error: JSON.stringify(errPayload) });
+            }
+        }
+
+
+        const calculatedEndTime = startTime 
+            ? new Date(new Date(startTime).getTime() + (Number(duration || 60)) * 60 * 1000)
+            : (endTime ? new Date(endTime) : null);
+
+        const task = await req.prisma.task.create({
+            data: {
+                title,
+                description,
+                startTime: startTime ? new Date(startTime) : null,
+                endTime: calculatedEndTime,
+                duration: duration ? Number(duration) : null,
+                status: status || 'PENDING',
+                priority: priority || 'MEDIUM',
+                assignedToId: assignedToId ? Number(assignedToId) : null,
+                customerId: resolvedCustomerId,
+                ticketId: ticketId ? Number(ticketId) : null,
+                branchId: resolvedBranchId,
+                ispId,
+                createdById,
+                updatedAt: new Date()
+            }
+        });
+
+        // Log actions in TaskActivityLog
+        await req.prisma.taskActivityLog.create({
+            data: {
+                taskId: task.id,
+                userId: createdById,
+                action: 'CREATED',
+                notes: notes || 'Task was scheduled'
+            }
+        });
+
+        if (assignedToId) {
+            await req.prisma.taskActivityLog.create({
+                data: {
+                    taskId: task.id,
+                    userId: createdById,
+                    action: 'ASSIGNED',
+                    notes: `Assigned to user ID ${assignedToId}`
+                }
+            });
+        }
+
+        await logAudit(req.prisma, createdById, 'TASK_CREATE', { id: task.id, title: task.title }, req);
+
+        if (assignedToId) {
+            try {
+                const wsManager = req.app.get('webSocketManager');
+                await createSystemNotification(req.prisma, {
+                    userId: Number(assignedToId),
+                    ispId,
+                    branchId: resolvedBranchId,
+                    type: 'info',
+                    title: `New Task Assigned`,
+                    description: `You have been assigned task: "${title}"`,
+                    link: `/tasks/${task.id}`,
+                    wsManager
+                });
+
+                const assignedUser = await req.prisma.user.findFirst({
+                    where: { id: Number(assignedToId), ispId, isDeleted: false },
+                    select: { name: true, email: true }
+                });
+                if (assignedUser?.email) {
+                    const mailHelper = require('../utils/mailHelper');
+                    const { renderTemplate, textToHtml } = require('../utils/templateHelper');
+                    const rendered = await renderTemplate(ispId, 'EMAIL', 'task_assigned_user', {
+                        ispName: req.user?.isp?.companyName || 'ISP',
+                        userName: assignedUser.name || assignedUser.email,
+                        taskTitle: title,
+                        priority: priority || 'MEDIUM',
+                        description: description || '',
+                        customerName: '',
+                        ticketNumber: ''
+                    }, {
+                        subject: `Task Assigned: ${title}`,
+                        body: `Dear ${assignedUser.name || 'Team Member'},\n\nA task has been assigned to you.\n\nTitle: ${title}\nPriority: ${priority || 'MEDIUM'}\n${description || ''}`
+                    }, req.prisma);
+                    mailHelper.queueMail(ispId, {
+                        to: assignedUser.email,
+                        subject: rendered.subject,
+                        html: textToHtml(rendered.body)
+                    }, { ignoreNotificationSetting: true });
+                }
+            } catch (err) {
+                console.error('Failed to send task assignment notification/email:', err.message);
+            }
+        }
+
+        res.status(201).json({ ...task, warning: null });
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Update a task
+ */
+async function updateTask(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { 
+            title, 
+            description, 
+            startTime, 
+            endTime, 
+            duration, 
+            status, 
+            priority, 
+            assignedToId,
+            customerId,
+            ticketId,
+            branchId,
+            lat,
+            lon,
+            notes
+        } = req.body;
+
+        const task = await req.prisma.task.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!task || task.ispId !== req.ispId) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+
+        const roleName = String(req.user.role || '').toLowerCase();
+        const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName.includes('global admin') || roleName.includes('branch admin');
+
+        // Enforce that only the assigned user can change status to Start/Resume, Pause, or Complete (unless they are admin)
+        if (status && status !== task.status && !isAdmin) {
+            const isStatusTransition = ['IN_PROGRESS', 'ON_HOLD', 'COMPLETED'].includes(status);
+            if (isStatusTransition) {
+                if (task.assignedToId !== req.user.id) {
+                    return res.status(403).json({ error: 'Unauthorized: Only the assigned technician can start, pause, resume, or complete this task.' });
+                }
+            }
+        }
+
+        // Prevent cancelling a task if it is already completed
+        if (status === 'CANCELLED' && task.status === 'COMPLETED') {
+            return res.status(400).json({ error: 'Validation Error: A completed task cannot be cancelled.' });
+        }
+
+        // GPS checks on state changes (unless admin)
+        if (status && status !== task.status && !isAdmin) {
+            if (status === 'IN_PROGRESS' || status === 'COMPLETED') {
+                if (!lat || !lon) {
+                    return res.status(400).json({ error: 'GPS is mandatory to start or complete this task. Please enable location services.' });
+                }
+            }
+        }
+
+        // Check for overlaps if reassigning or rescheduling
+        let warning = null;
+        const checkUser = assignedToId !== undefined ? (assignedToId ? Number(assignedToId) : null) : task.assignedToId;
+        const checkStart = startTime ? new Date(startTime) : task.startTime;
+        const checkDur = duration !== undefined ? Number(duration) : task.duration;
+        if (checkUser && checkStart && (assignedToId !== undefined || startTime !== undefined || duration !== undefined)) {
+            warning = await checkOverlap(req.prisma, checkUser, checkStart, checkDur, task.id);
+        }
+
+        const calculatedEndTime = startTime 
+            ? new Date(new Date(startTime).getTime() + (Number(duration !== undefined ? duration : (task.duration || 60))) * 60 * 1000)
+            : (endTime ? new Date(endTime) : undefined);
+
+        const updateData = {
+            ...(title && { title }),
+            ...(description !== undefined && { description }),
+            ...(startTime && { startTime: new Date(startTime) }),
+            ...(calculatedEndTime && { endTime: calculatedEndTime }),
+            ...(duration !== undefined && { duration: Number(duration) }),
+            ...(status && { status }),
+            ...(priority && { priority }),
+            ...(assignedToId !== undefined && { assignedToId: assignedToId ? Number(assignedToId) : null }),
+            ...(customerId !== undefined && { customerId: customerId ? Number(customerId) : null }),
+            ...(ticketId !== undefined && { ticketId: ticketId ? Number(ticketId) : null }),
+            ...(branchId !== undefined && { branchId: branchId ? Number(branchId) : null }),
+            updatedAt: new Date()
+        };
+
+        // Track GPS and timestamps
+        if (status && status !== task.status) {
+            if (status === 'IN_PROGRESS') {
+                updateData.startedAt = new Date();
+                if (lat !== undefined) updateData.startLat = Number(lat);
+                if (lon !== undefined) updateData.startLon = Number(lon);
+            } else if (status === 'COMPLETED') {
+                updateData.completedAt = new Date();
+                if (lat !== undefined) updateData.completeLat = Number(lat);
+                if (lon !== undefined) updateData.completeLon = Number(lon);
+
+                // Calculate working duration
+                const activeStart = task.startedAt || new Date();
+                const totalWorking = Math.round((new Date().getTime() - activeStart.getTime()) / 1000); // seconds
+                updateData.workingDuration = totalWorking;
+
+                // Total duration from created to completion
+                const totalDur = Math.round((new Date().getTime() - task.createdAt.getTime()) / 1000);
+                updateData.totalDuration = totalDur;
+            }
+        }
+
+        if (assignedToId !== undefined && Number(assignedToId) !== task.assignedToId) {
+            await req.prisma.taskActivityLog.create({
+                data: {
+                    taskId: task.id,
+                    userId: req.user.id,
+                    action: 'ASSIGNED',
+                    notes: assignedToId ? `Assigned to user ID ${assignedToId}` : 'Task was unassigned'
+                }
+            });
+        }
+
+        const updatedTask = await req.prisma.task.update({
+            where: { id: Number(id) },
+            data: updateData
+        });
+
+        // Log to TaskActivityLog on state change
+        if (status && status !== task.status) {
+            let logAction = status;
+            if (status === 'IN_PROGRESS') {
+                logAction = task.status === 'ON_HOLD' ? 'RESUMED' : 'STARTED';
+            } else if (status === 'ON_HOLD') {
+                logAction = 'PAUSED';
+            }
+
+            await req.prisma.taskActivityLog.create({
+                data: {
+                    taskId: task.id,
+                    userId: req.user.id,
+                    action: logAction,
+                    lat: lat ? Number(lat) : null,
+                    lon: lon ? Number(lon) : null,
+                    notes: notes || `Task status changed to ${status}`
+                }
+            });
+        }
+
+        // Log assignment changes
+        if (assignedToId !== undefined && Number(assignedToId) !== task.assignedToId) {
+            await req.prisma.taskActivityLog.create({
+                data: {
+                    taskId: task.id,
+                    userId: req.user.id,
+                    action: 'ASSIGNED',
+                    notes: assignedToId ? `Assigned to user ID ${assignedToId}` : 'Unassigned task'
+                }
+            });
+        }
+
+        if (assignedToId !== undefined && Number(assignedToId) !== task.assignedToId && assignedToId) {
+            try {
+                const wsManager = req.app.get('webSocketManager');
+                await createSystemNotification(req.prisma, {
+                    userId: Number(assignedToId),
+                    ispId,
+                    branchId: updatedTask.branchId,
+                    type: 'info',
+                    title: `Task Reassigned`,
+                    description: `You have been assigned task: "${updatedTask.title}"`,
+                    link: `/tasks/${updatedTask.id}`,
+                    wsManager
+                });
+            } catch (err) {
+                console.error('Failed to send task reassignment notification:', err.message);
+            }
+        }
+
+        await logAudit(req.prisma, req.user.id, 'TASK_UPDATE', { id: task.id, status: status || task.status }, req);
+
+        res.json({ ...updatedTask, warning });
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Get task details
+ */
+async function getTaskDetails(req, res, next) {
+    try {
+        const { id } = req.params;
+        const task = await req.prisma.task.findUnique({
+            where: { id: Number(id) },
+            include: {
+                assignedTo: { select: { id: true, name: true, email: true, profilePicture: true } },
+                customer: { 
+                    select: { 
+                        id: true, 
+                        customerUniqueId: true, 
+                        lead: { 
+                            select: { 
+                                firstName: true, 
+                                lastName: true, 
+                                phoneNumber: true, 
+                                address: true 
+                            } 
+                        } 
+                    } 
+                },
+                ticket: { 
+                    select: { 
+                        id: true, 
+                        ticketNumber: true, 
+                        title: true, 
+                        description: true, 
+                        lead: { 
+                            select: { 
+                                id: true,
+                                firstName: true,
+                                lastName: true,
+                                phoneNumber: true,
+                                address: true,
+                                street: true
+                            } 
+                        }, 
+                        customer: { 
+                            select: { 
+                                id: true,
+                                customerUniqueId: true,
+                                lead: { 
+                                    select: { 
+                                        firstName: true,
+                                        lastName: true,
+                                        phoneNumber: true,
+                                        address: true,
+                                        street: true
+                                    } 
+                                } 
+                            } 
+                        } 
+                    } 
+                },
+                branch: { select: { id: true, name: true } },
+                activityLogs: {
+                    include: {
+                        user: { select: { id: true, name: true } }
+                    },
+                    orderBy: { timestamp: 'desc' }
+                }
+            }
+        });
+
+        if (!task || task.ispId !== req.ispId) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+
+        const roleName = String(req.user.role || '').toLowerCase();
+        if (roleName.includes('field staff') && task.assignedToId !== req.user.id) {
+            return res.status(403).json({ error: 'Access Denied' });
+        }
+
+        if (task.createdById) {
+            const creator = await req.prisma.user.findUnique({
+                where: { id: task.createdById },
+                select: { id: true, name: true }
+            });
+            task.createdBy = creator || null;
+        }
+
+        res.json(task);
+    } catch (err) {
+        next(err);
+    }
+}
+
+/**
+ * Delete a task
+ */
+async function deleteTask(req, res, next) {
+    try {
+        const { id } = req.params;
+        const task = await req.prisma.task.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!task || task.ispId !== req.ispId) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+
+        await req.prisma.task.delete({
+            where: { id: Number(id) }
+        });
+
+        res.json({ message: 'Task deleted successfully' });
+    } catch (err) {
+        next(err);
+    }
+}
+
+async function addTaskComment(req, res, next) {
+    try {
+        const { id } = req.params;
+        const { content, lat, lon } = req.body;
+        if (!content || !String(content).trim()) {
+            return res.status(400).json({ error: 'Comment content is required' });
+        }
+
+        const task = await req.prisma.task.findUnique({ where: { id: Number(id) } });
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const log = await req.prisma.taskActivityLog.create({
+            data: {
+                taskId: task.id,
+                userId: req.user.id,
+                action: 'COMMENT',
+                notes: String(content).trim(),
+                lat: lat ? Number(lat) : null,
+                lon: lon ? Number(lon) : null
+            },
+            include: {
+                user: { select: { id: true, name: true } }
+            }
+        });
+
+        res.status(201).json(log);
+    } catch (err) {
+        next(err);
+    }
+}
+
+module.exports = {
+    listTasks,
+    createTask,
+    updateTask,
+    getTaskDetails,
+    deleteTask,
+    addTaskComment
+};

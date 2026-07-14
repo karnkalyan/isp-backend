@@ -1,0 +1,979 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model ISP {
+  id                Int                 @id @default(autoincrement())
+  companyName       String
+  businessType      String?
+  website           String?
+  contactPerson     String?
+  phoneNumber       String?
+  masterEmail       String              @unique
+  passwordHash      String?
+  description       String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  country           String?
+  asnNumber         String?
+  ipv4Blocks        String?
+  ipv6Blocks        String?
+  upstreamProviders String?
+  logoUrl           String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  users             User[]
+  connectionTypes   ConnectionType[]
+  oneTimeCharges    OneTimeCharge[]
+  packagePlans      PackagePlan[]
+  packagePrices     PackagePrice[]
+  customers         Customer[]
+  esewaConfig       ESewaConfiguration?
+  esewaPayments     ESewaTokenPayment[]
+  CustomerDocument  CustomerDocument[]
+  leads             Lead[]
+  connectionUsers   ConnectionUser[]
+  services          ISPService[]
+  memberships       Membership[]
+  existingISPs      ExistingISP[]
+
+  // Relations
+  
+  
+  // Add these missing relation fields
+  olts              OLT[]
+  ontId             ONT[] 
+  TerminalSession   TerminalSession[]
+  TerminalCommand   TerminalCommand[]
+  splitters         Splitter[]
+}
+
+enum UserStatus {
+  active
+  inactive
+  pending
+  disabled
+}
+
+model Role {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  permissions Permission[] @relation("RolePermissions")
+  users       User[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Permission {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  menuName  String
+  roles     Role[]   @relation("RolePermissions")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Department {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model User {
+  id             Int            @id @default(autoincrement())
+  email          String         @unique
+  passwordHash   String
+  name           String?
+  roleId         Int?
+  role           Role?          @relation(fields: [roleId], references: [id])
+  status         UserStatus     @default(pending)
+  lastLogin      DateTime?
+  profilePicture String?
+  departmentId   Int?
+  department     Department?    @relation(fields: [departmentId], references: [id])
+  ispId          Int?
+  isp            ISP?           @relation(fields: [ispId], references: [id])
+  isDeleted      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  yeasterExt     String?
+  refreshTokens  RefreshToken[]
+
+  // Relations
+  leads          Lead[]     @relation("AssignedUser") // leads assigned to this user
+  convertedLeads Lead[]     @relation("ConvertedByUser") // leads converted by this user
+  installations  Customer[] @relation("InstalledBy") // which customers were installed by this user
+
+  // ADD THIS: Relation for follow-ups assigned to this user
+  assignedFollowUps FollowUp[] @relation("AssignedFollowUps") // follow-ups assigned to this user
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ConnectionType {
+  id                    Int           @id @default(autoincrement())
+  name                  String?
+  iconUrl               String?
+  code                  String?
+  isExtra               Boolean       @default(false)
+  description           String?
+  isActive              Boolean       @default(true)
+  isDeleted             Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  ispId                 Int?
+  isp                   ISP?          @relation(fields: [ispId], references: [id])
+  connectionTypeDetails PackagePlan[]
+}
+
+model PackagePlan {
+  id                    Int             @id @default(autoincrement())
+  planName              String?
+  planCode              String?         @unique
+  connectionType        Int
+  connectionTypeDetails ConnectionType? @relation(fields: [connectionType], references: [id])
+  dataLimit             Int?
+  downSpeed             Int?
+  upSpeed               Int?
+  ispId                 Int?
+  isp                   ISP?            @relation(fields: [ispId], references: [id])
+  deviceLimit           Int?
+  isPopular             Boolean         @default(false)
+  description           String?
+  isActive              Boolean         @default(true)
+  isDeleted             Boolean         @default(false)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  packagePlanDetails    PackagePrice[]
+}
+
+model PackagePrice {
+  id                    Int                       @id @default(autoincrement())
+  planId                Int
+  packagePlanDetails    PackagePlan?              @relation(fields: [planId], references: [id])
+  price                 Float
+  packageDuration       String?
+  referenceId           String?                   @unique
+  packageName           String?
+  isTrial               Boolean                   @default(false)
+  isActive              Boolean                   @default(true)
+  isDeleted             Boolean                   @default(false)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  ispId                 Int?
+  isp                   ISP?                      @relation(fields: [ispId], references: [id])
+  oneTimeCharges        OneTimeCharge[]           @relation("PackageOneTimeCharges")
+  customerSubscriptions CustomerSubscription[]
+  customer              Customer[]
+  orders                CustomerOrderManagement[] @relation("PackageOrders") // relation name added
+  lead                  Lead[]
+  customersSubscribed   Customer[]                @relation("SubscribedPackage")
+}
+
+model OneTimeCharge {
+  id                 Int            @id @default(autoincrement())
+  name               String?
+  code               String?
+  referenceId        String?
+  isTaxable          Boolean        @default(true)
+  iconUrl            String?
+  description        String?
+  amount             Float
+  ispId              Int?
+  isActive           Boolean        @default(true)
+  isDeleted          Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  isp                ISP?           @relation(fields: [ispId], references: [id])
+  applicablePackages PackagePrice[] @relation("PackageOneTimeCharges")
+}
+
+model Lead {
+  // Required fields with auto-generation
+  id                  Int        @id @default(autoincrement())
+  isActive            Boolean    @default(true)
+  isDeleted           Boolean    @default(false)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  convertedToCustomer Boolean    @default(false)
+  status              LeadStatus @default(new)
+
+  // Optional personal information fields
+  firstName              String?
+  middleName             String?
+  lastName               String?
+  email                  String? @unique
+  phoneNumber            String?
+  secondaryContactNumber String?
+  gender                 String?
+
+  // Optional address fields
+  address  String?
+  street   String?
+  district String?
+  province String?
+
+  // Optional lead information
+  source String?
+  notes  String?
+
+  // Optional timestamps
+  convertedAt  DateTime?
+  nextFollowUp DateTime?
+
+  // Foreign key relations
+  ispId Int?
+  isp   ISP? @relation(fields: [ispId], references: [id])
+
+  memberShipId Int?
+  membership   Membership? @relation(fields: [memberShipId], references: [id])
+
+  assignedUserId Int?
+  assignedUser   User? @relation("AssignedUser", fields: [assignedUserId], references: [id])
+
+  interestedPackageId Int?
+  interestedPackage   PackagePrice? @relation(fields: [interestedPackageId], references: [id])
+
+  convertedById Int?
+  convertedBy   User? @relation("ConvertedByUser", fields: [convertedById], references: [id])
+
+  // Relations
+  followUps FollowUp[]
+  customers Customer[]
+  metadata Json?
+
+
+  // Indexes
+  @@index([status])
+  @@index([convertedToCustomer])
+  @@index([assignedUserId])
+  @@index([ispId])
+  @@index([createdAt])
+  @@index([email])
+  @@index([phoneNumber])
+  @@index([source])
+  @@index([province])
+  @@index([district])
+  @@index([gender])
+  @@map("lead")
+}
+
+enum FollowUpType {
+  CALL
+  EMAIL
+  MEETING
+  VISIT
+  OTHER
+}
+
+enum FollowUpStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+model FollowUp {
+  id             Int  @id @default(autoincrement())
+  leadId         Int
+  lead           Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignedUserId Int
+  assignedUser   User @relation("AssignedFollowUps", fields: [assignedUserId], references: [id]) // Add relation name here
+
+  type        FollowUpType   @default(CALL)
+  status      FollowUpStatus @default(SCHEDULED)
+  title       String
+  description String?
+  scheduledAt DateTime
+  completedAt DateTime?
+  notes       String?
+  outcome     String? // e.g., "Left message", "No answer", "Interested", "Not interested"
+
+  isActive  Boolean  @default(true)
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+  @@index([assignedUserId])
+  @@index([scheduledAt])
+}
+
+model Customer {
+  id                    Int                       @id @default(autoincrement())
+  customerUniqueId      String?                   @unique
+  panNo                 String?                   @unique
+  firstName             String
+  middleName            String?
+  lastName              String
+  email                 String                    @unique
+  phoneNumber           String
+  idNumber              String
+  secondaryPhone        String?
+  gender                String?                   @default("male")
+  
+  // Address fields
+  street                String?
+  city                  String
+  district              String?
+  province              String?
+  zipCode               String?
+  
+  lat                   Float
+  lon                   Float
+  deviceName            String?
+  deviceMac             String?
+  assignedPkg           Int
+  packagePrice          PackagePrice              @relation(fields: [assignedPkg], references: [id])
+  subscribedPkgId       Int?
+  subscribedPkg         PackagePrice?             @relation("SubscribedPackage", fields: [subscribedPkgId], references: [id])
+  rechargeable          Boolean                   @default(false)
+  isDeleted             Boolean                   @default(false)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  ispId                 Int?
+  isp                   ISP?                      @relation(fields: [ispId], references: [id])
+  connectionUsers       ConnectionUser[]
+  customerSubscriptions CustomerSubscription[]
+  membershipId          Int?
+  membership            Membership?               @relation(fields: [membershipId], references: [id])
+  installedById         Int?
+  installedBy           User?                     @relation("InstalledBy", fields: [installedById], references: [id])
+  isReferenced          Boolean                   @default(false)
+  referencedById        Int?
+  referencedBy          Customer?                 @relation("CustomerReference", fields: [referencedById], references: [id])
+  references            Customer[]                @relation("CustomerReference")
+  existingISPId         Int?
+  existingISP           ExistingISP?              @relation(fields: [existingISPId], references: [id])
+  leadId                Int?
+  lead                  Lead?                     @relation(fields: [leadId], references: [id])
+  orders                CustomerOrderManagement[]
+  documents             CustomerDocument[]
+  vlanId                String?
+  vlanPriority          String?                   @default("0")
+  connectionType        String?                   @default("fiber")
+  billingCycle          String?                   @default("monthly")
+  paymentMethod         String?
+  status                String?                   @default("draft")
+  onboardStatus         String?                   @default("pending")
+  esewaPayments         ESewaTokenPayment[]
+  deviceSerialNumber    String?
+  deviceModel           String?
+  
+  // OLT/Splitter provisioning - SIMPLIFIED VERSION
+  oltId                 Int?
+  olt                   OLT?                      @relation(fields: [oltId], references: [id])
+  splitterId            Int?
+  splitter              Splitter?                 @relation(fields: [splitterId], references: [id])
+  
+  // Simplified port assignment
+  oltPort               String?                   // OLT port (if direct connection)
+  splitterPort          String?                   // Splitter port (e.g., "1", "2", "3", etc.)
+  
+  ontSerialNumber       String?
+  ontModel              String?
+  provisioningNotes     String?
+  useSplitter           Boolean                   @default(true)
+  useDirectOLT          Boolean                   @default(false)
+  
+  @@index([customerUniqueId])
+  @@index([panNo])
+  @@index([membershipId])
+  @@index([status])
+  @@index([onboardStatus])
+  @@index([oltId])
+  @@index([splitterId])
+  @@index([splitterPort])
+}
+
+
+model OLT {
+  id               Int      @id @default(autoincrement())
+  name             String
+  ipAddress        String
+  model            String
+  vendor           String
+  serialNumber     String?
+  firmwareVersion  String?
+  status           String   @default("online")
+  lastSeen         DateTime?
+  totalPorts       Int      @default(0)
+  usedPorts        Int      @default(0)
+  availablePorts   Int      @default(0)
+  totalSubscribers Int      @default(0)
+  activeSubscribers Int     @default(0)
+  
+  // SSH Configuration
+  sshHost          String?
+  sshPort          Int?     @default(22)
+  sshUsername      String?
+  sshPassword      String?
+  sshEnablePassword String?
+  sshKey           String?
+  
+  // SSH Connection Settings
+  sshTimeout       Int?     @default(30000)     // Connection timeout in ms
+  sshKeepalive     Int?     @default(5000)      // Keepalive interval in ms
+  maxReconnect     Int?     @default(3)         // Max reconnect attempts
+  commandDelay     Int?     @default(1200)      // Delay between commands in ms
+  enableConfig     Boolean  @default(true)      // Whether to enter config mode
+  shellRows        Int?     @default(40)        // Shell rows
+  shellCols        Int?     @default(120)       // Shell columns
+  
+  // Telnet Configuration
+  telnetEnabled    Boolean  @default(false)
+  telnetPort       Int?     @default(23)
+  
+  // Management Configuration
+  snmpEnabled      Boolean  @default(true)
+  snmpCommunity    String?  @default("public")
+  snmpVersion      String?  @default("v2c")
+  webInterface     Boolean  @default(true)
+  webPort          Int?     @default(80)
+  webSSL           Boolean  @default(false)
+  apiEnabled       Boolean  @default(false)
+  apiPort          Int?     @default(8080)
+  
+  // Location
+  region           String?
+  site             String?
+  rack             Int?     @default(1)
+  position         Int?     @default(1)
+  latitude         Float?
+  longitude        Float?
+  locationNotes    String?
+  
+  // Additional Fields
+  capabilities     String?  // JSON string
+  autoProvisioning Boolean  @default(false)
+  redundancy       Boolean  @default(false)
+  powerSupply      Int?     @default(1)
+  cooling          String?  @default("active")
+  backupSchedule   String?  @default("none")
+  lastBackup       DateTime?
+  notes            String?
+  
+  // Connection Stats
+  lastConnected    DateTime?
+  connectionCount  Int      @default(0)
+  avgConnectTime   Float?   // Average connection time in ms
+  successRate      Float?   // Connection success rate (0-1)
+  
+  // System Fields
+  isDeleted        Boolean  @default(false)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  // Relations
+  ispId            Int
+  isp              ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  
+  serviceBoards    ServiceBoard[]
+  onts             ONT[]
+  splitters        Splitter[]
+  customers        Customer[]
+  terminalSessions TerminalSession[]
+  terminalCommands TerminalCommand[]
+  
+  @@unique([ispId, ipAddress], name: "olt_ip_unique")
+  @@index([sshHost])
+  @@index([status])
+  @@index([lastConnected])
+}
+
+model ServiceBoard {
+  id                Int       @id @default(autoincrement())
+  slot              Int
+  type              String    @default("GPON") // GPON, EPON, XG-PON, 10G-EPON, COMBO
+  portCount         Int
+  usedPorts         Int       @default(0)
+  availablePorts    Int       @default(0)
+  status            String    @default("active") // active, inactive, faulty
+  temperature       Float?
+  powerConsumption  Float?
+  firmwareVersion   String?
+  serialNumber      String?
+  oltId             Int
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Relations
+  olt               OLT       @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  
+  @@unique([oltId, slot])
+  @@index([oltId, type])
+  @@index([oltId, status])
+}
+
+model ONT {
+  id               Int      @id @default(autoincrement())
+  ontId            String   @db.VarChar(50)
+  serialNumber     String   @db.VarChar(100)
+  vendor           String?  @db.VarChar(50)
+  model            String?  @db.VarChar(50)
+  status           String   @db.VarChar(20)
+  distance         Int?
+  rxPower          Float?
+  txPower          Float?
+  temperature      Float?
+  uptime           String?
+  lastOnline       DateTime?
+  serviceState     String?  @db.VarChar(50)
+  servicePort      String   @db.VarChar(50)
+  vlan             Int?
+  macAddress       String?  @db.VarChar(50)
+  ipAddress        String?  @db.VarChar(50)
+  description      String?  @db.VarChar(255)
+  capabilities     String?  @db.Text
+  rawData          Json?
+  lastSync         DateTime?
+  isDeleted        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  oltId            Int
+  ispId            Int
+
+  olt              OLT      @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  isp              ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  ontDetails       ONTDetails?  // Remove the fields/references from here
+
+  @@unique([oltId, ontId, servicePort], name: "ONT_unique")
+  @@index([oltId])
+  @@index([ispId])
+  @@index([status])
+  @@index([servicePort])
+}
+
+model ONTDetails {
+  id                 Int         @id @default(autoincrement())
+  // Basic info from ONT (redundant but useful for queries)
+  ontId              String      @db.VarChar(50)
+  fsp                String      @db.VarChar(20)
+  serialNumber       String      @db.VarChar(100)
+  description        String?     @db.VarChar(255)
+  
+  // Status fields
+  controlFlag        String      @db.VarChar(20)
+  runState           String      @db.VarChar(20)
+  configState        String      @db.VarChar(20)
+  matchState         String      @db.VarChar(20)
+  isolationState     String?     @db.VarChar(20)
+  distance           Int?
+  batteryState       String?     @db.VarChar(30)
+  
+  // Timestamps
+  lastUpTime         String?
+  lastDownTime       String?
+  lastDownCause      String?     @db.VarChar(50)
+  lastDyingGaspTime  String?
+  
+  // Duration strings
+  onlineDuration     String?     @db.VarChar(100)
+  systemUptime       String?     @db.VarChar(100)
+  
+  // Profile info
+  lineProfileId      String?     @db.VarChar(20)
+  lineProfileName    String?     @db.VarChar(100)
+  serviceProfileId   String?     @db.VarChar(20)
+  serviceProfileName String?     @db.VarChar(100)
+  
+  // Configuration
+  mappingMode        String?     @db.VarChar(20)
+  qosMode            String?     @db.VarChar(20)
+  tr069              String?     @db.VarChar(20)
+  protectSide        String?     @db.VarChar(10)
+  
+  // One-to-One relationship back to ONT
+  ontIdRef           Int         @unique
+  ont                ONT         @relation(fields: [ontIdRef], references: [id], onDelete: Cascade)
+  
+  // Nested data as JSON (simpler approach)
+  tconts             Json?
+  gems               Json?
+  vlanTranslations   Json?
+  servicePorts       Json?
+  opticalDiagnostics Json?
+  
+  // Timestamps
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  lastSync           DateTime?
+  
+  @@unique([serialNumber], name: "ONTDetails_sn_unique")
+  @@index([ontIdRef])
+  @@index([serialNumber])
+  @@index([runState])
+  @@index([configState])
+  @@index([matchState])
+  @@index([fsp, ontId], name: "ONTDetails_fsp_ontid")
+}
+
+
+model TerminalSession {
+  id        Int      @id @default(autoincrement())
+  sessionId String
+  oltId     Int
+  protocol  String   @default("ssh")
+  startTime DateTime @default(now())
+  endTime   DateTime?
+  status    String   @default("connected")
+  
+  // System Fields
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  ispId     Int
+  olt       OLT      @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  isp       ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  commands  TerminalCommand[]
+  
+  @@unique([sessionId])
+}
+
+model TerminalCommand {
+  id         Int      @id @default(autoincrement())
+  sessionId  String
+  oltId      Int
+  command    String
+  output     String?
+  executedAt DateTime @default(now())
+  
+  // System Fields
+  createdAt  DateTime @default(now())
+  
+  // Relations
+  ispId      Int
+  olt        OLT      @relation(fields: [oltId], references: [id], onDelete: Cascade)
+  isp        ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  session    TerminalSession? @relation(fields: [sessionId], references: [sessionId])
+}
+
+model Splitter {
+  id                  Int         @id @default(autoincrement())
+  name                String
+  splitterId          String      @unique
+  splitRatio          String      // e.g., "1:8", "1:16", "1:32"
+  splitterType        String      @default("PLC") // "PLC" or "FBT"
+  portCount           Int         @default(8)
+  usedPorts           Int         @default(0)
+  availablePorts      Int         @default(8)
+  isMaster            Boolean     @default(false)
+  masterSplitterId    String?     // Reference to master splitter's splitterId
+  location            Json?       // { site: String, latitude: Float?, longitude: Float?, description: String? }
+  upstreamFiber       Json?       // { coreColor: String, connectedTo: String, connectionId: String?, port: String? }
+  connectedServiceBoard Json?     // { oltId: Int, oltName: String, boardSlot: Int, boardPort: String }
+  status              String      @default("active") // "active", "inactive", "maintenance"
+  notes               String?
+  isActive            Boolean     @default(true)
+  isDeleted           Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  
+  // Relations
+  oltId               Int?
+  olt                 OLT?        @relation(fields: [oltId], references: [id])
+  ispId               Int
+  isp                 ISP         @relation(fields: [ispId], references: [id])
+  
+  // Self-referencing relations for master/slave
+  masterSplitter      Splitter?   @relation("MasterSlave", fields: [masterSplitterId], references: [splitterId])
+  slaveSplitters      Splitter[]  @relation("MasterSlave")
+  
+  // Customer relations
+  customers           Customer[]
+  
+  // Indexes
+  @@index([ispId])
+  @@index([splitterId])
+  @@index([oltId])
+  @@index([masterSplitterId])
+  @@index([status])
+  @@index([isMaster])
+  @@index([createdAt])
+  
+  // Ensure usedPorts doesn't exceed portCount
+  @@map("splitters")
+}
+
+
+model CustomerDocument {
+  id           Int      @id @default(autoincrement())
+  customerId   Int
+  customer     Customer @relation(fields: [customerId], references: [id])
+  documentType String // 'idProof', 'addressProof', 'photo', 'other'
+  fileName     String
+  filePath     String
+  mimeType     String?
+  size         Int?
+  uploadedAt   DateTime @default(now())
+  isDeleted    Boolean  @default(false)
+  ispId        Int?
+  isp          ISP?     @relation(fields: [ispId], references: [id])
+
+  @@unique([customerId, documentType])
+  @@index([customerId])
+  @@index([documentType])
+}
+
+enum LeadStatus {
+  new
+  contacted
+  qualified
+  unqualified
+  converted
+}
+
+model Membership {
+  id          Int     @id @default(autoincrement())
+  name        String
+  code        String  @unique // Add this field
+  description String? // Rename from 'details' or keep both
+  address     String?
+  details     String? // Keep existing if needed for other purposes
+
+  // Discount fields
+  newMemberEnabled   Boolean @default(true)
+  newMemberIsPercent Boolean @default(true)
+  newMemberValue     Float   @default(13)
+  renewalEnabled     Boolean @default(true)
+  renewalIsPercent   Boolean @default(true)
+  renewalValue       Float   @default(10.5)
+
+  ispId     Int?
+  isp       ISP?       @relation(fields: [ispId], references: [id])
+  isActive  Boolean    @default(true)
+  isDeleted Boolean    @default(false)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  customers Customer[]
+  lead      Lead[]
+
+  @@unique([code, ispId]) // Ensure code is unique per ISP
+  @@map("memberships")
+}
+
+model ExistingISP {
+  id              Int        @id @default(autoincrement())
+  name            String
+  code            String?    @unique
+  type            String? // fiber, cable, wireless, satellite, dsl
+  website         String?
+  email           String?
+  phone           String?
+  address         String?
+  city            String?
+  state           String?
+  coverage        String? // JSON string of coverage areas
+  services        String? // JSON string of services
+  rating          Float?     @default(0.0)
+  customerCount   Int?       @default(0)
+  establishedYear Int?
+  status          String?    @default("active")
+  notes           String?
+  ispId           Int?
+  isp             ISP?       @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  isActive        Boolean    @default(true)
+  isDeleted       Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  customers       Customer[]
+
+  @@index([ispId])
+  @@map("existing_isp")
+}
+
+model ConnectionUser {
+  id         Int      @id @default(autoincrement())
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
+  username   String   @unique
+  password   String
+  ispId      Int?
+  isp        ISP?     @relation(fields: [ispId], references: [id])
+  isActive   Boolean  @default(true)
+  isDeleted  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model CustomerSubscription {
+  id           Int                       @id @default(autoincrement())
+  customerId   Int
+  customer     Customer                  @relation(fields: [customerId], references: [id])
+  package      Int
+  packagePrice PackagePrice              @relation(fields: [package], references: [id])
+  isTrial      Boolean                   @default(false)
+  planStart    DateTime
+  planEnd      DateTime
+  isActive     Boolean                   @default(true)
+  isInvoicing  Boolean                   @default(true)
+  orders       CustomerOrderManagement[]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+}
+
+model CustomerOrderManagement {
+  id             Int                  @id @default(autoincrement())
+  customerId     Int
+  customer       Customer             @relation(fields: [customerId], references: [id])
+  subscriptionId Int
+  subscription   CustomerSubscription @relation(fields: [subscriptionId], references: [id])
+
+  // NEW: link to PackagePrice for back-rel from PackagePrice.orders
+  package      Int?
+  packagePrice PackagePrice? @relation("PackageOrders", fields: [package], references: [id])
+
+  orderDate    DateTime @default(now())
+  packageStart DateTime
+  packageEnd   DateTime
+  totalAmount  Float
+
+  items     OrderDetail[]
+  isPaid    Boolean       @default(false)
+  isActive  Boolean       @default(true)
+  isDeleted Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+model OrderDetail {
+  id          Int                     @id @default(autoincrement())
+  orderId     Int
+  order       CustomerOrderManagement @relation(fields: [orderId], references: [id])
+  itemName    String
+  referenceId String?
+  itemPrice   Float
+  createdAt   DateTime                @default(now())
+}
+
+model Service {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique(map: "Service_name_key")
+  description String?
+  iconUrl     String?
+  ispservices ISPService[]
+}
+
+model ISPService {
+  id          Int                 @id @default(autoincrement())
+  ispId       Int
+  isp         ISP                 @relation(fields: [ispId], references: [id])
+  serviceId   Int
+  service     Service             @relation(fields: [serviceId], references: [id])
+  isActive    Boolean             @default(true)
+  isEnabled   Boolean             @default(true)
+  isDeleted   Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @default(now())
+  baseUrl     String?
+  config      Json?
+  credentials ServiceCredential[]
+
+  @@unique([ispId, serviceId])
+}
+
+model ServiceCredential {
+  id           Int        @id @default(autoincrement())
+  username     String
+  password     String
+  ispServiceId Int
+  ispService   ISPService @relation(fields: [ispServiceId], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([ispServiceId, username])
+}
+
+model ESewaTokenPayment {
+  id                   String    @id @default(cuid())
+  ispId                Int
+  customerId           Int
+  customerUniqueId     String    @db.VarChar(100)
+  requestId            String    @unique @db.VarChar(191)
+  amount               Float
+  status               String    @db.VarChar(50)
+  eSewaTransactionCode String?   @db.VarChar(191)
+  packageDetails       Json
+  orderId              String?   @db.VarChar(191)
+  referenceCode        String?   @db.VarChar(191)
+  createdAt            DateTime  @default(now())
+  paidAt               DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  isp      ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@index([customerUniqueId])
+  @@index([eSewaTransactionCode])
+  @@index([status])
+  @@index([customerId])
+  @@index([ispId])
+}
+
+model ESewaConfiguration {
+  ispId        Int      @id @unique
+  username     String   @db.VarChar(191)
+  passwordHash String   @db.VarChar(191)
+  clientSecret String   @db.VarChar(191)
+  authMethod   String   @default("BEARER") @db.VarChar(50)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  isp           ISP                 @relation(fields: [ispId], references: [id], onDelete: Cascade)
+  accessTokens  ESewaAccessToken[]
+  refreshTokens ESewaRefreshToken[]
+}
+
+model ESewaAccessToken {
+  id            String   @id @default(cuid())
+  token         String   @db.Text // Changed to TEXT for JWT tokens
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  esewaConfig ESewaConfiguration @relation(fields: [esewaConfigId], references: [ispId], onDelete: Cascade)
+
+  @@index([esewaConfigId])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}
+
+model ESewaRefreshToken {
+  id            String   @id @default(cuid())
+  token         String   @db.Text // Changed to TEXT for JWT tokens
+  esewaConfigId Int
+  expiresAt     DateTime
+  isRevoked     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  esewaConfig ESewaConfiguration @relation(fields: [esewaConfigId], references: [ispId], onDelete: Cascade)
+
+  @@index([esewaConfigId])
+  @@index([expiresAt])
+  @@index([isRevoked])
+}

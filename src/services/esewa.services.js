@@ -1,0 +1,376 @@
+const axios = require('axios');
+const { PrismaClient } = require('@prisma/client');
+const { SERVICE_CODES } = require('../lib/serviceConstants');
+const prisma = new PrismaClient();
+
+class EsewaClient {
+    #config;
+    #api;
+
+    constructor(config) {
+        this.#config = config;
+        this.#api = axios.create({
+            baseURL: config.baseUrl || 'https://uat.esewa.com.np',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            timeout: 30000
+        });
+    }
+
+    /**
+     * Factory method to create EsewaClient using service code
+     */
+    static async create(ispId) {
+        if (!ispId) {
+            throw new Error('ISP ID is required to create an eSewa client.');
+        }
+
+        const esewaService = await prisma.iSPService.findFirst({
+            where: {
+                ispId: ispId,
+                service: { code: SERVICE_CODES.ESEWA },
+                isActive: true,
+                isEnabled: true,
+                isDeleted: false
+            },
+            include: {
+                service: true,
+                credentials: {
+                    where: { isActive: true, isDeleted: false },
+                    orderBy: { createdAt: 'desc' }
+                }
+            }
+        });
+
+        if (!esewaService) {
+            throw new Error(`eSewa service is not configured or enabled for ISP ID: ${ispId}`);
+        }
+
+        const serviceConfig = esewaService.config && typeof esewaService.config === 'object'
+            ? esewaService.config
+            : {};
+        const integrationMode = String(serviceConfig.integrationMode || 'TOKEN_BASED').toUpperCase();
+
+        const credentials = {};
+        esewaService.credentials.forEach(cred => {
+            credentials[cred.key] = cred.value;
+        });
+
+        const clientId = credentials.client_id;
+        const clientSecret = credentials.client_secret;
+        const merchantCode = credentials.merchant_code;
+
+        if (integrationMode !== 'TOKEN_BASED' && (!clientId || !clientSecret || !merchantCode)) {
+            throw new Error(`Missing credentials for eSewa service. Required: client_id, client_secret, merchant_code`);
+        }
+
+        return new EsewaClient({
+            baseUrl: esewaService.baseUrl,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            merchantCode: merchantCode,
+            apiVersion: esewaService.apiVersion || 'v1',
+            config: serviceConfig,
+            integrationMode,
+            environment: (esewaService.baseUrl || '').includes('uat') ? 'uat' : (serviceConfig.environment || 'production'),
+            ispId: ispId
+        });
+    }
+
+    // Helper method to get service status
+    static async getServiceStatus(ispId) {
+        try {
+            const service = await prisma.iSPService.findFirst({
+                where: {
+                    ispId: ispId,
+                    service: { code: SERVICE_CODES.ESEWA },
+                    isDeleted: false
+                },
+                include: {
+                    service: true,
+                    credentials: {
+                        where: { isActive: true, isDeleted: false }
+                    }
+                }
+            });
+
+            if (!service) {
+                return {
+                    enabled: false,
+                    configured: false,
+                    message: 'Service not configured'
+                };
+            }
+
+            const config = service.config && typeof service.config === 'object' ? service.config : {};
+            const integrationMode = String(config.integrationMode || 'TOKEN_BASED').toUpperCase();
+            const hasCredentials = service.credentials.length > 0;
+            const hasValidCredentials = service.credentials.some(c =>
+                c.key === 'client_id' && c.value
+            ) && service.credentials.some(c =>
+                c.key === 'client_secret' && c.value
+            ) && service.credentials.some(c =>
+                c.key === 'merchant_code' && c.value
+            );
+
+            return {
+                enabled: service.isActive && service.isEnabled,
+                configured: integrationMode === 'TOKEN_BASED' ? true : (!!service.baseUrl && hasValidCredentials),
+                isActive: service.isActive,
+                isEnabled: service.isEnabled,
+                baseUrl: service.baseUrl,
+                hasCredentials,
+                hasValidCredentials,
+                integrationMode,
+                environment: (service.baseUrl || '').includes('uat') ? 'UAT' : (config.environment || 'Production'),
+                serviceName: service.service.name,
+                lastUpdated: service.updatedAt
+            };
+        } catch (error) {
+            console.error('Error getting eSewa service status:', error);
+            return {
+                enabled: false,
+                configured: false,
+                error: error.message
+            };
+        }
+    }
+
+    // Test connection
+    async testConnection() {
+        try {
+            if (this.#config.integrationMode === 'TOKEN_BASED') {
+                await prisma.serviceLog.create({
+                    data: {
+                        ispId: Number(this.#config.ispId || 1),
+                        serviceCode: 'ESEWA',
+                        operation: 'testConnection',
+                        status: 'success',
+                        message: 'Token-based eSewa integration ready',
+                        data: { integrationMode: 'TOKEN_BASED' }
+                    }
+                }).catch(e => console.error('Failed to save service log', e));
+
+                return {
+                    connected: true,
+                    message: 'Token-based eSewa routes are ready for inbound requests',
+                    integrationMode: 'TOKEN_BASED',
+                    timestamp: new Date().toISOString()
+                };
+            }
+            // Try to make a test API call
+            const response = await this.#api.get('/epay/transactions', {
+                headers: {
+                    'Authorization': `Bearer ${this.#config.clientId}:${this.#config.clientSecret}`
+                }
+            });
+
+            const result = {
+                connected: response.status === 200,
+                message: 'Successfully connected to eSewa API',
+                environment: this.#config.environment,
+                timestamp: new Date().toISOString()
+            };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'testConnection',
+                    status: 'success',
+                    message: 'Connection successful',
+                    data: result
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
+        } catch (error) {
+            const errorMsg = error.response?.data?.message || error.message;
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'testConnection',
+                    status: 'failed',
+                    message: String(errorMsg),
+                    data: { errorResponse: error.response?.data || null }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return {
+                connected: false,
+                message: errorMsg,
+                environment: this.#config.environment,
+                timestamp: new Date().toISOString()
+            };
+        }
+    }
+
+    // Process payment
+    async processPayment(paymentData) {
+        try {
+            this.#requireOutboundCredentials();
+            const { amount, transactionId, productName, successUrl, failureUrl } = paymentData;
+
+            if (!amount || !transactionId || !productName) {
+                throw new Error('Missing required payment data: amount, transactionId, productName');
+            }
+
+            const payload = {
+                amount: amount.toString(),
+                tax_amount: '0',
+                total_amount: amount.toString(),
+                transaction_uuid: transactionId,
+                product_code: this.#config.merchantCode,
+                product_service_charge: '0',
+                product_delivery_charge: '0',
+                success_url: successUrl || `${this.#config.baseUrl}/success`,
+                failure_url: failureUrl || `${this.#config.baseUrl}/failure`,
+                signed_field_names: 'total_amount,transaction_uuid,product_code',
+                signature: this.#generateSignature({
+                    total_amount: amount.toString(),
+                    transaction_uuid: transactionId,
+                    product_code: this.#config.merchantCode
+                })
+            };
+
+            const response = await this.#api.post('/epay/main', payload, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            });
+
+            const result = {
+                success: true,
+                paymentUrl: response.data?.payment_url || `${this.#config.baseUrl}/payment`,
+                transactionId: transactionId,
+                amount: amount,
+                timestamp: new Date().toISOString()
+            };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'processPayment',
+                    status: 'success',
+                    message: `Initiated transaction ${transactionId} for ${amount}`,
+                    data: { payload, result }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
+        } catch (error) {
+            console.error('Error processing eSewa payment:', error);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'processPayment',
+                    status: 'failed',
+                    message: error.message,
+                    data: { paymentData }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            throw new Error(`Payment processing failed: ${error.message}`);
+        }
+    }
+
+    // Verify payment
+    async verifyPayment(transactionId) {
+        try {
+            this.#requireOutboundCredentials();
+            const response = await this.#api.get(`/epay/transactions/${transactionId}`, {
+                headers: {
+                    'Authorization': `Bearer ${this.#config.clientId}:${this.#config.clientSecret}`
+                }
+            });
+
+            const transaction = response.data;
+            const result = {
+                success: transaction.status === 'COMPLETED',
+                transactionId: transactionId,
+                status: transaction.status,
+                amount: transaction.amount,
+                productName: transaction.product_name,
+                customerName: transaction.customer_name,
+                transactionDate: transaction.transaction_date,
+                verified: transaction.status === 'COMPLETED',
+                rawData: transaction
+            };
+
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'verifyPayment',
+                    status: result.success ? 'success' : 'failed',
+                    message: `Transaction ${transactionId} verification status: ${transaction.status}`,
+                    data: { transactionId, response: response.data }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            return result;
+        } catch (error) {
+            console.error('Error verifying eSewa payment:', error);
+            
+            await prisma.serviceLog.create({
+                data: {
+                    ispId: Number(this.#config.ispId || 1),
+                    serviceCode: 'ESEWA',
+                    operation: 'verifyPayment',
+                    status: 'failed',
+                    message: error.message,
+                    data: { transactionId }
+                }
+            }).catch(e => console.error('Failed to save service log', e));
+
+            throw new Error(`Payment verification failed: ${error.message}`);
+        }
+    }
+
+    // Generate signature for payment
+    #generateSignature(data) {
+        const message = Object.keys(data)
+            .map(key => `${key}=${data[key]}`)
+            .join(',');
+
+        return crypto.createHmac('sha256', this.#config.clientSecret)
+            .update(message)
+            .digest('base64');
+    }
+
+    #requireOutboundCredentials() {
+        if (!this.#config.clientId || !this.#config.clientSecret || !this.#config.merchantCode) {
+            throw new Error('Outbound eSewa web/mobile checkout requires client_id, client_secret, and merchant_code');
+        }
+    }
+
+    // Get transaction status
+    async getTransactionStatus(transactionId) {
+        return this.verifyPayment(transactionId);
+    }
+
+    // Get recent transactions
+    async getRecentTransactions(limit = 50) {
+        try {
+            const response = await this.#api.get('/epay/transactions', {
+                params: { limit },
+                headers: {
+                    'Authorization': `Bearer ${this.#config.clientId}:${this.#config.clientSecret}`
+                }
+            });
+
+            return response.data;
+        } catch (error) {
+            console.error('Error getting recent transactions:', error);
+            throw new Error(`Failed to get transactions: ${error.message}`);
+        }
+    }
+}
+
+module.exports = { EsewaClient };

@@ -1,0 +1,109 @@
+{
+  "info": {
+    "name": "ISP eSewa Token Payment",
+    "description": "Tests inbound token payment plus customer ePay v2 renewal. Demo token credentials are included and must match ESewaConfiguration for the active ISP.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "api_root", "value": "http://localhost:3200/api" },
+    { "key": "base_url", "value": "{{api_root}}/esewa" },
+    { "key": "username", "value": "esewa-client" },
+    { "key": "password_base64", "value": "S2lzYW5uZXQ=" },
+    { "key": "client_secret_base64", "value": "dlQ5eFE0bUwycFo4ck42Y1cxc1k3YkszZEY1aEowYUV1UjRpTzlnUA==" },
+    { "key": "app_access_token", "value": "REPLACE_WITH_ADMIN_APP_TOKEN" },
+    { "key": "customer_access_token", "value": "REPLACE_WITH_CUSTOMER_PORTAL_TOKEN" },
+    { "key": "epay_response_data", "value": "REPLACE_WITH_ESEWA_BASE64_CALLBACK_DATA" },
+    { "key": "plain_password", "value": "Kisannet123" },
+    { "key": "plain_client_secret", "value": "vT9xQ4mL2pZ8rN6cW1sY7bK3dF5hJ0aEuR4iO9gP" },
+    { "key": "epay_test_id", "value": "9711111111" },
+    { "key": "epay_test_password", "value": "Nepal@123" },
+    { "key": "epay_test_token", "value": "123456" },
+    { "key": "epay_product_code", "value": "EPAYTEST" },
+    { "key": "request_id", "value": "CUSTOMER_UNIQUE_ID" },
+    { "key": "amount", "value": "1000" },
+    { "key": "transaction_code", "value": "TEST-{{$timestamp}}" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Generate Base64 Values (Admin Utility)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{app_access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"password\": \"{{plain_password}}\",\n  \"clientSecret\": \"{{plain_client_secret}}\"\n}" },
+        "url": "{{api_root}}/settings/esewa/base64",
+        "description": "Internal administrator endpoint. The plaintext values are encoded but not persisted."
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "if (json.passwordBase64) pm.collectionVariables.set('password_base64', json.passwordBase64);", "if (json.clientSecretBase64) pm.collectionVariables.set('client_secret_base64', json.clientSecretBase64);"] } }]
+    },
+    {
+      "name": "1. Access Token",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"grant_type\": \"password\",\n  \"client_secret\": \"{{client_secret_base64}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password_base64}}\"\n}" },
+        "url": "{{base_url}}/access-token",
+        "description": "Demo values: username esewa-client, password Kisannet123, client secret vT9xQ4mL2pZ8rN6cW1sY7bK3dF5hJ0aEuR4iO9gP. The same plaintext values must be configured in ESewaConfiguration."
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "if (json.access_token) pm.collectionVariables.set('access_token', json.access_token);", "if (json.refresh_token) pm.collectionVariables.set('refresh_token', json.refresh_token);"] } }]
+    },
+    {
+      "name": "0B. Save and Enable eSewa Modes (Admin)",
+      "request": {
+        "method": "PUT",
+        "header": [{ "key": "Authorization", "value": "Bearer {{app_access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"tokenEnabled\": true,\n  \"epayEnabled\": true,\n  \"username\": \"{{username}}\",\n  \"password\": \"{{plain_password}}\",\n  \"clientSecret\": \"{{plain_client_secret}}\"\n}" },
+        "url": "{{api_root}}/settings/esewa/config",
+        "description": "Run after enabling eSewa in Service Catalog. Creates or updates ESewaConfiguration for the current ISP."
+      }
+    },
+    {
+      "name": "2. Inquiry",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+        "url": "{{base_url}}/inquiry/{{request_id}}"
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "if (json.amount !== undefined) pm.collectionVariables.set('amount', String(json.amount));", "pm.test('Inquiry accepted', () => pm.expect(json.response_code).to.be.oneOf([0, '00']));"] } }]
+    },
+    {
+      "name": "3. Payment",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"request_id\": \"{{request_id}}\",\n  \"amount\": {{amount}},\n  \"transaction_code\": \"{{transaction_code}}\"\n}" },
+        "url": "{{base_url}}/payment"
+      }
+    },
+    {
+      "name": "4. Status",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"request_id\": \"{{request_id}}\",\n  \"amount\": {{amount}},\n  \"transaction_code\": \"{{transaction_code}}\"\n}" },
+        "url": "{{base_url}}/status"
+      }
+    },
+    {
+      "name": "5. Customer ePay v2 Renewal - Initiate",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{customer_access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"returnUrl\": \"http://localhost:3000/customer/billing\"\n}" },
+        "url": "{{base_url}}/epay/initiate",
+        "description": "Returns the signed UAT form URL and fields. The customer dashboard posts these fields directly to eSewa."
+      }
+    },
+    {
+      "name": "6. Customer ePay v2 Renewal - Complete",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{customer_access_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"data\": \"{{epay_response_data}}\"\n}" },
+        "url": "{{base_url}}/epay/complete",
+        "description": "Verifies the signed callback and eSewa status API before renewing the subscription."
+      }
+    }
+  ]
+}

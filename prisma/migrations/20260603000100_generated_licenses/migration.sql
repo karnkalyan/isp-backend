@@ -1,0 +1,28 @@
+CREATE TABLE `generated_licenses` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `licenseId` VARCHAR(191) NOT NULL,
+    `tokenHash` VARCHAR(191) NOT NULL,
+    `company` VARCHAR(191) NOT NULL,
+    `contact` VARCHAR(191) NULL,
+    `hwid` VARCHAR(191) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'ACTIVE',
+    `expiresAt` DATETIME(3) NOT NULL,
+    `issuedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `installedAt` DATETIME(3) NULL,
+    `installedIspId` INTEGER NULL,
+    `createdByUserId` INTEGER NULL,
+    `createdByEmail` VARCHAR(191) NULL,
+    `revokedAt` DATETIME(3) NULL,
+    `revokedByUserId` INTEGER NULL,
+    `revokedByEmail` VARCHAR(191) NULL,
+    `revokeReason` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `generated_licenses_licenseId_key`(`licenseId`),
+    UNIQUE INDEX `generated_licenses_tokenHash_key`(`tokenHash`),
+    INDEX `generated_licenses_hwid_idx`(`hwid`),
+    INDEX `generated_licenses_status_idx`(`status`),
+    INDEX `generated_licenses_expiresAt_idx`(`expiresAt`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

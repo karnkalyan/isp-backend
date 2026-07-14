@@ -1,0 +1,79 @@
+// Virtual Parameter: Dynamic Wi-Fi Key (Target Specific SSID)
+// Expected write payload format: "ssidIndex|password" (e.g., "2|KisanNet9866")
+
+let rawPayload = null;
+
+// 1. Extract the payload securely handling the GenieACS object structure
+if (typeof args !== "undefined" && args.length > 1 && args[1]) {
+    if (typeof args[1] === "object" && args[1].value && args[1].value.length > 0) {
+        rawPayload = args[1].value[0];
+    } else {
+        rawPayload = args[1];
+    }
+}
+
+let targetSsid = 1; // Default to SSID 1
+let newPass = null;
+
+// 2. Parse the dynamic payload
+if (rawPayload && String(rawPayload).includes("|")) {
+    let parts = String(rawPayload).split("|");
+    targetSsid = parseInt(parts[0], 10);
+    newPass = parts[1];
+} else if (rawPayload) {
+    // Fallback: If no pipe "|" is found, assume it's a direct password for SSID 1
+    newPass = rawPayload;
+}
+
+// Helper: read first non-empty value
+function firstValueFrom(path) {
+    let p = declare(path, { value: 1 });
+    if (!p) return null;
+    if (p.size && p.size > 0) {
+        for (let i = 0; i < p.size; i++) {
+            let v = p.value[i];
+            if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+        }
+    } else if (p.value && p.value[0]) return p.value[0];
+    return null;
+}
+
+// Determine ProductClass (Nokia vs CDATA/Others)
+const productClassParam = declare("DeviceID.ProductClass", { value: 1 });
+let productClass = (productClassParam.size > 0) ? productClassParam.value[0] : "";
+
+// Write helper
+function writeKey(path) {
+    try {
+        declare(path, null, { value: newPass });
+    } catch (e) {
+        log("WLANKey Dynamic write error -> " + path + " : " + e);
+    }
+}
+
+// 3. WRITE STATE (Execute only if a password was provided)
+if (newPass) {
+    if (productClass === "FD514GS1R550") {
+        writeKey("InternetGatewayDevice.LANDevice.1.WLANConfiguration." + targetSsid + ".X_CMS_KeyPassphrase");
+    } else {
+        writeKey("InternetGatewayDevice.LANDevice.1.WLANConfiguration." + targetSsid + ".PreSharedKey.1.KeyPassphrase");
+    }
+}
+
+// 4. READ STATE (Retrieve the state of the targeted SSID)
+let wifiKey = null;
+if (productClass === "FD514GS1R550") {
+    wifiKey = firstValueFrom("InternetGatewayDevice.LANDevice.1.WLANConfiguration." + targetSsid + ".X_CMS_KeyPassphrase");
+} else {
+    wifiKey = firstValueFrom("InternetGatewayDevice.LANDevice.1.WLANConfiguration." + targetSsid + ".PreSharedKey.1.KeyPassphrase");
+}
+
+if (!wifiKey) wifiKey = "N/A";
+
+// 5. Return the state in the EXACT format we expect the input
+// This guarantees state convergence and prevents commit loops.
+return {
+    writable: true,
+    value: [targetSsid + "|" + wifiKey, "xsd:string"]
+};
+

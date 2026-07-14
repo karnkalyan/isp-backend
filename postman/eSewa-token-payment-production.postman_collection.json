@@ -1,0 +1,136 @@
+{
+  "info": {
+    "name": "Kisan CMS - eSewa Token Payment (Production)",
+    "description": "Production server-to-server token payment APIs for eSewa. This collection contains no ePay, customer portal, cookie, or internal administration requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://cms.kisan.net.np/api/esewa", "type": "string" },
+    { "key": "username", "value": "esewa-client", "type": "string" },
+    { "key": "password_base64", "value": "S2lzYW5uZXQxMjM=", "type": "secret" },
+    { "key": "client_secret_base64", "value": "dlQ5eFE0bUwycFo4ck42Y1cxc1k3YkszZEY1aEowYUV1UjRpTzlnUA==", "type": "secret" },
+    { "key": "request_id", "value": "REPLACE_WITH_CUSTOMER_ID_PHONE_EMAIL_OR_USERNAME", "type": "string" },
+    { "key": "amount", "value": "0", "type": "string" },
+    { "key": "transaction_code", "value": "REPLACE_WITH_ESEWA_TRANSACTION_CODE", "type": "string" },
+    { "key": "access_token", "value": "", "type": "secret" },
+    { "key": "refresh_token", "value": "", "type": "secret" }
+  ],
+  "item": [
+    {
+      "name": "1. Access Token",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"password\",\n  \"client_secret\": \"{{client_secret_base64}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password_base64}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/access-token",
+        "description": "Returns the bearer access token required by Inquiry, Payment, and Status. No cookie is required."
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('Access token issued', function () { pm.response.to.have.status(200); });",
+          "const body = pm.response.json();",
+          "pm.expect(body.access_token).to.be.a('string').and.not.empty;",
+          "pm.collectionVariables.set('access_token', body.access_token);",
+          "if (body.refresh_token) pm.collectionVariables.set('refresh_token', body.refresh_token);"
+        ] }
+      }]
+    },
+    {
+      "name": "1B. Refresh Access Token",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"refresh_token\",\n  \"refresh_token\": \"{{refresh_token}}\",\n  \"client_secret\": \"{{client_secret_base64}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/access-token",
+        "description": "Optional: use the refresh token to obtain a new short-lived access token."
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('Access token refreshed', function () { pm.response.to.have.status(200); });",
+          "const body = pm.response.json();",
+          "pm.collectionVariables.set('access_token', body.access_token);",
+          "if (body.refresh_token) pm.collectionVariables.set('refresh_token', body.refresh_token);"
+        ] }
+      }]
+    },
+    {
+      "name": "2. Customer Inquiry",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}", "type": "text" },
+          { "key": "Accept", "value": "application/json", "type": "text" }
+        ],
+        "url": "{{base_url}}/inquiry/{{request_id}}",
+        "description": "request_id accepts customer unique ID, primary phone, secondary phone, registered email, portal username, or connection username."
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('Inquiry successful', function () { pm.response.to.have.status(200); });",
+          "const body = pm.response.json();",
+          "pm.expect(body.response_code).to.eql('00');",
+          "pm.collectionVariables.set('amount', String(body.amount));"
+        ] }
+      }]
+    },
+    {
+      "name": "3. Confirm Payment",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"request_id\": \"{{request_id}}\",\n  \"amount\": {{amount}},\n  \"transaction_code\": \"{{transaction_code}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/payment",
+        "description": "Call only after a successful inquiry. amount must exactly match the inquiry response. transaction_code must be unique."
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('Payment accepted', function () { pm.expect(pm.response.code).to.be.oneOf([200, 201]); });",
+          "pm.expect(pm.response.json().response_code).to.eql('00');"
+        ] }
+      }]
+    },
+    {
+      "name": "4. Transaction Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"request_id\": \"{{request_id}}\",\n  \"amount\": {{amount}},\n  \"transaction_code\": \"{{transaction_code}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/status",
+        "description": "Returns SUCCESS, PENDING, FAILED, or NOT FOUND for reconciliation."
+      },
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "pm.test('Status response received', function () { pm.response.to.have.status(200); });",
+          "pm.expect(pm.response.json()).to.have.property('status');"
+        ] }
+      }]
+    }
+  ]
+}

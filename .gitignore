@@ -1,0 +1,8 @@
+./node_modules
+# Ignore build output
+node_modules
+.env
+uploads/
+*.log
+*.mp4
+txt-video.js
