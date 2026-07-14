@@ -1864,7 +1864,10 @@ async function provisionCustomer(req, res, next) {
               case SERVICE_CODES.TSHUL:
               case SERVICE_CODES.NEPURIX: {
                 const activeBillingClients = await ServiceFactory.getActiveBillingClients(req.ispId, prisma);
-                let clientsToProvision = activeBillingClients;
+                // Provision the accounting provider explicitly selected by the
+                // onboarding UI. Multiple configured providers must not create
+                // duplicate accounting customers.
+                let clientsToProvision = activeBillingClients.filter(item => item.code === service);
                 if (clientsToProvision.length === 0) {
                   client = await ServiceFactory.getClient(service, req.ispId);
                   clientsToProvision = [{ code: service, client }];
@@ -1948,8 +1951,20 @@ async function provisionCustomer(req, res, next) {
                 });
                 break;
               case SERVICE_CODES.NETTV: {
+                const nettvUsername = String(data?.username || '').trim();
+                if (!nettvUsername) throw new Error('NetTV username is required');
+                const nettvServiceId = await getServiceIdByCode(SERVICE_CODES.NETTV);
+                const existingLink = await prisma.customerSubscribedService.findFirst({
+                  where: {
+                    serviceId: nettvServiceId,
+                    externalUsername: nettvUsername,
+                    customerId: { not: customerId }
+                  },
+                  select: { customerId: true }
+                });
+                if (existingLink) throw new Error(`NetTV username '${nettvUsername}' is already linked to another customer`);
                 result = await client.createSubscriber(data);
-                const overviewData = await client.getSubscriberOverview(data.username).catch(error => {
+                const overviewData = await client.getSubscriberOverview(nettvUsername).catch(error => {
                   console.warn('Failed to fetch full overview on NetTV provision:', error.message);
                   return null;
                 });
@@ -1965,28 +1980,35 @@ async function provisionCustomer(req, res, next) {
             // Store successful result in database (only if not already stored by the custom block)
             if (service !== SERVICE_CODES.TSHUL && service !== SERVICE_CODES.NEPURIX) {
               const serviceId = await getServiceIdByCode(service);
+              const externalUsername = service === SERVICE_CODES.NETTV ? String(data?.username || '').trim() : null;
+              const storedServiceData = service === SERVICE_CODES.NETTV
+                ? { ...data, ...result, username: externalUsername }
+                : result;
               await prisma.customerSubscribedService.upsert({
                 where: { customerId_serviceId: { customerId, serviceId } },
-                update: { status: 'active', serviceData: result },
+                update: { status: 'active', externalUsername, serviceData: storedServiceData },
                 create: {
                   customerId,
                   serviceId,
                   status: 'active',
-                  serviceData: result,
+                  externalUsername,
+                  serviceData: storedServiceData,
                 },
               });
             }
           } else {
             console.log(`Bypassing external push for service ${service} since pushTrialProvisionToAccount is disabled.`);
             const serviceId = await getServiceIdByCode(service);
+            const externalUsername = service === SERVICE_CODES.NETTV ? String(data?.username || '').trim() || null : null;
             await prisma.customerSubscribedService.upsert({
               where: { customerId_serviceId: { customerId, serviceId } },
-              update: { status: 'active', serviceData: { bypassed: true } },
+              update: { status: 'active', externalUsername, serviceData: { ...data, username: externalUsername, bypassed: true } },
               create: {
                 customerId,
                 serviceId,
                 status: 'active',
-                serviceData: { bypassed: true },
+                externalUsername,
+                serviceData: { ...data, username: externalUsername, bypassed: true },
               },
             });
           }
@@ -4640,11 +4662,6 @@ async function syncNettv(req, res, next) {
 
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-    const username = customer.customerUniqueId;
-    if (!username) {
-      return res.status(400).json({ error: 'Customer has no unique username associated' });
-    }
-
     const getServiceIdByCode = async (code) => {
       const ispService = await prisma.iSPService.findFirst({
         where: {
@@ -4667,6 +4684,19 @@ async function syncNettv(req, res, next) {
       return res.status(400).json({ error: 'NetTV service not available for this ISP' });
     }
 
+    const subscribedService = await prisma.customerSubscribedService.findUnique({
+      where: { customerId_serviceId: { customerId, serviceId } }
+    });
+    const storedData = subscribedService?.serviceData && typeof subscribedService.serviceData === 'object'
+      ? subscribedService.serviceData
+      : {};
+    const username = String(
+      subscribedService?.externalUsername || storedData.username || storedData.subscriber?.username || ''
+    ).trim();
+    if (!username) {
+      return res.status(400).json({ error: 'This customer has no linked NetTV username. Provision NetTV and enter the subscriber username first.' });
+    }
+
     const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
     
     // Fetch overview from NetTV API
@@ -4687,6 +4717,7 @@ async function syncNettv(req, res, next) {
       where: { customerId_serviceId: { customerId, serviceId } },
       update: { 
         status: localStatus, 
+        externalUsername: username,
         serviceData: {
           username,
           ...overviewData,
@@ -4697,6 +4728,7 @@ async function syncNettv(req, res, next) {
         customerId, 
         serviceId, 
         status: localStatus, 
+        externalUsername: username,
         serviceData: {
           username,
           ...overviewData,
@@ -4768,6 +4800,21 @@ async function reprovisionNettv(req, res, next) {
       : {};
     const requestNettvData = req.body?.nettvData || req.body?.data || {};
     const nettvData = { ...fallbackNettvData, ...existingNettvData, ...requestNettvData };
+    const nettvUsername = String(nettvData.username || '').trim();
+    if (!nettvUsername) return res.status(400).json({ error: 'NetTV username is required' });
+    nettvData.username = nettvUsername;
+
+    const existingLink = await prisma.customerSubscribedService.findFirst({
+      where: {
+        serviceId,
+        externalUsername: nettvUsername,
+        customerId: { not: customerId }
+      },
+      select: { customerId: true }
+    });
+    if (existingLink) {
+      return res.status(409).json({ error: `NetTV username '${nettvUsername}' is already linked to another customer` });
+    }
 
     const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
     
@@ -4788,8 +4835,8 @@ async function reprovisionNettv(req, res, next) {
 
     await prisma.customerSubscribedService.upsert({
       where: { customerId_serviceId: { customerId, serviceId } },
-      update: { status: 'active', serviceData: finalNettvData },
-      create: { customerId, serviceId, status: 'active', serviceData: finalNettvData }
+      update: { status: 'active', externalUsername: nettvUsername, serviceData: finalNettvData },
+      create: { customerId, serviceId, status: 'active', externalUsername: nettvUsername, serviceData: finalNettvData }
     });
 
     return res.json({

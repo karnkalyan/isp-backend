@@ -209,18 +209,18 @@ async function createTicket(req, res, next) {
             if (!departmentId && type.departmentId) departmentId = type.departmentId;
         }
 
-        if (!branchId && customerId) {
+        if (customerId) {
             const customer = await req.prisma.customer.findFirst({
                 where: { id: parseInt(customerId), ispId, isDeleted: false },
                 select: { branchId: true, subBranchId: true }
             });
-            branchId = customer?.subBranchId || customer?.branchId || null;
-        } else if (!branchId && leadId) {
+            branchId = customer?.subBranchId || customer?.branchId || branchId;
+        } else if (leadId) {
             const lead = await req.prisma.lead.findFirst({
                 where: { id: parseInt(leadId), ispId, isDeleted: false },
                 select: { branchId: true, subBranchId: true }
             });
-            branchId = lead?.subBranchId || lead?.branchId || null;
+            branchId = lead?.subBranchId || lead?.branchId || branchId;
         }
 
         if (!branchId && req.branchId) branchId = req.branchId;

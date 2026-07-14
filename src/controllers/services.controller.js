@@ -2887,22 +2887,13 @@ class ServiceController {
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
 
-      // ----- 1. Trigger WAN refresh (asynchronous) -----
-      // try {
-      //   await client.refreshObject(serialNumber, 'InternetGatewayDevice.WANDevice');
-      //   console.log(`[${serialNumber}] WAN refresh task queued`);
-      // } catch (err) {
-      //   console.warn(`[${serialNumber}] WAN refresh failed:`, err.message);
-      // }
-
-
-      // // ----- 2. Trigger DeviceInfo refresh (asynchronous) -----
-      // try {
-      //   await client.refreshObject(serialNumber, 'InternetGatewayDevice.DeviceInfo');
-      //   console.log(`[${serialNumber}] DeviceInfo refresh task queued`);
-      // } catch (err) {
-      //   console.warn(`[${serialNumber}] DeviceInfo refresh failed:`, err.message);
-      // }
+      // Ask the CPE for current WAN and device data before reading GenieACS.
+      // A device may be offline, so refresh failures do not hide the last known
+      // information from the installer.
+      await Promise.allSettled([
+        client.refreshObject(serialNumber, 'InternetGatewayDevice.WANDevice'),
+        client.refreshObject(serialNumber, 'InternetGatewayDevice.DeviceInfo')
+      ]);
 
       // ----- 3. Fetch device with comprehensive projection -----
       const projection = `

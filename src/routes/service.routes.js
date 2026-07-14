@@ -2,6 +2,7 @@ const express = require('express');
 const { ServiceController } = require('../controllers/services.controller');
 const isAuthenticated = require('../middlewares/isAuthenticated');
 const checkPermission = require('../middlewares/checkPermission');
+const checkAnyPermission = require('../middlewares/checkAnyPermission');
 
 module.exports = (prisma) => {
     const router = express.Router();
@@ -128,7 +129,7 @@ module.exports = (prisma) => {
 
     router.get('/genieacs/devices/:serialNumber/deviceinfo', checkPermission('services_read'), serviceController.getGenieACSDeviceInfo.bind(serviceController));
 
-    router.get('/genieacs/devices/:serialNumber/waninfo', checkPermission('services_read'), serviceController.getGenieACSDeviceWanInfo.bind(serviceController));
+    router.get('/genieacs/devices/:serialNumber/waninfo', checkAnyPermission(['services_read', 'customer_read', 'customer_update']), serviceController.getGenieACSDeviceWanInfo.bind(serviceController));
 
 
     router.get('/genieacs/devices/:serialNumber/wlaninfo', checkPermission('services_read'), serviceController.getGenieACSDeviceWlanInfo.bind(serviceController));
@@ -145,11 +146,11 @@ module.exports = (prisma) => {
     router.get('/genieacs/devices/:serialNumber/tasks', checkPermission('services_read'), serviceController.getGenieACSDeviceTasks.bind(serviceController));
 
 
-    router.post('/genieacs/devices/:serialNumber/create-wan-connection', checkPermission('services_read'), serviceController.createwanipconnenctiondump.bind(serviceController));
+    router.post('/genieacs/devices/:serialNumber/create-wan-connection', checkAnyPermission(['services_manage', 'customer_update']), serviceController.createwanipconnenctiondump.bind(serviceController));
 
 
-    router.post('/genieacs/devices/:serialNumber/delete-wan-connection', checkPermission('services_delete'), serviceController.deleteWanConnection.bind(serviceController));
-    router.post('/genieacs/devices/:serialNumber/update-wan-connection', checkPermission('services_manage'), serviceController.updateWanConnection.bind(serviceController));
+    router.post('/genieacs/devices/:serialNumber/delete-wan-connection', checkAnyPermission(['services_delete', 'customer_update']), serviceController.deleteWanConnection.bind(serviceController));
+    router.post('/genieacs/devices/:serialNumber/update-wan-connection', checkAnyPermission(['services_manage', 'customer_update']), serviceController.updateWanConnection.bind(serviceController));
 
     router.post('/genieacs/devices/:serialNumber/ssid-operations', checkPermission('services_manage'), serviceController.enableDisableSSID.bind(serviceController));
 
