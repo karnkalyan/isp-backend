@@ -18,7 +18,9 @@ module.exports = prisma => {
   router.get('/', canRead, controller.listAgents);
   router.post('/', canManage, controller.createAgent);
   router.get('/analytics', canRead, controller.getAnalytics);
+  router.get('/tool-catalog', canRead, controller.listToolCatalog);
   router.get('/tasks', canRead, controller.listTasks);
+  router.patch('/tasks/:taskId', checkPermission('tasks_update'), controller.updateTaskStatus);
   router.get('/approvals', canRead, controller.listApprovals);
   router.get('/activity', canRead, controller.listActivity);
   router.get('/usage', canRead, controller.listUsage);
@@ -33,6 +35,7 @@ module.exports = prisma => {
   router.get('/:id/tools', canRead, controller.getAgentTools);
   router.patch('/:id/tools', canManage, controller.updateAgentTools);
   router.get('/:id/permissions', canRead, controller.getAgentPermissions);
-  router.post('/:id/tasks', checkPermission('tasks_create'), controller.createTask);
+  router.patch('/:id/permissions', canManage, controller.updateAgentPermissions);
+  router.post('/:id/tasks', controller.createTask);
   return router;
 };

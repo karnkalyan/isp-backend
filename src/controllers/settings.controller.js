@@ -78,6 +78,19 @@ async function getSettings(req, res, next) {
     }
 }
 
+async function getCalendarSystem(req, res, next) {
+    try {
+        const setting = await req.prisma.ISPSettings.findFirst({
+            where: { ispId: req.ispId, key: 'defaultCalendarSystem' },
+            select: { value: true }
+        });
+        const system = String(setting?.value || 'AD').toUpperCase() === 'BS' ? 'BS' : 'AD';
+        res.json({ system });
+    } catch (err) {
+        next(err);
+    }
+}
+
 /**
  * Update or create a setting
  */
@@ -319,6 +332,7 @@ async function deleteRadiusPool(req, res, next) {
 
 module.exports = {
     getSettings,
+    getCalendarSystem,
     updateSetting,
     batchUpdateSettings,
     generateEsewaBase64,

@@ -14,6 +14,9 @@ function taskLogger() {
                 // Only log successful operations
                 if (res.statusCode >= 200 && res.statusCode < 300) {
                     try {
+                        // Controllers with a field-level audit record already captured this mutation.
+                        // Avoid a second generic log containing the complete submitted form.
+                        if (req.auditLogRecorded) return;
                         const ispId = req.ispId;
                         const branchId = req.branchId || null;
                         const userId = req.user?.id;
@@ -55,6 +58,10 @@ function taskLogger() {
                             branchId,
                             ispId
                         };
+
+                        const resourceId = req.params?.id || req.params?.taskId || req.params?.deviceId || null;
+                        if (resourceId !== null) details.resourceId = resourceId;
+                        if (req.method === 'POST' && req.body && Object.keys(req.body).length) details.request = req.body;
 
                         if (req.body) {
                             if (req.body.customerId) details.customerId = Number(req.body.customerId);

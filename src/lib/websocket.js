@@ -4,6 +4,8 @@ const cookie = require('cookie');
 const EventEmitter = require('events');
 const prisma = require('../../prisma/client');
 const YeastarService = require('../services/yeaster.service');
+const DeviceWebSocketService = require('../services/device-management/device-websocket.service');
+const NetworkOperationsWebSocketService = require('../services/network-operations-websocket.service');
 
 const ACCESS_SECRET = process.env.ACCESS_SECRET;
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
@@ -30,6 +32,8 @@ class WebSocketManager {
         this.rooms = new Map(); // roomName -> Set of clientIds
         this.heartbeatIntervals = new Map();
         this.eventEmitter = new EventEmitter();
+        this.deviceService = new DeviceWebSocketService(this, prisma);
+        this.networkOperationsService = new NetworkOperationsWebSocketService(this, prisma);
 
         this.initialize();
         console.log('✅ WebSocket Server initialized (cookie-based auth)');
@@ -73,6 +77,7 @@ class WebSocketManager {
                     email: true,
                     name: true,
                     ispId: true,
+                    branchId: true,
                     isDeleted: true,
                     yeastarExt: true,
                     role: {
@@ -119,6 +124,8 @@ class WebSocketManager {
                 userName: user.name,
                 userEmail: user.email,
                 ispId: user.ispId,
+                branchId: user.branchId,
+                role: user.role?.name || null,
                 extId: user.yeastarExt,
                 permissions: new Set(permissions),
                 subscriptions: new Set(),
@@ -214,6 +221,18 @@ class WebSocketManager {
                 await this.handleCommand(clientId, message);
                 break;
 
+            case 'device:room:join': case 'device:room:leave':
+            case 'device:session:open': case 'device:session:reuse': case 'device:session:touch': case 'device:session:close':
+            case 'device:dashboard:subscribe': case 'device:dashboard:unsubscribe': case 'device:dashboard:refresh':
+            case 'device:interfaces:subscribe': case 'device:vlans:subscribe': case 'device:optics:subscribe': case 'device:alarms:subscribe': case 'device:routing:subscribe':
+                await this.deviceService.handle(clientId, message);
+                break;
+
+            case 'monitoring:dashboard:subscribe': case 'monitoring:dashboard:unsubscribe': case 'monitoring:dashboard:run-all':
+            case 'noc:subscribe': case 'noc:unsubscribe': case 'noc:refresh':
+                await this.networkOperationsService.handle(clientId, message);
+                break;
+
             default:
                 this.sendError(clientId, `Unknown message type: ${message.type}`, 'UNKNOWN_TYPE');
         }
@@ -251,7 +270,6 @@ class WebSocketManager {
         const client = this.clients.get(clientId);
         if (!client) return;
 
-        console.log('📨 [WS Subscribe] Raw message:', message); // Debug log
 
         // Validate and normalize channels
         let channels = [];
@@ -274,7 +292,6 @@ class WebSocketManager {
             return;
         }
 
-        console.log(`✅ [WS Subscribe] Processing ${channels.length} channels for client ${clientId}`);
 
         const subscribed = [];
 
@@ -306,8 +323,6 @@ class WebSocketManager {
                     this.joinRoom(clientId, channel);
                     subscribed.push(channel);
                     console.log(`✅ [WS Subscribe] Client ${clientId} subscribed to: ${channel}`);
-                } else {
-                    console.log(`ℹ️ [WS Subscribe] Client ${clientId} already subscribed to: ${channel}`);
                 }
             } catch (error) {
                 console.error(`❌ [WS Subscribe] Error subscribing to channel ${channel}:`, error);
@@ -770,6 +785,7 @@ class WebSocketManager {
     handleDisconnect(clientId) {
         const client = this.clients.get(clientId);
         if (!client) return;
+        this.deviceService?.handleDisconnect(clientId);
 
         // Clear heartbeat
         const interval = this.heartbeatIntervals.get(clientId);
@@ -791,6 +807,7 @@ class WebSocketManager {
 
         // Remove client
         this.clients.delete(clientId);
+        this.networkOperationsService?.handleDisconnect(client);
 
         console.log(`👋 [WS Disconnect] Client ${clientId} disconnected (User: ${client.userName || 'Unauthenticated'})`);
     }
@@ -866,6 +883,8 @@ class WebSocketManager {
 
     // ===================== SHUTDOWN =====================
     shutdown() {
+        this.deviceService?.close();
+        this.networkOperationsService?.close();
         console.log('🛑 [WS Shutdown] Shutting down WebSocket server...');
 
         this.heartbeatIntervals.forEach(interval => clearInterval(interval));

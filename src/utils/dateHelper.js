@@ -139,7 +139,21 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
   }
 }
 
+function convertToEnglishDate(bsDate) {
+  const match = String(bsDate || '').match(/^(\d{4})-(\d{2})-(\d{2})(.*)$/);
+  if (!match || Number(match[1]) < 2000) return '';
+  try {
+    const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
+    const converted = new NepaliDate(`${match[1]}-${match[2]}-${match[3]}`).getAD();
+    const date = `${converted.year}-${String(converted.month + 1).padStart(2, '0')}-${String(converted.date).padStart(2, '0')}`;
+    return `${date}${match[4] || ''}`;
+  } catch (err) {
+    return '';
+  }
+}
+
 module.exports = {
   computeExpiryFromBase,
-  convertToNepaliDate
+  convertToNepaliDate,
+  convertToEnglishDate
 };

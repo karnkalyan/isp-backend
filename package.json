@@ -13,9 +13,10 @@
     "defaultFullSeed": "node prisma/defaultFullSeed.js",
     "kisanNetFullSeed": "node prisma/kisanNetFullSeed.js",
     "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js",
-    "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js"
-    ,"test": "node --test test/**/*.test.js"
-    ,"typecheck": "node --check src/controllers/ai-agent.controller.js && node --check src/routes/ai-agent.routes.js && node --check src/routes/ai-agent-conversation.routes.js && node --check src/routes/ai-agent-approval.routes.js && node --check src/middlewares/aiAgentContext.js"
+    "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js",
+    "permissions:devices": "node prisma/seedDevicePermissions.js",
+    "test": "node --test test/**/*.test.js",
+    "typecheck": "node --check src/controllers/ai-agent.controller.js && node --check src/controllers/managed-device.controller.js && node --check src/routes/ai-agent.routes.js && node --check src/routes/ai-agent-conversation.routes.js && node --check src/routes/ai-agent-approval.routes.js && node --check src/routes/managed-device.routes.js && node --check src/services/device-management/device.service.js && node --check src/services/device-management/device-connection.service.js && node --check src/services/device-management/device-status.service.js && node --check src/services/network/ssh-algorithm-profile.service.js && node --check src/services/network/device-capability.registry.js && node --check src/services/network/device-configuration-task.service.js && node --check src/network-drivers/DeviceDriverFactory.js && node --check src/middlewares/aiAgentContext.js && node --check src/middlewares/errorHandler.js"
   },
   "type": "commonjs",
   "dependencies": {
@@ -43,6 +44,7 @@
     "multer": "^1.4.5-lts.2",
     "nanoid": "^5.1.5",
     "nepali-date-converter": "^3.4.0",
+    "net-snmp": "^3.26.3",
     "node-routeros": "^1.6.8",
     "node-ssh": "^13.2.1",
     "nodemailer": "^9.0.1",

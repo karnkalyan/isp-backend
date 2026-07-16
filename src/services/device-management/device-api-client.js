@@ -1,0 +1,10 @@
+const axios=require('axios');const http=require('http');const https=require('https');
+class DeviceApiClient{
+  constructor(device,credentials={}){const protocol=device.tlsEnabled?'https':'http',baseURL=device.restBaseUrl||device.apiBaseUrl||`${protocol}://${device.host}:${device.restPort||device.apiPort||device.managementPort}`;this.timeout=device.connectionTimeout||15000;this.client=axios.create({baseURL,timeout:this.timeout,httpAgent:new http.Agent({keepAlive:true,maxSockets:8}),httpsAgent:new https.Agent({keepAlive:true,maxSockets:8,rejectUnauthorized:device.verifyTls!==false}),headers:credentials.apiToken?{Authorization:`Bearer ${credentials.apiToken}`}:{},auth:!credentials.apiToken&&(credentials.apiUsername||credentials.sshUsername)?{username:credentials.apiUsername||credentials.sshUsername,password:credentials.apiPassword||credentials.sshPassword||''}:undefined,validateStatus:status=>status>=200&&status<400});}
+  async request(config){try{return(await this.client.request(config)).data;}catch(error){const status=error.response?.status,code=status===401||status===403?'DEVICE_AUTH_FAILED':error.code==='ECONNABORTED'?'DEVICE_CONNECTION_TIMEOUT':/certificate|tls|ssl/i.test(error.message||'')?'DEVICE_TLS_FAILED':'DEVICE_API_ERROR';throw Object.assign(new Error(status?`Device API returned HTTP ${status}.`:safeMessage(error.message)),{code,status:status||502});}}
+  async get(path,config={}){try{return await this.request({...config,url:path,method:'GET'});}catch(error){if(config.retry===false||!['ECONNRESET','DEVICE_CONNECTION_TIMEOUT','DEVICE_API_ERROR'].includes(error.code))throw error;return this.request({...config,retry:false,url:path,method:'GET'});}}
+  post(path,data,config={}){return this.request({...config,url:path,method:'POST',data});}
+  close(){this.client.defaults.httpAgent?.destroy?.();this.client.defaults.httpsAgent?.destroy?.();}
+}
+const safeMessage=value=>String(value||'Device API request failed.').replace(/https?:\/\/[^\s@]+@/g,'[device-url]').slice(0,500);
+module.exports=DeviceApiClient;

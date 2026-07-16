@@ -1,0 +1,1 @@
+const BaseDeviceDriver=require('../base/BaseDeviceDriver');class CdataOltDriver extends BaseDeviceDriver{get detectionCommands(){return['show system','show version'];}parseDetection(outputs){return{...super.parseDetection(outputs),vendor:'CDATA',platform:'CDATA OLT'};}}module.exports=CdataOltDriver;

@@ -1,0 +1,46 @@
+CREATE TABLE `managed_device_connection_profiles` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `ispId` INTEGER NOT NULL,
+  `deviceId` INTEGER NOT NULL,
+  `mode` VARCHAR(32) NOT NULL DEFAULT 'AUTO',
+  `preferredProtocol` VARCHAR(32) NOT NULL DEFAULT 'AUTO',
+  `fallbackProtocols` JSON NULL,
+  `apiPort` INTEGER NULL,
+  `apiTlsPort` INTEGER NULL,
+  `restBaseUrl` VARCHAR(500) NULL,
+  `restPort` INTEGER NULL,
+  `sshPort` INTEGER NULL,
+  `netconfPort` INTEGER NULL,
+  `restconfBaseUrl` VARCHAR(500) NULL,
+  `gnmiEndpoint` VARCHAR(500) NULL,
+  `snmpPort` INTEGER NULL,
+  `snmpVersion` VARCHAR(16) NULL,
+  `tlsEnabled` BOOLEAN NOT NULL DEFAULT false,
+  `verifyTls` BOOLEAN NOT NULL DEFAULT true,
+  `trustedFingerprint` VARCHAR(255) NULL,
+  `legacySshEnabled` BOOLEAN NOT NULL DEFAULT false,
+  `sshAlgorithmProfile` VARCHAR(64) NOT NULL DEFAULT 'AUTO',
+  `readyTimeoutMs` INTEGER NOT NULL DEFAULT 20000,
+  `commandTimeoutMs` INTEGER NOT NULL DEFAULT 20000,
+  `keepaliveIntervalMs` INTEGER NOT NULL DEFAULT 15000,
+  `keepaliveCountMax` INTEGER NOT NULL DEFAULT 3,
+  `reconnectEnabled` BOOLEAN NOT NULL DEFAULT true,
+  `maxReconnectAttempts` INTEGER NOT NULL DEFAULT 3,
+  `liveMonitoringEnabled` BOOLEAN NOT NULL DEFAULT true,
+  `pollingProfile` JSON NULL,
+  `lastSuccessfulProtocol` VARCHAR(32) NULL,
+  `lastSuccessfulAt` DATETIME(3) NULL,
+  `lastFailureCode` VARCHAR(100) NULL,
+  `lastCapabilityDetectionAt` DATETIME(3) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL,
+  UNIQUE INDEX `managed_device_connection_profiles_deviceId_key` (`deviceId`),
+  INDEX `managed_device_connection_profiles_ispId_preferredProtocol_idx` (`ispId`, `preferredProtocol`),
+  CONSTRAINT `managed_device_connection_profiles_deviceId_fkey` FOREIGN KEY (`deviceId`) REFERENCES `managed_devices`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+INSERT INTO `managed_device_connection_profiles`
+  (`ispId`,`deviceId`,`mode`,`preferredProtocol`,`fallbackProtocols`,`apiPort`,`restBaseUrl`,`sshPort`,`tlsEnabled`,`verifyTls`,`legacySshEnabled`,`sshAlgorithmProfile`,`readyTimeoutMs`,`commandTimeoutMs`,`liveMonitoringEnabled`,`pollingProfile`,`createdAt`,`updatedAt`)
+SELECT `ispId`,`id`,'AUTO','AUTO',JSON_ARRAY(),`apiPort`,`apiBaseUrl`,IF(`communicationMethod`='ssh',`managementPort`,22),`tlsEnabled`,`verifyTls`,`legacyCompatibilityEnabled`,`sshProfile`,`connectionTimeout`,`commandTimeout`,`pollingEnabled`,JSON_OBJECT('intervalSeconds',`pollingInterval`),CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3)
+FROM `managed_devices`;

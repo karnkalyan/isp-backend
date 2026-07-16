@@ -2,7 +2,7 @@ class AiProvider {
   async complete() { throw new Error('Provider must implement complete()'); }
 }
 
-const { compactCapabilityCatalog } = require('./ai-capability-catalog.service');
+const { buildSystemPrompt } = require('./ai-prompt-builder.service');
 
 const usageFrom = (message, output, provider, model) => ({
   content: output,
@@ -16,6 +16,31 @@ const usageFrom = (message, output, provider, model) => ({
   model
 });
 
+const intentInstruction = `Return one JSON object only with: language, intent, action, domain, targetAgentSlug, entities, requiresClarification, confidence. Action must be one of LIST, GET, SEARCH, CREATE, UPDATE, DELETE, EXECUTE, SYNC, RETRY, APPROVE, REJECT, CANCEL, EXPLAIN, COMPARE, CONVERSE. Select only from the supplied agents and capabilities. Never include secrets.`;
+const openAiTools = tools => (tools || []).map(tool=>({type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema||{type:'object',properties:{}}}}));
+// Gemini accepts a smaller function-schema subset than our local validator.
+// Unsupported format/additionalProperties fields make it reject the request.
+const geminiSchema = schema => {
+  const source=schema&&typeof schema==='object'?schema:{};
+  const result={type:String(source.type||'object').toUpperCase()};
+  if(source.description)result.description=String(source.description);
+  if(Array.isArray(source.enum))result.enum=source.enum.map(String);
+  if(Array.isArray(source.required)&&source.required.length)result.required=source.required.map(String);
+  if(source.properties&&typeof source.properties==='object')result.properties=Object.fromEntries(Object.entries(source.properties).map(([key,value])=>[key,geminiSchema(value)]));
+  if(source.items)result.items=geminiSchema(source.items);
+  return result;
+};
+const geminiTools = tools => [{functionDeclarations:(tools || []).map(tool=>({name:tool.name,description:tool.description,parameters:geminiSchema(tool.inputSchema)}))}];
+const safeText = value => String(value || '').replace(/\b(password|passwd|pwd|shared\s*secret|api\s*secret|secret(?:\s*key)?)\s*(?:is|=|:)?\s*["'`]?[^\s,;"'`]+["'`]?/gi,'$1 [masked]');
+
+async function throwProviderError(response,label){
+  let detail='';
+  try{const body=await response.json();detail=String(body?.error?.message||body?.message||'').replace(/\s+/g,' ').slice(0,500);}catch{}
+  throw new Error(`${label} returned ${response.status}${detail?`: ${detail}`:''}`);
+}
+
+const providerSignal = () => AbortSignal.timeout(Math.max(1000,Number(process.env.AI_PROVIDER_TIMEOUT_MS||20000)));
+
 class GeminiProvider extends AiProvider {
   constructor(key, options = {}) {
     super();
@@ -26,14 +51,17 @@ class GeminiProvider extends AiProvider {
     this.defaultTemperature = options.temperature;
   }
 
-  async complete({ agent, message, context, history = [], user }) {
+  async complete({ agent, message, context, history = [], user, runtime }) {
     const model = agent.modelName && agent.modelName !== 'default' ? agent.modelName : this.defaultModel;
-    const system = [
+    const system = buildSystemPrompt({ agent, context, user, runtime });
+    /* Legacy prompt retained below as documentation of migrated behavior.
+    const legacySystem = [
       agent.systemPrompt || '',
       agent.instructions || '',
       `You are ${agent.name}.`,
       `Signed-in user role: ${user?.role || 'unknown'}.`,
       'Sound like a helpful human teammate, not a policy template or scripted bot.',
+      'Use conversational language, contractions, and brief context-aware follow-ups. Never expose internal tool names as the answer.',
       'First understand the user intent in natural language, including typos, short follow-ups, and mixed wording.',
       'Reply naturally and directly in the detected user language when clear.',
       'Understand English, Nepali, Hindi, Maithili, Bhojpuri, German, and common romanized forms.',
@@ -54,17 +82,18 @@ class GeminiProvider extends AiProvider {
       'For list operations, produce a clear multiline list from the returned records, then a short summary.',
       `Verified context: ${JSON.stringify(context || {})}`,
       `Available application API capabilities for reasoning only. Mutations require an approved executor:\n${compactCapabilityCatalog()}`
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\n'); */
 
     const contents = [
-      ...history.slice(-12).map(item => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content }] })),
-      { role: 'user', parts: [{ text: message }] }
+      ...history.slice(-12).map(item => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: safeText(item.content) }] })),
+      { role: 'user', parts: [{ text: safeText(message) }] }
     ];
 
     const root = String(this.baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '').replace(/\/v1(beta)?$/i, '');
     const version = String(this.apiVersion || 'v1beta').replace(/^\/+/, '');
     const response = await fetch(`${root}/${version}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.key)}`, {
       method: 'POST',
+      signal: providerSignal(),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
@@ -72,15 +101,63 @@ class GeminiProvider extends AiProvider {
         generationConfig: { temperature: agent.temperature ?? this.defaultTemperature ?? 0.2, maxOutputTokens: agent.maxTokens || 4096 }
       })
     });
-    if (!response.ok) throw new Error(`Gemini provider returned ${response.status}`);
+    if (!response.ok) await throwProviderError(response,'Gemini provider');
     const data = await response.json();
     const output = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('').trim();
     if (!output) throw new Error('Gemini returned an empty response');
     return usageFrom(message, output, 'gemini', model);
   }
+
+  async detectIntent({message,state,history=[],authorizedTools=[]}) {
+    const model=this.defaultModel,root=String(this.baseUrl).replace(/\/+$/,'').replace(/\/v1(beta)?$/i,''),version=String(this.apiVersion).replace(/^\/+/, '');
+    const response=await fetch(`${root}/${version}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.key)}`,{method:'POST',signal:providerSignal(),headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:intentInstruction}]},contents:[{role:'user',parts:[{text:JSON.stringify({message,state,history:history.map(x=>({role:x.role,content:x.content})),authorizedTools})}]}],generationConfig:{temperature:0,responseMimeType:'application/json',maxOutputTokens:800}})});
+    if(!response.ok)await throwProviderError(response,'Gemini intent');const data=await response.json();const text=data.candidates?.[0]?.content?.parts?.map(part=>part.text||'').join('');return JSON.parse(text);
+  }
+
+  async completeWithTools({agent,message,context,history=[],user,runtime,tools=[],toolHistory=[]}) {
+    const model=agent.modelName&&agent.modelName!=='default'?agent.modelName:this.defaultModel;
+    const contents=[...history.slice(-12).map(item=>({role:item.role==='assistant'?'model':'user',parts:[{text:safeText(item.content)}]})),{role:'user',parts:[{text:safeText(message)}]},...toolHistory.flatMap(item=>[{role:'model',parts:[{functionCall:{name:item.name,args:item.arguments}}]},{role:'user',parts:[{functionResponse:{name:item.name,response:{result:item.result}}}]}])];
+    const root=String(this.baseUrl).replace(/\/+$/,'').replace(/\/v1(beta)?$/i,''),version=String(this.apiVersion).replace(/^\/+/, '');
+    const response=await fetch(`${root}/${version}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.key)}`,{method:'POST',signal:providerSignal(),headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:buildSystemPrompt({agent,context,user,runtime})}]},contents,...(tools.length?{tools:geminiTools(tools),toolConfig:{functionCallingConfig:{mode:'AUTO'}}}:{}),generationConfig:{temperature:agent.temperature??.2,maxOutputTokens:agent.maxTokens||4096}})});
+    if(!response.ok)await throwProviderError(response,'Gemini tool calling');const data=await response.json(),parts=data.candidates?.[0]?.content?.parts||[];
+    return {content:parts.map(part=>part.text||'').join('').trim(),toolCalls:parts.filter(part=>part.functionCall).map((part,index)=>({id:`gemini-${index}`,name:part.functionCall.name,arguments:part.functionCall.args||{}})),provider:'gemini',model,usage:{inputTokens:data.usageMetadata?.promptTokenCount||0,outputTokens:data.usageMetadata?.candidatesTokenCount||0,totalTokens:data.usageMetadata?.totalTokenCount||0,estimatedCost:0}};
+  }
 }
 
-class SafeFallbackProvider extends AiProvider {
+class OpenAICompatibleProvider extends AiProvider {
+  constructor(key, options = {}) {
+    super();
+    this.key = key;
+    this.baseUrl = String(options.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+    this.defaultModel = options.model || 'gpt-4.1-mini';
+  }
+  async complete({ agent, message, context, history = [], user, runtime }) {
+    const model = agent.modelName && agent.modelName !== 'default' ? agent.modelName : this.defaultModel;
+    const messages = [{role:'system',content:buildSystemPrompt({agent,context,user,runtime})},...history.slice(-16).map(item=>({role:item.role==='assistant'?'assistant':'user',content:safeText(item.content)})),{role:'user',content:safeText(message)}];
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.key}`},body:JSON.stringify({model,messages,temperature:agent.temperature??0.2,max_tokens:agent.maxTokens||4096})});
+    if(!response.ok)throw new Error(`OpenAI-compatible provider returned ${response.status}`);
+    const data=await response.json();
+    const output=data.choices?.[0]?.message?.content?.trim();
+    if(!output)throw new Error('OpenAI-compatible provider returned an empty response');
+    const result=usageFrom(message,output,'openai-compatible',model);
+    if(data.usage)result.usage={inputTokens:data.usage.prompt_tokens||0,outputTokens:data.usage.completion_tokens||0,totalTokens:data.usage.total_tokens||0,estimatedCost:0};
+    return result;
+  }
+  async detectIntent({message,state,history=[],authorizedTools=[]}) {
+    const response=await fetch(`${this.baseUrl}/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.key}`},body:JSON.stringify({model:this.defaultModel,messages:[{role:'system',content:intentInstruction},{role:'user',content:JSON.stringify({message,state,history:history.map(x=>({role:x.role,content:x.content})),authorizedTools})}],temperature:0,response_format:{type:'json_object'},max_tokens:800})});
+    if(!response.ok)throw new Error(`OpenAI-compatible intent returned ${response.status}`);const data=await response.json();return JSON.parse(data.choices?.[0]?.message?.content||'{}');
+  }
+  async completeWithTools({agent,message,context,history=[],user,runtime,tools=[],toolHistory=[]}) {
+    const model=agent.modelName&&agent.modelName!=='default'?agent.modelName:this.defaultModel;
+    const messages=[{role:'system',content:buildSystemPrompt({agent,context,user,runtime})},...history.slice(-16).map(item=>({role:item.role==='assistant'?'assistant':'user',content:safeText(item.content)})),{role:'user',content:safeText(message)}];
+    for(const item of toolHistory){messages.push({role:'assistant',content:null,tool_calls:[{id:item.id,type:'function',function:{name:item.name,arguments:JSON.stringify(item.arguments)}}]},{role:'tool',tool_call_id:item.id,name:item.name,content:JSON.stringify(item.result)});}
+    const response=await fetch(`${this.baseUrl}/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.key}`},body:JSON.stringify({model,messages,...(tools.length?{tools:openAiTools(tools),tool_choice:'auto'}:{}),temperature:agent.temperature??.2,max_tokens:agent.maxTokens||4096})});
+    if(!response.ok)throw new Error(`OpenAI-compatible tool calling returned ${response.status}`);const data=await response.json(),choice=data.choices?.[0]?.message||{};
+    return {content:String(choice.content||'').trim(),toolCalls:(choice.tool_calls||[]).filter(call=>call.type==='function').map(call=>{let args={};try{args=JSON.parse(call.function.arguments||'{}')}catch{args={__invalid:true}}return{id:call.id,name:call.function.name,arguments:args}}),provider:'openai-compatible',model,usage:{inputTokens:data.usage?.prompt_tokens||0,outputTokens:data.usage?.completion_tokens||0,totalTokens:data.usage?.total_tokens||0,estimatedCost:0}};
+  }
+}
+
+class LegacySafeFallbackProvider extends AiProvider {
   async complete({ agent, message = '', context, user }) {
     let output;
     const r = context?.records || {};
@@ -88,21 +165,26 @@ class SafeFallbackProvider extends AiProvider {
     const text = String(message || '').toLowerCase().trim();
     const asksAgentRole = /\b(your role|who are you|what are you|what can you do)\b/.test(text);
     const asksRuntime = /\b(local|locally running|running locally|are you running|which model|gemini)\b/.test(text);
-    const asksIdentity = /\b(who am i|what is my name|my name|logged in|my profile|mero naam|mera naam|hamar naam|wie heisse)\b/.test(text);
+    const asksIdentity = /\b(who am i|what(?:'s| is) my (?:actual |real )?name|do you know my (?:actual |real )?name|my (?:actual |real )?name|logged in(?: as)?|my profile|mero naam|mera naam|hamar naam|wie heisse)\b/.test(text);
     const asksWellbeing = /\b(how are you|how r u|how you doing|how's it going|kasto chau|kaise ho|sab thik)\b/.test(text);
-    const acknowledgement = /^(great|good|nice|ok|okay|thanks|thank you|perfect|cool|awesome|got it|fine|thik cha|dhanyabad)[.!?\s]*$/i.test(String(message || '').trim());
+    const acknowledgement = /^(great|good|nice|ok|okay|yes|yeah|yep|sure|thanks|thank you|perfect|cool|awesome|got it|fine|thik cha|dhanyabad)[.!?\s]*$/i.test(String(message || '').trim());
     const looksLikeNoise = text.length > 0 && !/[?]/.test(text) && text.split(/\s+/).every(part => part.length < 12) && !/(nas|service|invoice|bill|tr069|olt|splitter|ticket|lead|customer|role|local|running|hello|hi|great|good|nice|ok|okay|thanks|perfect|cool)/.test(text) && /[a-z]{3,}/.test(text);
 
     if (context?.kind === 'GREETING') {
-      output = `Hello${user?.role ? `! I can help with your ${user.role} workspace` : ''}. What would you like me to check or do?`;
+      const profileName = r.user?.name || user?.name;
+      output = `Hi${profileName ? ` ${profileName}` : ''}! What can I help you with?`;
     } else if (acknowledgement) {
-      output = 'Glad that helped. What would you like me to check next?';
+      output = 'Absolutely. What would you like me to help with next?';
     } else if (asksWellbeing) {
       output = "I'm good and ready to help. You can chat normally, or ask me to check records, create tickets, inspect devices, update Wi-Fi, list invoices, or run other Kashtrix tasks.";
     } else if (asksRuntime) {
       output = 'Yes. Right now I am responding from the Kashtrix AI operations layer on this backend. Gemini is used when a backend Gemini key or active tenant GEMINI service key is configured; otherwise I use the local safe responder with real database/API tools.';
     } else if (asksAgentRole) {
-      output = `I am ${agent.name}. My role is ${agent.role || 'AI operations assistant'} for ${agent.department || 'this workspace'}. I route requests to specialist agents and use approved tenant-scoped tools for live records.`;
+      output = `I'm ${agent.name}, your ${agent.department || 'operations'} teammate. I can understand normal conversation, keep track of the current issue, bring in the right specialist, check live records, and help move work through tasks, tickets, and approvals.`;
+    } else if (asksIdentity && r.user) {
+      const role = r.user.roleName || user?.role || 'user';
+      const name = r.user.name || r.user.email || 'this signed-in account';
+      output = `Your Kashtrix profile is registered as ${name}${r.user.email ? ` (${r.user.email})` : ''}. Your role is ${role}${r.user.department?.name ? ` in ${r.user.department.name}` : ''}. I only know the information saved in your account, so I can't confirm a different legal or personal name unless your profile contains it.`;
     } else if (r.operation?.approvalRequired) {
       output = r.operation.error || 'This operation requires additional permission or approval.';
     } else if (r.operation?.operation === 'syncTr069') {
@@ -114,7 +196,8 @@ class SafeFallbackProvider extends AiProvider {
       output = `NAS resynchronization completed. I verified ${v.total ?? 0} NAS devices: ${v.online ?? 0} online and ${v.offline ?? 0} offline.`;
     } else if (r.operation?.operation === 'getNasSummary') {
       const v = r.operation.data || {};
-      output = `There are ${v.total ?? 0} NAS devices: ${v.online ?? 0} online and ${v.offline ?? 0} offline.${v.devices?.length ? ` ${v.devices.map(x => `${x.name || x.shortname || x.ipAddress || `NAS ${x.id}`} is ${x.status || 'unknown'}`).join('; ')}.` : ''}`;
+      if(v.requestedIp)output=v.found&&v.device?`NAS ${v.requestedIp} is record #${v.device.id} (${v.device.shortname||'no short name'}), type ${v.device.type||'other'}, ${v.device.isActive?'active':'inactive'}, Radius NAS ID ${v.device.radiusNasId||'not synchronized'}, server ${v.device.server||'not set'}. The shared secret is never displayed.`:`NAS ${v.requestedIp} was not found in this ISP.`;
+      else output = `There are ${v.total ?? 0} NAS devices: ${v.online ?? 0} online and ${v.offline ?? 0} offline.${v.devices?.length ? ` ${v.devices.map(x => `${x.name || x.shortname || x.ipAddress || `NAS ${x.id}`} is ${x.status || 'unknown'}`).join('; ')}.` : ''}`;
     } else if (r.operation?.operation === 'getServiceSummary' || r.operation?.operation === 'listServices' || r.operation?.operation === 'listActiveServices') {
       const v = r.operation.data || {};
       const services = Array.isArray(v.services) ? v.services : [];
@@ -171,6 +254,45 @@ class SafeFallbackProvider extends AiProvider {
           `Linked lead: ${lead || (device.leadId ? `Lead #${device.leadId}` : 'Not linked')}`,
           device.username ? `Connection username: ${device.username}` : null
         ].filter(Boolean).join('\n');
+      }
+    } else if (r.operation?.operation === 'getTr069WifiDetails') {
+      const v = r.operation.data || {};
+      if (!v.found) {
+        output = v.reason || `I couldn't find Wi-Fi details for ${v.serialNumber || 'that device'}.`;
+      } else {
+        const rows = Array.isArray(v.wifi) ? v.wifi : [];
+        output = [
+          `I checked Wi-Fi on ${v.device.serialNumber}. The device is ${v.device.status || 'unknown'}.`,
+          rows.length ? rows.map(item => `SSID ${item.ssidIndex}: ${item.ssidName || 'Name unavailable'} · password ${item.passwordConfigured ? 'configured' : 'not stored'} · last synced ${item.lastSyncedAt ? new Date(item.lastSyncedAt).toLocaleString() : 'unknown'}`).join('\n') : 'No synced SSID records are available yet. I can refresh the device before checking again.'
+        ].join('\n');
+      }
+    } else if (r.operation?.operation === 'listCustomers') {
+      const v = r.operation.data || {};
+      const customers = Array.isArray(v.customers) ? v.customers : [];
+      output = customers.length
+        ? `Customers (${customers.length} shown of ${v.total ?? customers.length}):\n${customers.map((customer,index)=>`${index+1}. ${customer.customerUniqueId || `Customer #${customer.id}`} - ${customer.fullName || 'name unavailable'} - ${customer.status || 'unknown'}${customer.branch?.name ? ` - ${customer.branch.name}` : ''}`).join('\n')}\nAsk for details using the customer ID.`
+        : 'No customers were found.';
+    } else if (r.operation?.operation === 'getCustomerDetail') {
+      const v = r.operation.data || {};
+      const customer = v.customer;
+      output = !v.found || !customer
+        ? (v.reason || 'I could not find that customer.')
+        : `I found ${customer.customerUniqueId} — ${customer.fullName || 'name unavailable'}. The account is ${customer.status || 'unknown'}, with ${customer.connectionUsers?.filter(item => item.isActive).length || 0} active connection login(s) and ${v.tr069Devices?.length || 0} linked TR-069 device(s).`;
+    } else if (r.operation?.operation === 'diagnoseCustomerInternet') {
+      const v = r.operation.data || {};
+      const customer = v.customer;
+      const d = v.diagnostic;
+      if (!v.found || !customer || !d) {
+        output = v.reason || 'I need the customer ID before I can check the connection.';
+      } else {
+        const checks = [
+          `Account: ${d.accountActive ? 'active' : 'needs attention'}`,
+          `Radius login: ${d.radiusActive ? 'active' : 'inactive'}`,
+          `Customer router: ${d.tr069Online ? 'online' : 'offline or not synced'}`,
+          `OLT: ${d.oltOnline ? 'online' : 'not reporting online'}`,
+          `Splitter: ${d.splitterOnline ? 'healthy' : 'needs attention'}`
+        ];
+        output = `I checked ${customer.fullName || customer.customerUniqueId}'s connection (${customer.customerUniqueId}).\n${checks.join('\n')}\n${d.recommendation}`;
       }
     } else if (r.operation?.operation === 'listTr069Devices' || r.operation?.operation === 'listTr069OnlineDevices') {
       const v = r.operation.data || {};
@@ -248,25 +370,44 @@ class SafeFallbackProvider extends AiProvider {
       output = `Ticket #${r.ticket.id} is ${r.ticket.status || 'unknown'} with ${r.ticket.priority || 'unset'} priority.`;
     } else if (r.kpis) {
       output = `Current snapshot: ${r.kpis.totalCustomers ?? '-'} customers, ${r.kpis.activeCustomers ?? '-'} active, and ${r.kpis.openTickets ?? '-'} open or in-progress tickets.`;
-    } else if (asksIdentity && performed.includes('getSignedInUser') && r.user) {
-      const role = r.user.roleName || user?.role || 'user';
-      const name = r.user.name || r.customer?.fullName || r.user.email || 'this signed-in account';
-      output = `You are signed in as ${name}${r.user.email ? ` (${r.user.email})` : ''}. Your role is ${role}${r.user.department?.name ? `, department ${r.user.department.name}` : ''}${r.user.branch?.name ? `, branch ${r.user.branch.name}` : ''}.`;
     }
 
     if (!output) {
+      const conversationState = r.conversationState || {};
       if (looksLikeNoise) {
-        output = "I could not understand that message as an operational request. Ask me in plain language, for example: total NAS devices, active services, invoice list, TR-069 online devices, OLT status, or customer details.";
+        if (conversationState.pendingAction) output = `I still have the pending ${conversationState.pendingAction.actionType || 'action'} in this conversation. Would you like me to confirm it or cancel it?`;
+        else if (conversationState.selectedDeviceId) output = `Are you asking about device ${conversationState.selectedDeviceId}, or do you want me to run a different check on it?`;
+        else if (conversationState.selectedCustomerId) output = `Are you asking me to check customer ${conversationState.selectedCustomerId}'s devices, tickets, billing, or connection?`;
+        else output = 'Which record should I use for this request—for example, a customer ID, device serial, ticket number, or NAS IP?';
         return usageFrom('', output, 'safe-fallback', 'operations-v4');
       }
       output = agent.slug === 'noc'
-        ? 'Tell me the network object or action, for example OLT health, TR-069 devices, NAS status, splitter details, Wi-Fi changes, or resync.'
+        ? 'Which network action should I take: inspect an OLT or TR-069 device, check NAS status, update Wi-Fi, or prepare a network change?'
         : agent.slug === 'billing'
-          ? 'Tell me the billing action, invoice, customer, due amount, payment, or report you want checked.'
-          : "Tell me what you want to check or change. I can answer normally, or run the right Kashtrix task when your message asks for one.";
+          ? 'Which billing record should I check—the invoice number, customer, payment, or outstanding balance?'
+          : 'Which customer, device, ticket, invoice, or operational action should I work with?';
     }
 
     return usageFrom('', output, 'safe-fallback', 'operations-v4');
+  }
+}
+
+class SafeFallbackProvider extends AiProvider {
+  async complete({agent,message='',context,user}) {
+    const records=context?.records||{},operation=records.operation,state=records.conversationState||{},text=String(message).toLowerCase();
+    let output;
+    if(context?.kind==='GREETING')output=`Hi${records.user?.name||user?.name?` ${records.user?.name||user?.name}`:''}! How can I help?`;
+    else if(/\b(who am i|my (?:actual |real )?name|do you know my name|my profile)\b/.test(text)&&records.user){const name=records.user.name||records.user.email;output=`Your Kashtrix profile is registered as ${name}${records.user.email?` (${records.user.email})`:''}. Your role is ${records.user.roleName||user?.role||'user'}.`;}
+    else if(operation?.error)output=`I couldn't complete that verified operation: ${operation.error}`;
+    else if(operation?.approvalRequired)output=`This ${operation.operation||'operation'} is ready but requires approval before any change is made.`;
+    else if(operation?.operation==='listCustomers'&&Array.isArray(operation.data?.customers)){const customers=operation.data.customers;output=customers.length?`Customers (${customers.length} shown):\n${customers.map((customer,index)=>`${index+1}. ${customer.customerUniqueId||`Customer #${customer.id}`} - ${customer.fullName||'name unavailable'} - ${customer.status||'unknown'}`).join('\n')}`:'No customers were found.';}
+    else if(operation?.operation==='getCustomerDetail'&&operation.data?.customer){const c=operation.data.customer;output=`I found ${c.customerUniqueId} — ${c.fullName||'name unavailable'}. The account is ${c.status||'unknown'} and has ${operation.data.tr069Devices?.length||0} linked TR-069 device(s).`;}
+    else if(operation?.operation==='getTr069DeviceDetail'&&operation.data?.device){const d=operation.data.device;output=`TR-069 device ${d.serialNumber||d.id} is ${d.status||'unknown'}${d.ipAddress?` at ${d.ipAddress}`:''}.`;}
+    else if((operation?.operation==='listTickets'||operation?.operation==='listOpenTickets')&&Array.isArray(operation.data?.tickets)){const tickets=operation.data.tickets;output=tickets.length?`I found ${tickets.length} ticket(s):\n${tickets.map((ticket,index)=>`${index+1}. ${ticket.ticketNumber||ticket.id} — ${ticket.title} — ${ticket.status} — ${ticket.priority}`).join('\n')}`:`No support tickets were found${operation.data.customerRef?` for ${operation.data.customerRef}`:''}.`;}
+    else if(operation?.data)output=`I completed the verified ${operation.operation||'operation'} check. Result: ${JSON.stringify(operation.data)}`;
+    else if(state.pendingAction)output=`The ${state.pendingAction.actionType||'current action'} is still pending. You can confirm it or cancel it.`;
+    else output=`The configured AI provider is unavailable right now. I can still run approved, deterministic Kashtrix tools, but I need a specific customer, device, ticket, invoice, or operation.`;
+    return usageFrom(message,output,'safe-fallback','verified-local-v1');
   }
 }
 
@@ -338,13 +479,18 @@ function providerWithFallback(gemini) {
         return await gemini.complete(input);
       } catch (error) {
         const result = await fallback.complete(input);
-        return { ...result, provider: 'safe-fallback', model: `gemini-fallback:${result.model}` };
+        return { ...result, content:`The configured AI provider is temporarily unavailable, so I used verified local operations only.\n\n${result.content}`, provider: 'safe-fallback', model: `provider-fallback:${result.model}`, providerError:error.message };
       }
-    }
+    },
+    detectIntent(input){return gemini.detectIntent(input);},
+    completeWithTools(input){return gemini.completeWithTools(input);},
+    dynamicProvider:true
   };
 }
 
 async function getProvider(options = {}) {
+  const openAiKey=process.env.OPENAI_API_KEY||process.env.OPENAI_COMPATIBLE_API_KEY;
+  if(openAiKey)return providerWithFallback(new OpenAICompatibleProvider(openAiKey,{baseUrl:process.env.OPENAI_BASE_URL,model:process.env.OPENAI_MODEL}));
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (key) return providerWithFallback(new GeminiProvider(key));
   const serviceConfig = await getGeminiServiceConfig(options.prisma, options.ispId);
@@ -352,4 +498,4 @@ async function getProvider(options = {}) {
   return new SafeFallbackProvider();
 }
 
-module.exports = { AiProvider, GeminiProvider, SafeFallbackProvider, getProvider };
+module.exports = { AiProvider, GeminiProvider, OpenAICompatibleProvider, SafeFallbackProvider, getProvider };

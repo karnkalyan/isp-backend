@@ -1,0 +1,1 @@
+const BaseDeviceDriver=require('../base/BaseDeviceDriver');class GenericSshDriver extends BaseDeviceDriver{get detectionCommands(){return[this.device.deviceType==='linux-server'?'uname -a':'show version'];}}module.exports=GenericSshDriver;

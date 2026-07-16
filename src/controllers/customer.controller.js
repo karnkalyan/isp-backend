@@ -2275,6 +2275,8 @@ async function listCustomers(req, res, next) {
         source: c.lead?.source || null,
         notes: c.lead?.notes || null,
         age: meta?.age || null,
+        latitude: meta?.latitude ?? null,
+        longitude: meta?.longitude ?? null,
         fullAddress: meta?.fullAddress || c.lead?.address || null,
         lead: undefined
       };
@@ -2840,8 +2842,6 @@ async function updateCustomer(req, res, next) {
         await tx.lead.update({ where: { id: existing.leadId }, data: leadUpdate });
       }
       
-      await logAudit(tx, req.user.id, 'CUSTOMER_UPDATE', { id, customerTypeId: targetTypeId }, req);
-      
       return tx.customer.findUnique({
         where: { id },
         include: {
@@ -2856,6 +2856,8 @@ async function updateCustomer(req, res, next) {
         }
       });
     });
+
+    await logAudit(req.prisma, req.user.id, 'CUSTOMER_UPDATE', { entity: 'Customer', entityId: id, before: existing, after: updated }, req);
 
     // Flatten response
     const response = {

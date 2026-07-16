@@ -2,6 +2,7 @@ const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
+const { normalizeExternalPayload, toCanonicalAdValue } = require('../utils/externalDatePayload');
 const prisma = new PrismaClient();
 
 class RadiusClient {
@@ -208,6 +209,7 @@ class RadiusClient {
   async #apiRequest(method, endpoint, data = undefined, retry = true) {
     try {
       const token = await this.#getToken();
+      const externalData = data === undefined ? undefined : normalizeExternalPayload(data);
 
       const config = {
         method: method.toLowerCase(),
@@ -219,12 +221,12 @@ class RadiusClient {
         timeout: 10000
       };
 
-      if (method.toLowerCase() === 'get' && data) {
-        config.params = data;
+      if (method.toLowerCase() === 'get' && externalData) {
+        config.params = externalData;
       }
 
-      if (['post', 'put', 'patch'].includes(method.toLowerCase()) && data) {
-        config.data = data;
+      if (['post', 'put', 'patch'].includes(method.toLowerCase()) && externalData) {
+        config.data = externalData;
       }
 
       const response = await this.#api.request(config);
@@ -778,7 +780,8 @@ class RadiusClient {
    */
   async updateExpiration(username, date) {
     try {
-      const expirationDate = date instanceof Date ? date : new Date(date);
+      const canonicalDate = date instanceof Date ? date : toCanonicalAdValue(date);
+      const expirationDate = canonicalDate instanceof Date ? canonicalDate : new Date(canonicalDate);
       if (Number.isNaN(expirationDate.getTime())) throw new Error('Invalid expiration date');
 
       console.log('[RADIUS EXPIRATION] Sync started', {

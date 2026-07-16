@@ -1,3 +1,18 @@
+const { normalizeAuditDetails } = require('../utils/auditLogger');
+
+function auditScope(req) {
+    const tenant = { OR: [{ ispId: req.ispId }, { ispId: null, user: { ispId: req.ispId } }] };
+    if (!req.branchId) return tenant;
+    return { AND: [tenant, { OR: [{ branchId: req.branchId }, { branchId: null, user: { branchId: req.branchId } }] }] };
+}
+
+function presentLog(log) {
+    let raw = {};
+    try { raw = typeof log.details === 'string' ? JSON.parse(log.details) : (log.details || {}); } catch { raw = { message: String(log.details || '') }; }
+    const details = normalizeAuditDetails(raw);
+    return { ...log, details: JSON.stringify(details), changeCount: details.changes?.length || 0, changes: details.changes || [] };
+}
+
 /**
  * Get system audit logs with pagination and filters
  */
@@ -5,7 +20,7 @@ async function getAuditLogs(req, res, next) {
     try {
         const { page = 1, limit = 50, userId, action, search, startDate, endDate } = req.query;
 
-        const where = {
+        const filters = {
             ...(userId ? { userId: parseInt(userId) } : {}),
             ...(action ? { action } : {}),
             ...(startDate || endDate ? {
@@ -23,6 +38,7 @@ async function getAuditLogs(req, res, next) {
                 ]
             } : {})
         };
+        const where = { AND: [auditScope(req), filters] };
 
         const parsedPage = parseInt(page);
         const parsedLimit = parseInt(limit);
@@ -48,7 +64,7 @@ async function getAuditLogs(req, res, next) {
         ]);
 
         res.json({
-            data: logs,
+            data: logs.map(presentLog),
             pagination: {
                 total,
                 page: parsedPage,
@@ -67,6 +83,7 @@ async function getAuditLogs(req, res, next) {
 async function getDistinctActions(req, res, next) {
     try {
         const actions = await req.prisma.auditLog.findMany({
+            where: auditScope(req),
             select: { action: true },
             distinct: ['action']
         });
@@ -172,7 +189,7 @@ async function getCustomerAuditLogs(req, res, next) {
         });
 
         const logs = await req.prisma.auditLog.findMany({
-            where: { OR },
+            where: { AND: [auditScope(req), { OR }] },
             include: {
                 user: {
                     select: {
@@ -276,7 +293,7 @@ async function getCustomerAuditLogs(req, res, next) {
             return false;
         });
 
-        res.json({ success: true, data: filteredLogs });
+        res.json({ success: true, data: filteredLogs.map(presentLog) });
     } catch (err) {
         next(err);
     }
@@ -336,7 +353,7 @@ async function getLeadAuditLogs(req, res, next) {
         });
 
         const logs = await req.prisma.auditLog.findMany({
-            where: { OR },
+            where: { AND: [auditScope(req), { OR }] },
             include: {
                 user: {
                     select: {
@@ -409,7 +426,7 @@ async function getLeadAuditLogs(req, res, next) {
             return false;
         });
 
-        res.json({ success: true, data: filteredLogs });
+        res.json({ success: true, data: filteredLogs.map(presentLog) });
     } catch (err) {
         next(err);
     }

@@ -125,7 +125,7 @@ async function updateRole(req, res, next) {
       }
     });
 
-    await logAudit(req.prisma, req.user.id, 'ROLE_UPDATE', { id: updatedRole.id, name: updatedRole.name, isActive: updatedRole.isActive }, req);
+    await logAudit(req.prisma, req.user.id, 'ROLE_UPDATE', { entity: 'Role', entityId: updatedRole.id, before: existingRole, after: updatedRole }, req);
 
     res.json({
       success: true,

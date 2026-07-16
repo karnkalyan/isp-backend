@@ -16,6 +16,7 @@ module.exports = prisma => {
   router.get('/:id', controller.getConversation);
   router.patch('/:id', controller.updateConversation);
   router.get('/:id/messages', controller.listMessages);
+  router.get('/:id/context', controller.getConversationContext);
   router.post('/:id/messages', controller.sendMessage);
   return router;
 };

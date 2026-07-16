@@ -13,7 +13,6 @@ module.exports = function checkPermission(permissionName) {
             return res.status(403).json({ message: `Access Denied` });
         }
 
-        console.log(`Permission '${permissionName}' granted for user.`); // Uncomment for debugging
         next();
     };
 };

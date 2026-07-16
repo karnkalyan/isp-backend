@@ -270,7 +270,7 @@ async function createTask(req, res, next) {
             });
         }
 
-        await logAudit(req.prisma, createdById, 'TASK_CREATE', { id: task.id, title: task.title }, req);
+        await logAudit(req.prisma, createdById, 'TASK_CREATE', { entity: 'Task', entityId: task.id, before: null, after: task }, req);
 
         if (assignedToId) {
             try {
@@ -497,7 +497,7 @@ async function updateTask(req, res, next) {
             }
         }
 
-        await logAudit(req.prisma, req.user.id, 'TASK_UPDATE', { id: task.id, status: status || task.status }, req);
+        await logAudit(req.prisma, req.user.id, 'TASK_UPDATE', { entity: 'Task', entityId: task.id, before: task, after: updatedTask }, req);
 
         res.json({ ...updatedTask, warning });
     } catch (err) {
@@ -612,6 +612,8 @@ async function deleteTask(req, res, next) {
         await req.prisma.task.delete({
             where: { id: Number(id) }
         });
+
+        await logAudit(req.prisma, req.user.id, 'TASK_DELETE', { entity: 'Task', entityId: task.id, before: task, after: null }, req);
 
         res.json({ message: 'Task deleted successfully' });
     } catch (err) {

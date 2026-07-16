@@ -1,0 +1,1 @@
+const BaseDeviceDriver=require('../base/BaseDeviceDriver');class VsolOltDriver extends BaseDeviceDriver{get detectionCommands(){return['show system information','show version'];}parseDetection(outputs){return{...super.parseDetection(outputs),vendor:'VSOL',platform:'VSOL OLT'};}}module.exports=VsolOltDriver;

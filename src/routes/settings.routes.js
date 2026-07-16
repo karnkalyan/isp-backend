@@ -7,6 +7,7 @@ const checkPermission = require('../middlewares/checkPermission');
 module.exports = (prisma) => {
     const auth = isAuthenticated(prisma);
 
+    router.get('/calendar-system', auth, settingsController.getCalendarSystem);
     router.get('/', auth, checkPermission('settings_read'), settingsController.getSettings);
     router.get('/radius-pools', auth, checkPermission('settings_read'), settingsController.listRadiusPools);
     router.post('/radius-pools', auth, checkPermission('settings_update'), settingsController.upsertRadiusPool);

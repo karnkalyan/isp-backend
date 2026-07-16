@@ -2,7 +2,7 @@ const NORMALIZED_ROUTES = [
   {
     slug: 'manager',
     intents: [
-      'who am i', 'what is my name', 'my name', 'profile', 'logged in', 'session',
+      'who am i', 'what is my name', 'my actual name', 'my real name', 'do you know my name', 'profile', 'logged in', 'session',
       'your role', 'who are you', 'what are you', 'locally running', 'running locally',
       'services', 'service catalog', 'integrations',
       'mero naam', 'naam ke ho', 'mera naam', 'hamar naam', 'mein name', 'wie heisse'
@@ -55,7 +55,7 @@ const NORMALIZED_ROUTES = [
     intents: [
       'support', 'ticket', 'complaint', 'help', 'customer issue', 'customer', 'account',
       'create ticket', 'open ticket', 'raise ticket', 'log ticket',
-      'name', 'email', 'phone', 'not working', 'problem', 'issue'
+      'not working', 'problem', 'issue'
     ]
   }
 ];
@@ -96,7 +96,7 @@ function detectAgentIntent(message = '') {
     { slug: 'noc', label: 'wifi configuration', regex: /\b(update|change|set|rename|modify|configure)\b.{0,50}\b(wifi|wi-fi|ssid|wlan|wireless)\b|\b(wifi|wi-fi|ssid|wlan|wireless)\b.{0,50}\b(update|change|set|rename|modify|configure)\b/i, score: 6 },
     { slug: 'support', label: 'create ticket', regex: /\b(create|open|raise|log|make|generate|new)\b.{0,40}\btickets?\b|\btickets?\b.{0,40}\b(create|open|raise|log|make|generate|new)\b/i, score: 7 },
     { slug: 'billing', label: 'billing due', regex: /\b(bill|invoice|payment|due|balance)\b.{0,40}\b(check|show|how much|status|pay)\b/i, score: 3 },
-    { slug: 'manager', label: 'identity', regex: /\b(who|what)\b.{0,20}\b(my name|logged|profile)\b/i, score: 5 }
+    { slug: 'manager', label: 'identity', regex: /\b(?:who am i|(?:who|what|know|tell).{0,30}(?:my (?:actual |real )?name|logged|profile)|my (?:actual |real )?name)\b/i, score: 7 }
   ];
   for (const pattern of patternRoutes) {
     if (pattern.regex.test(text) && pattern.score > best.score) {
@@ -108,7 +108,7 @@ function detectAgentIntent(message = '') {
   return { ...best, confidence, language: detectLanguage(message) };
 }
 
-async function resolveAgent(prisma, ispId, message, requestedAgentId) {
+async function resolveAgent(prisma, ispId, message, requestedAgentId, structuredIntent = null) {
   if (requestedAgentId) {
     const requested = await prisma.aiAgent.findFirst({ where: { id: Number(requestedAgentId), ispId, status: 'ACTIVE' } });
     if (requested && requested.slug !== 'manager') {
@@ -116,14 +116,17 @@ async function resolveAgent(prisma, ispId, message, requestedAgentId) {
     }
   }
 
-  const routing = detectAgentIntent(message);
+  const modelRouting = structuredIntent?.source === 'model' && structuredIntent.confidence >= 0.65
+    ? { slug:structuredIntent.targetAgentSlug,score:Math.round(structuredIntent.confidence*10),matched:[structuredIntent.intent],confidence:structuredIntent.confidence,language:structuredIntent.language,modelGenerated:true,action:structuredIntent.action,domain:structuredIntent.domain }
+    : null;
+  const routing = modelRouting || detectAgentIntent(message);
   const fallbackSlug = routing.score ? routing.slug : 'manager';
   const agent =
     await prisma.aiAgent.findFirst({ where: { ispId, slug: fallbackSlug, status: 'ACTIVE' } }) ||
     await prisma.aiAgent.findFirst({ where: { ispId, slug: routing.slug, status: 'ACTIVE' } }) ||
     await prisma.aiAgent.findFirst({ where: { ispId, slug: 'support', status: 'ACTIVE' } });
 
-  return { agent, routing: { ...routing, slug: agent?.slug || routing.slug } };
+  return { agent, routing: { ...routing, slug: agent?.slug || routing.slug, fallback:!modelRouting } };
 }
 
 module.exports = { detectAgentIntent, detectLanguage, resolveAgent };

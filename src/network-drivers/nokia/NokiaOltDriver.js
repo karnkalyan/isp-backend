@@ -1,0 +1,1 @@
+const NokiaSrosDriver=require('./NokiaSrosDriver');class NokiaOltDriver extends NokiaSrosDriver{get detectionCommands(){return['show equipment slot','show software-mngt oswp','show system information'];}parseDetection(outputs){return{...super.parseDetection(outputs),platform:'Nokia ISAM/Lightspan',deviceType:'nokia-olt'};}}module.exports=NokiaOltDriver;

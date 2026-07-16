@@ -1,0 +1,3 @@
+const BaseDeviceDriver=require('../base/BaseDeviceDriver');
+class NokiaSrosDriver extends BaseDeviceDriver{get detectionCommands(){return['show version','show chassis','show system information'];}parseDetection(outputs){const text=outputs.map(x=>x.output).join('\n');return{...super.parseDetection(outputs),vendor:'Nokia',platform:'SR OS',operatingSystem:'SR OS',operatingSystemVersion:text.match(/TiMOS[^\s]*\s+([^\s]+)/i)?.[1]||text.match(/Version\s*:\s*(.+)/i)?.[1]?.trim()||null,serialNumber:text.match(/Serial(?: number)?\s*:\s*(\S+)/i)?.[1]||null,hostname:text.match(/System Name\s*:\s*(\S+)/i)?.[1]||null};}}
+module.exports=NokiaSrosDriver;

@@ -5,7 +5,7 @@ const idFor = (text, label) => String(text).match(new RegExp(`${label}\\s*#?:?\\
 const isGreeting = text => /^(hi|hello|hey|good\s+(morning|afternoon|evening)|namaste|namaskar)[!.\s]*$/i.test(String(text).trim());
 const emailFrom = text => String(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
 const phoneFrom = text => String(text).match(/(?:\+?977[-\s]?)?(9[678]\d{8})/)?.[1];
-const asksIdentity = text => /\b(who am i|what is my name|my name|logged in|profile|mero naam|mera naam|hamar naam|wie heisse)\b/i.test(String(text));
+const asksIdentity = text => /\b(who am i|what(?:'s| is) my (?:actual |real )?name|do you know my (?:actual |real )?name|my (?:actual |real )?name|logged in(?: as)?|my profile|mero naam|mera naam|hamar naam|wie heisse)\b/i.test(String(text));
 
 async function safeQuery(query) {
   try { return await query(); }

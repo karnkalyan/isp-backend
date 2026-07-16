@@ -72,6 +72,7 @@ model Branch {
   bulkSubBranchAssignments BulkInventoryAssignment[] @relation("BulkInvSubBranch")
   drumBranchAssignments    DrumAssignment[]          @relation("DrumBranch")
   branchRequests           BranchRequest[]
+  managedDevices           ManagedDevice[]
 
   parent      Branch?  @relation("BranchHierarchy", fields: [parentId], references: [id])
   subBranches Branch[] @relation("BranchHierarchy")
@@ -146,6 +147,7 @@ model ISP {
   notices              Notice[]
   notifications        Notification[]
   branchRequests       BranchRequest[]
+  managedDevices       ManagedDevice[]
 }
 
 // ==================== USER MODEL ====================
@@ -2279,6 +2281,8 @@ model DrumAssignment {
 
 model AuditLog {
   id        Int      @id @default(autoincrement())
+  ispId     Int?
+  branchId  Int?
   userId    Int?
   user      User?    @relation("UserAuditLogs", fields: [userId], references: [id], onDelete: SetNull)
   action    String
@@ -2288,6 +2292,26 @@ model AuditLog {
   timestamp DateTime @default(now())
 
   @@map("audit_logs")
+  @@index([ispId, timestamp])
+  @@index([branchId, timestamp])
+}
+
+model CalendarDateValue {
+  id             Int      @id @default(autoincrement())
+  ispId          Int
+  branchId       Int?
+  entityType     String   @db.VarChar(80)
+  entityId       String   @db.VarChar(100)
+  fieldName      String   @db.VarChar(120)
+  adDate         DateTime
+  bsDate         String   @db.VarChar(32)
+  sourceCalendar String   @default("AD") @db.VarChar(8)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([ispId, entityType, entityId, fieldName])
+  @@index([ispId, adDate])
+  @@map("calendar_date_values")
 }
 
 // ==================== ASTERISK MODELS ====================
@@ -2711,6 +2735,163 @@ model AiAgentActivityLog {
   @@map("ai_agent_activity_logs")
 }
 
+model AiConversationContext {
+  id                       Int      @id @default(autoincrement())
+  ispId                    Int
+  conversationId           Int      @unique
+  userId                   Int
+  chatId                   String   @db.VarChar(191)
+  selectedAgentId          Int?
+  routedAgentId            Int?
+  currentIntent            String?  @db.VarChar(120)
+  previousIntent           String?  @db.VarChar(120)
+  currentModule            String?  @db.VarChar(120)
+  currentAction            String?  @db.VarChar(120)
+  currentEntityType        String?  @db.VarChar(80)
+  currentEntityId          String?  @db.VarChar(191)
+  selectedCustomerId       String?  @db.VarChar(191)
+  selectedDeviceId         String?  @db.VarChar(191)
+  selectedTicketId         String?  @db.VarChar(191)
+  selectedInvoiceId        String?  @db.VarChar(191)
+  selectedPaymentId        String?  @db.VarChar(191)
+  selectedNasId            String?  @db.VarChar(191)
+  pendingActionId          Int?
+  pendingApprovalId        Int?
+  pendingConfirmation      Boolean  @default(false)
+  pendingClarification     Json?
+  lastToolCall             Json?
+  lastToolResult           Json?
+  lastSuccessfulToolResult Json?
+  lastAssistantClaim       Json?
+  entityStack              Json?
+  conversationSummary      String?  @db.Text
+  debugTrace               Json?
+  expiresAt                DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([ispId, userId])
+  @@index([chatId])
+  @@index([selectedCustomerId])
+  @@index([selectedDeviceId])
+  @@map("ai_conversation_contexts")
+}
+
+model AiPendingAgentAction {
+  id                 Int      @id @default(autoincrement())
+  ispId              Int
+  conversationId     Int
+  agentId            Int
+  requestedBy        Int
+  actionType         String   @db.VarChar(120)
+  toolName           String?  @db.VarChar(120)
+  module             String   @db.VarChar(120)
+  argumentsEncrypted Json?
+  displayArguments   Json?
+  status             String   @default("AWAITING_CONFIRMATION") @db.VarChar(40)
+  requiresApproval   Boolean  @default(true)
+  riskLevel          String   @default("HIGH") @db.VarChar(20)
+  idempotencyKey     String?  @db.VarChar(191)
+  approvalId         Int?
+  taskId             Int?
+  error              String?  @db.Text
+  expiresAt          DateTime?
+  confirmationExpiresAt DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([ispId, conversationId, status])
+  @@index([agentId, status])
+  @@index([approvalId])
+  @@index([taskId])
+  @@index([ispId, idempotencyKey])
+  @@map("ai_pending_agent_actions")
+}
+
+model AiToolExecution {
+  id                 Int      @id @default(autoincrement())
+  ispId              Int
+  conversationId     Int
+  pendingActionId    Int?
+  agentId            Int
+  userId             Int
+  toolName           String   @db.VarChar(120)
+  idempotencyKey     String   @db.VarChar(191)
+  requestId          String?  @db.VarChar(191)
+  status             String   @default("PENDING") @db.VarChar(40)
+  inputMasked        Json?
+  result             Json?
+  errorCode          String?  @db.VarChar(100)
+  errorMessage       String?  @db.Text
+  durationMs         Int      @default(0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([ispId, idempotencyKey])
+  @@index([conversationId, createdAt])
+  @@index([agentId, status])
+  @@index([pendingActionId])
+  @@map("ai_tool_executions")
+}
+
+model AiAgentRoute {
+  id             Int      @id @default(autoincrement())
+  ispId          Int
+  conversationId Int
+  messageId      Int?
+  fromAgentId    Int?
+  toAgentId      Int
+  resolvedIntent String?  @db.VarChar(120)
+  confidence     Float    @default(0)
+  reason         String?  @db.Text
+  contextSnapshot Json?
+  createdAt      DateTime @default(now())
+
+  @@index([ispId, conversationId, createdAt])
+  @@index([toAgentId, createdAt])
+  @@map("ai_agent_routes")
+}
+
+model AiEntityReference {
+  id             Int      @id @default(autoincrement())
+  ispId          Int
+  conversationId Int
+  messageId      Int?
+  entityType     String   @db.VarChar(80)
+  entityId       String   @db.VarChar(160)
+  displayLabel   String?  @db.VarChar(255)
+  source         String   @default("USER") @db.VarChar(40)
+  isActive       Boolean  @default(true)
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([ispId, conversationId, entityType, isActive], map: "ai_entity_refs_context_type_active_idx")
+  @@index([entityType, entityId])
+  @@map("ai_entity_references")
+}
+
+model AiConversationCorrection {
+  id                 Int      @id @default(autoincrement())
+  ispId              Int
+  conversationId     Int
+  userMessageId      Int?
+  disputedMessageId  Int?
+  entityType         String?  @db.VarChar(80)
+  entityId           String?  @db.VarChar(160)
+  previousClaim      String?  @db.Text
+  correctedClaim     String?  @db.Text
+  verificationResult Json?
+  status             String   @default("RESOLVED") @db.VarChar(40)
+  createdAt          DateTime @default(now())
+
+  @@index([ispId, conversationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("ai_conversation_corrections")
+}
+
 model AiAgentUsage {
   id            Int      @id @default(autoincrement())
   ispId         Int
@@ -2746,4 +2927,340 @@ model AiAgentVersion {
   @@unique([agentId, version])
   @@index([agentId])
   @@map("ai_agent_versions")
+}
+
+// ==================== TENANT THEME STUDIO ====================
+model AppTheme {
+  id          Int      @id @default(autoincrement())
+  ispId       Int
+  name        String   @db.VarChar(160)
+  description String?  @db.Text
+  tokens      Json
+  status      String   @default("DRAFT") @db.VarChar(32)
+  version     Int      @default(1)
+  isPreset    Boolean  @default(false)
+  isDeleted   Boolean  @default(false)
+  createdBy   Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([ispId, name])
+  @@index([ispId, status, isDeleted])
+  @@map("app_themes")
+}
+
+model AppThemeVersion {
+  id          Int      @id @default(autoincrement())
+  themeId     Int
+  version     Int
+  tokens      Json
+  description String?  @db.Text
+  createdBy   Int?
+  createdAt   DateTime @default(now())
+
+  @@unique([themeId, version])
+  @@index([themeId, createdAt])
+  @@map("app_theme_versions")
+}
+
+model AppThemeAssignment {
+  id        Int      @id @default(autoincrement())
+  ispId     Int
+  themeId   Int
+  scope     String   @default("GLOBAL") @db.VarChar(32)
+  branchId  Int?
+  userId    Int?
+  isActive  Boolean  @default(true)
+  createdBy Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ispId, scope, isActive])
+  @@index([themeId])
+  @@index([branchId])
+  @@index([userId])
+  @@map("app_theme_assignments")
+}
+
+// ==================== MULTI-VENDOR DEVICE MANAGEMENT ====================
+model ManagedDevice {
+  id                         Int      @id @default(autoincrement())
+  uuid                       String   @unique @default(uuid()) @db.VarChar(36)
+  ispId                      Int
+  branchId                   Int?
+  name                       String   @db.VarChar(160)
+  slug                       String   @db.VarChar(191)
+  deviceType                 String   @db.VarChar(64)
+  vendor                     String   @db.VarChar(100)
+  model                      String?  @db.VarChar(160)
+  firmwareVersion            String?  @db.VarChar(160)
+  platform                   String?  @db.VarChar(160)
+  operatingSystem            String?  @db.VarChar(160)
+  operatingSystemVersion     String?  @db.VarChar(160)
+  serialNumber               String?  @db.VarChar(191)
+  host                       String   @db.VarChar(255)
+  endpointKey                String   @db.VarChar(64)
+  managementPort             Int
+  communicationMethod        String   @db.VarChar(24)
+  defaultCommunicationMethod String   @db.VarChar(24)
+  apiBaseUrl                 String?  @db.VarChar(500)
+  apiPort                    Int?
+  tlsEnabled                 Boolean  @default(false)
+  verifyTls                  Boolean  @default(true)
+  site                       String?  @db.VarChar(160)
+  location                   String?  @db.VarChar(255)
+  description                String?  @db.Text
+  tags                       Json?
+  status                     String   @default("offline") @db.VarChar(24)
+  statusMessage              String?  @db.VarChar(1000)
+  failureReason              String?  @db.VarChar(1000)
+  maintenanceReason          String?  @db.VarChar(1000)
+  maintenanceStartedAt       DateTime?
+  lastCheckedAt              DateTime?
+  lastSeenAt                 DateTime?
+  lastSuccessfulConnectionAt DateTime?
+  lastFailureAt              DateTime?
+  consecutiveFailureCount    Int      @default(0)
+  pollingEnabled             Boolean  @default(true)
+  pollingInterval            Int      @default(300)
+  connectionTimeout          Int      @default(15000)
+  commandTimeout             Int      @default(15000)
+  retryCount                 Int      @default(1)
+  sshProfile                 String   @default("AUTO") @db.VarChar(64)
+  legacyCompatibilityEnabled Boolean  @default(false)
+  lastConnectionError        String?  @db.VarChar(1000)
+  lastConnectionDiagnostics  Json?
+  lastConfigurationBackupId  Int?
+  enabled                    Boolean  @default(true)
+  isDeleted                  Boolean  @default(false)
+  createdBy                  Int?
+  updatedBy                  Int?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  credential      ManagedDeviceCredential?
+  isp             ISP      @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "managed_devices_ispId_fkey")
+  branch          Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull, map: "managed_devices_branchId_fkey")
+  connections     ManagedDeviceConnection[]
+  statusHistory   ManagedDeviceStatusHistory[]
+  snapshots       ManagedDeviceSnapshot[]
+  backups         ManagedDeviceBackup[]
+  audits          ManagedDeviceAudit[]
+  commands        ManagedDeviceCommand[]
+  capabilities    ManagedDeviceCapability[]
+  configurationTasks ManagedDeviceConfigurationTask[]
+  connectionProfile ManagedDeviceConnectionProfile?
+
+  @@unique([ispId, slug])
+  @@unique([ispId, deviceType, endpointKey])
+  @@index([ispId, deviceType, isDeleted])
+  @@index([ispId, status, enabled, pollingEnabled])
+  @@index([branchId])
+  @@map("managed_devices")
+}
+
+model ManagedDeviceConnectionProfile {
+  id                       Int      @id @default(autoincrement())
+  ispId                    Int
+  deviceId                 Int      @unique
+  mode                     String   @default("AUTO") @db.VarChar(32)
+  preferredProtocol        String   @default("AUTO") @db.VarChar(32)
+  fallbackProtocols        Json?
+  apiPort                  Int?
+  apiTlsPort               Int?
+  restBaseUrl              String?  @db.VarChar(500)
+  restPort                 Int?
+  sshPort                  Int?
+  netconfPort              Int?
+  restconfBaseUrl          String?  @db.VarChar(500)
+  gnmiEndpoint             String?  @db.VarChar(500)
+  snmpPort                 Int?
+  snmpVersion              String?  @db.VarChar(16)
+  tlsEnabled               Boolean  @default(false)
+  verifyTls                Boolean  @default(true)
+  trustedFingerprint       String?  @db.VarChar(255)
+  legacySshEnabled         Boolean  @default(false)
+  sshAlgorithmProfile      String   @default("AUTO") @db.VarChar(64)
+  readyTimeoutMs           Int      @default(20000)
+  commandTimeoutMs         Int      @default(20000)
+  keepaliveIntervalMs      Int      @default(15000)
+  keepaliveCountMax        Int      @default(3)
+  reconnectEnabled         Boolean  @default(true)
+  maxReconnectAttempts     Int      @default(3)
+  liveMonitoringEnabled    Boolean  @default(true)
+  pollingProfile           Json?
+  lastSuccessfulProtocol   String?  @db.VarChar(32)
+  lastSuccessfulAt         DateTime?
+  lastFailureCode          String?  @db.VarChar(100)
+  lastCapabilityDetectionAt DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  device                   ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([ispId, preferredProtocol])
+  @@map("managed_device_connection_profiles")
+}
+
+model ManagedDeviceCredential {
+  id                   Int      @id @default(autoincrement())
+  deviceId             Int      @unique
+  encryptedPayload     String   @db.LongText
+  encryptionVersion    Int      @default(1)
+  credentialKinds      Json?
+  lastRotatedAt        DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  device               ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@map("managed_device_credentials")
+}
+
+model ManagedDeviceConnection {
+  id          Int      @id @default(autoincrement())
+  deviceId    Int
+  userId      Int?
+  method      String   @db.VarChar(24)
+  success     Boolean
+  durationMs  Int?
+  failureType String?  @db.VarChar(64)
+  message     String?  @db.VarChar(1000)
+  requestId   String?  @db.VarChar(64)
+  profile     String?  @db.VarChar(64)
+  profilesAttempted Json?
+  errorCode   String?  @db.VarChar(100)
+  errorCategory String? @db.VarChar(100)
+  algorithmDirection String? @db.VarChar(40)
+  algorithmType String? @db.VarChar(40)
+  diagnostics Json?
+  createdAt   DateTime @default(now())
+  device      ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([deviceId, createdAt])
+  @@map("managed_device_connections")
+}
+
+model ManagedDeviceStatusHistory {
+  id        Int      @id @default(autoincrement())
+  deviceId  Int
+  status    String   @db.VarChar(24)
+  message   String?  @db.VarChar(1000)
+  latencyMs Int?
+  checkedAt DateTime @default(now())
+  device    ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([deviceId, checkedAt])
+  @@map("managed_device_status_history")
+}
+
+model ManagedDeviceSnapshot {
+  id          Int      @id @default(autoincrement())
+  deviceId    Int
+  module      String   @db.VarChar(100)
+  reason      String?  @db.VarChar(255)
+  content     String   @db.LongText
+  contentHash String   @db.VarChar(64)
+  createdBy   Int?
+  createdAt   DateTime @default(now())
+  device      ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([deviceId, createdAt])
+  @@map("managed_device_snapshots")
+}
+
+model ManagedDeviceBackup {
+  id          Int      @id @default(autoincrement())
+  deviceId    Int
+  name        String   @db.VarChar(191)
+  format      String   @db.VarChar(40)
+  content     String   @db.LongText
+  contentHash String   @db.VarChar(64)
+  sizeBytes   Int
+  createdBy   Int?
+  restoredAt  DateTime?
+  restoredBy  Int?
+  createdAt   DateTime @default(now())
+  device      ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([deviceId, createdAt])
+  @@map("managed_device_backups")
+}
+
+model ManagedDeviceAudit {
+  id              Int      @id @default(autoincrement())
+  ispId           Int
+  deviceId        Int
+  userId          Int?
+  action          String   @db.VarChar(100)
+  module          String?  @db.VarChar(100)
+  success         Boolean
+  requestSummary  Json?
+  responseSummary Json?
+  sourceIp        String?  @db.VarChar(64)
+  failureReason   String?  @db.VarChar(1000)
+  beforeData      Json?
+  afterData       Json?
+  createdAt       DateTime @default(now())
+  device          ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([ispId, createdAt])
+  @@index([deviceId, createdAt])
+  @@map("managed_device_audits")
+}
+
+model ManagedDeviceCommand {
+  id            Int      @id @default(autoincrement())
+  deviceId      Int
+  userId        Int?
+  module        String?  @db.VarChar(100)
+  command       String   @db.Text
+  commandType   String   @db.VarChar(24)
+  success       Boolean
+  output        String?  @db.LongText
+  failureReason String?  @db.VarChar(1000)
+  durationMs    Int?
+  createdAt     DateTime @default(now())
+  device        ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@index([deviceId, createdAt])
+  @@map("managed_device_commands")
+}
+
+model ManagedDeviceCapability {
+  id         Int      @id @default(autoincrement())
+  deviceId   Int
+  capability String   @db.VarChar(120)
+  supported  Boolean  @default(true)
+  readOnly   Boolean  @default(false)
+  metadata   Json?
+  detectedAt DateTime @default(now())
+  device     ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@unique([deviceId, capability])
+  @@index([deviceId, supported])
+  @@map("managed_device_capabilities")
+}
+
+model ManagedDeviceConfigurationTask {
+  id               Int      @id @default(autoincrement())
+  uuid             String   @unique @default(uuid()) @db.VarChar(36)
+  ispId            Int
+  deviceId         Int
+  capabilityKey    String   @db.VarChar(160)
+  idempotencyKey   String   @db.VarChar(191)
+  requestedInput   Json?
+  encryptedInput   String?  @db.LongText
+  proposedCommands Json
+  verificationCommands Json?
+  rollbackCommands Json?
+  riskLevel        String   @db.VarChar(24)
+  status           String   @default("DRAFT") @db.VarChar(40)
+  approvalId       Int?
+  backupId         Int?
+  requestedBy      Int?
+  approvedBy       Int?
+  result           Json?
+  verification     Json?
+  rollbackResult   Json?
+  failureReason    String?  @db.VarChar(1000)
+  createdAt        DateTime @default(now())
+  approvedAt       DateTime?
+  executedAt       DateTime?
+  updatedAt        DateTime @updatedAt
+  device           ManagedDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([ispId, idempotencyKey])
+  @@index([deviceId, createdAt])
+  @@index([ispId, status])
+  @@map("managed_device_configuration_tasks")
 }

@@ -386,12 +386,12 @@ class YeastarService {
   /* ========== SYSTEM APIs ========== */
   async testConnection() {
     try {
-      const result = await this.#login();
+      const token = await this.#ensureToken();
       return {
         connected: true,
         message: 'Connected to Yeastar PBX',
-        token: result.token,
-        transport: result.transport,
+        token,
+        transport: 'API',
         pbxIp: this.#config.pbxIp,
         apiPort: this.#config.apiPort,
         timestamp: new Date().toISOString()

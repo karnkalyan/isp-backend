@@ -588,7 +588,24 @@ async function updateLead(req, res, next) {
       }
     });
 
-    await logAudit(req.prisma, req.user?.id, 'LEAD_UPDATE', { id: updatedLead.id, firstName: updatedLead.firstName, lastName: updatedLead.lastName }, req);
+    const normalizeLeadAuditRecord = (record) => {
+      const snapshot = Object.fromEntries(Object.keys(existingLead).map(key => [key, record[key]]));
+      const metadata = snapshot.metadata && typeof snapshot.metadata === 'object' ? snapshot.metadata : {};
+      snapshot.metadata = {
+        age: metadata.age ?? null,
+        fullAddress: metadata.fullAddress ?? null,
+        latitude: metadata.latitude ?? null,
+        longitude: metadata.longitude ?? null,
+        serviceRadius: metadata.serviceRadius ?? '0.1'
+      };
+      return snapshot;
+    };
+    await logAudit(req.prisma, req.user?.id, 'LEAD_UPDATE', {
+      entity: 'Lead',
+      entityId: updatedLead.id,
+      before: normalizeLeadAuditRecord(existingLead),
+      after: normalizeLeadAuditRecord(updatedLead)
+    }, req);
 
     return res.status(200).json(updatedLead);
   } catch (err) {

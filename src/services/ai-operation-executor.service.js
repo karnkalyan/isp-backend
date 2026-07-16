@@ -61,7 +61,7 @@ function extractOrdinalDeviceNumber(message) {
 function extractTr069Lookup(message, contextMessage = '') {
   const raw = String(message || '');
   const serialMatch = raw.match(/\b(?=[A-Z0-9:-]*[A-Z])(?=[A-Z0-9:-]*\d)[A-Z0-9][A-Z0-9:-]{5,}[A-Z0-9]\b/i);
-  if (serialMatch && !/^tr-?069$/i.test(serialMatch[0])) return { serial: serialMatch[0].trim() };
+  if (serialMatch && !/^tr-?069$/i.test(serialMatch[0]) && !/^(?:K-)?CUST-/i.test(serialMatch[0])) return { serial: serialMatch[0].trim() };
   const ordinal = extractOrdinalDeviceNumber(raw);
   if (ordinal) {
     const serial = extractSerialFromNumberedList(contextMessage, ordinal);
@@ -74,6 +74,7 @@ function extractTr069Lookup(message, contextMessage = '') {
 
 const cleanSsidName = value => String(value || '').trim().replace(/^["'`]+|["'`.,;]+$/g, '').trim();
 const emailFrom = text => String(text || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || null;
+const customerRefFrom = text => String(text || '').match(/\bK-CUST-\d+\b/i)?.[0]?.toUpperCase() || String(text || '').match(/\bcustomer\s*(?:id|#)?\s*:?\s*([A-Z0-9-]+)\b/i)?.[1] || null;
 
 function extractWifiSsidUpdate(message, contextMessage = '') {
   const raw = String(message || '');
@@ -150,6 +151,10 @@ const parseDeviceNotes = notes => {
 function inferOperation(message, contextMessage = message) {
   const current = String(message || '').toLowerCase();
   const context = String(contextMessage || message || '').toLowerCase();
+  const conversationalOnly = /^(?:hi|hello|hey|namaste|good\s+(?:morning|afternoon|evening))[!?.\s]*$/i.test(String(message || '').trim())
+    || /\b(?:who am i|what(?:'s| is) my (?:actual |real )?name|do you know my (?:actual |real )?name|my (?:actual |real )?name|logged in as|my profile)\b/i.test(String(message || ''))
+    || /\b(?:how are you|how's it going|thank you|thanks)\b/i.test(String(message || ''));
+  if (conversationalOnly) return null;
   const mutation = /\b(re-?sync|sync|refresh|run again|test again|retry|recheck|scan again)\b/.test(current);
   const listRequest = /\b(list|show|give|display|which|details?|names?)\b/.test(current);
   const countRequest = /\b(how many|count|total|summary|number of)\b/.test(current);
@@ -158,9 +163,19 @@ function inferOperation(message, contextMessage = message) {
   const activeOnly = /\b(active|online|up|connected)\b/.test(current) || /\b(active|online|up|connected)\b/.test(context);
   const ticketCreate = extractTicketCreateRequest(message);
   if (ticketCreate) return 'createTicket';
+  const updateNasRequest=/\b(?:update|edit|change|modify)\b.{0,100}\b(?:nas|network access server)\b|\b(?:nas|network access server)\b.{0,100}\b(?:update|edit|change|modify)\b/i.test(String(message||''));
+  if(updateNasRequest)return'prepareUpdateNasApproval';
+  const createNasRequest = /\b(?:create|add|connect|configure|provision|register|setup|set up)\b.{0,100}\b(?:nas|network access server)\b|\b(?:nas|network access server)\b.{0,100}\b(?:create|add|connect|configure|provision|register|setup|set up)\b/i.test(String(message||''))
+    || (/^(?:add new one|create new one|do it|proceed)[.!?\s]*$/i.test(String(message||'').trim()) && /\b(?:create|add|connect|provision)\b.{0,100}\bnas\b/i.test(String(contextMessage||'')));
+  if (createNasRequest) return 'prepareCreateNasApproval';
   const wifiSsidUpdate = extractWifiSsidUpdate(message, contextMessage);
   if (wifiSsidUpdate) return 'updateTr069WifiSsid';
-  const tr069Lookup = extractTr069Lookup(message, contextMessage);
+  const tr069Lookup = extractTr069Lookup(message, contextMessage) || extractTr069Lookup(contextMessage, contextMessage);
+  if (/\b(wifi|wi-fi|wireless|ssid|wlan)\b/.test(current) && /\b(details?|status|check|confirm|show|get|current)\b/.test(current) && tr069Lookup) return 'getTr069WifiDetails';
+  if (customerRefFrom(message) && /\b(internet|wifi|wi-fi|network|connection)\b/.test(context) && /\b(slow|issue|problem|down|offline|not working|unstable|diagnos|check)\b/.test(context)) return 'diagnoseCustomerInternet';
+  if (customerRefFrom(message) && !/\b(summary|total|count|how many)\b/.test(current)) return 'getCustomerDetail';
+  if (/\b(internet|wifi|wi-fi|network|connection)\b/.test(current) && /\b(slow|issue|problem|down|offline|not working|unstable|diagnos|check)\b/.test(current)) return 'diagnoseCustomerInternet';
+  if (/\b(?:linked|associated|customer(?:'s)?)\b.{0,30}\btr-?069\b|\btr-?069\b.{0,30}\b(?:linked|associated|details?|info)\b/.test(current) && customerRefFrom(contextMessage)) return 'getTr069DeviceDetail';
   const wantsTr069Detail = tr069Lookup && /\b(tr-?069|acs|device|serial|onu|ont)\b/.test(current) && /\b(details?|info|information|profile|status|check|lookup|find|get)\b/.test(current);
   if (wantsTr069Detail) return 'getTr069DeviceDetail';
 
@@ -173,8 +188,10 @@ function inferOperation(message, contextMessage = message) {
     { operation: 'getSplitterSummary', patterns: [/splitter/g] },
     { operation: listRequest ? (openOnly ? 'listOpenTickets' : 'listTickets') : 'getTicketSummary', patterns: [/tickets?/g, /complaints?/g] },
     { operation: 'getLeadSummary', patterns: [/\bleads?\b/g, /prospects?/g] },
-    { operation: 'getCustomerSummary', patterns: [/customers?/g, /subscribers?/g, /users?/g] }
+    { operation: listRequest && !countRequest ? 'listCustomers' : 'getCustomerSummary', patterns: [/customers?/g, /subscribers?/g, /users?/g] }
   ];
+
+  if (/\b(?:check|show|list|get)\b.{0,40}\b(?:support\s+)?tickets?\b|\b(?:support\s+)?tickets?\b.{0,40}\b(?:check|show|list|get)\b/.test(current)) return openOnly ? 'listOpenTickets' : 'listTickets';
 
   let best = pickDomain(current, domains);
   if (!best && followUpRequest) best = pickDomain(context, domains);
@@ -265,12 +282,55 @@ async function findTicketCustomer(prisma, ispId, customerRef) {
     select: {
       id: true,
       customerUniqueId: true,
+      leadId: true,
       branchId: true,
       subBranchId: true,
-      lead: { select: { firstName: true, lastName: true, email: true, phoneNumber: true } }
+      status: true,
+      lead: { select: { firstName: true, middleName: true, lastName: true, email: true, phoneNumber: true } },
+      connectionUsers: { where: { isDeleted: false }, select: { username: true, isActive: true } },
+      devices: { select: { id: true, deviceType: true, brand: true, model: true, serialNumber: true, ponSerial: true, macAddress: true, provisioningStatus: true } },
+      serviceDetails: { select: { status: true, connectionType: true, oltId: true, splitterId: true, oltPort: true, vlanId: true } },
+      olt: { select: { id: true, name: true, ipAddress: true, status: true, lastSeen: true } },
+      splitter: { select: { id: true, name: true, splitterId: true, status: true, usedPorts: true, availablePorts: true } }
     }
   });
 }
+
+async function resolveLinkedTr069Lookup(prisma, ispId, message, contextMessage) {
+  const direct = extractTr069Lookup(message, contextMessage);
+  if (direct) return direct;
+  const contextual = extractTr069Lookup(contextMessage, contextMessage);
+  if (contextual) return contextual;
+  const customerRef = customerRefFrom(message) || customerRefFrom(contextMessage);
+  if (!customerRef) return null;
+  const resolved = await resolveCustomerTr069Devices({prisma,ispId,customerUniqueId:customerRef});
+  const device = resolved.tr069Devices[0] || null;
+  return device ? { id: device.id, serial: device.serialNumber, customerRef, linked: true, device } : null;
+}
+
+async function resolveCustomerTr069Devices({prisma,ispId,customerId,customerUniqueId}) {
+  const reference=customerUniqueId||customerId;
+  const customer = await findTicketCustomer(prisma, ispId, reference);
+  if (!customer) return { found:false, customer:null, services:[], cpeDevices:[], devices:[],tr069Devices:[],count:0,sourceLinks:[] };
+  const serials = [...new Set((customer.devices || []).flatMap(item => [item.serialNumber, item.ponSerial]).filter(Boolean))];
+  const links = [...(customer.leadId ? [{ leadId:customer.leadId }] : []),...serials.flatMap(serial => [{ serialNumber:serial },{ serialNumber:{ contains:serial } }])];
+  const sourceLinks=[{type:'CUSTOMER_ID',value:String(customer.id)},{type:'CUSTOMER_REF',value:customer.customerUniqueId},...(customer.leadId?[{type:'LEAD_ID',value:String(customer.leadId)}]:[]),...serials.map(value=>({type:'DEVICE_SERIAL',value})),...(customer.connectionUsers||[]).map(item=>({type:'CONNECTION_USERNAME',value:item.username})),...(customer.serviceDetails||[]).map((item,index)=>({type:'SERVICE_ASSIGNMENT',value:String(index+1),status:item.status}))];
+  let tr069Devices = [];
+  if (links.length) {
+    const query = {
+      where:{ ispId,isDeleted:false,OR:links },
+      select:{ id:true,serialNumber:true,oui:true,productClass:true,manufacturer:true,modelName:true,ipAddress:true,status:true,lastContact:true,firmwareVersion:true,macAddress:true,notes:true,leadId:true,isActive:true,createdAt:true,updatedAt:true }
+    };
+    if (typeof prisma.tr069Device.findMany === 'function') tr069Devices = await prisma.tr069Device.findMany(query).catch(()=>[]);
+    else if (typeof prisma.tr069Device.findFirst === 'function') {
+      const first = await prisma.tr069Device.findFirst(query).catch(()=>null);
+      tr069Devices = first ? [first] : [];
+    }
+  }
+  return { found:true,customer,services:customer.serviceDetails || [],cpeDevices:customer.devices || [],devices:tr069Devices,tr069Devices,count:tr069Devices.length,sourceLinks };
+}
+
+const resolveCustomerDevices=(prisma,ispId,reference)=>resolveCustomerTr069Devices({prisma,ispId,customerUniqueId:reference});
 
 async function createTicketOperation(prisma, ispId, user, message) {
   const operation = 'createTicket';
@@ -342,9 +402,52 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
   const operation = inferOperation(message, contextMessage);
   if (!operation) return null;
 
+  if (operation === 'prepareCreateNasApproval') {
+    if (!canAny(user, ['nas_create', 'nas_update'])) return { operation, approvalRequired:true, error:'Your role does not have permission to create a NAS.' };
+    const source=String(message||contextMessage||'');
+    const ips=[...source.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)].map(match=>match[0]);
+    return { operation,performed:['prepareCreateNasApproval'],approvalRequired:true,data:{intent:'CREATE_NAS',nasIp:ips[0]||null,radiusServerIp:ips[1]||null,secretProvided:/\b(?:secret|password|shared secret)\b/i.test(source),pendingConfirmation:true} };
+  }
+  if(operation==='prepareUpdateNasApproval'){
+    if(!canAny(user,['nas_update']))return{operation,approvalRequired:true,error:'Your role does not have permission to update a NAS.'};
+    const source=String(message||contextMessage||''),ips=[...source.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)].map(match=>match[0]);
+    return{operation,performed:['prepareUpdateNasApproval'],approvalRequired:true,data:{intent:'UPDATE_NAS',nasIp:ips[0]||null,radiusServerIp:ips[1]||null,secretProvided:/\b(?:secret|password|shared secret)\b/i.test(source),pendingConfirmation:true}};
+  }
+
   if (operation === 'createTicket') return createTicketOperation(prisma, ispId, user, message);
   if (operation === 'getServiceSummary' || operation === 'listServices' || operation === 'listActiveServices') return getServiceOperation(prisma, ispId, user, operation);
   if (operation === 'getInvoiceSummary' || operation === 'listInvoices') return getInvoiceOperation(prisma, ispId, user, operation);
+
+  if (operation === 'getCustomerDetail' || operation === 'diagnoseCustomerInternet') {
+    if (!canAny(user, ['customer_read', 'dashboard_view'])) return { operation, approvalRequired: true, error: 'Your role cannot read customer details.' };
+    const ref = customerRefFrom(message) || customerRefFrom(contextMessage);
+    const resolvedDevices = await resolveCustomerDevices(prisma, ispId, ref);
+    const customer = resolvedDevices.customer;
+    if (!customer) return { operation, performed: ['getCustomer'], data: { found: false, customerRef: ref, reason: ref ? 'Customer not found.' : 'Please provide the customer ID.' } };
+    const tr069Devices = resolvedDevices.tr069Devices;
+    const fullName = [customer.lead?.firstName, customer.lead?.middleName, customer.lead?.lastName].filter(Boolean).join(' ');
+    const diagnostic = operation === 'diagnoseCustomerInternet' ? {
+      accountActive: String(customer.status || '').toLowerCase() === 'active',
+      radiusActive: customer.connectionUsers.some(item => item.isActive),
+      tr069Online: tr069Devices.some(item => String(item.status).toLowerCase() === 'online'),
+      oltOnline: ['active', 'online', 'up'].includes(String(customer.olt?.status || '').toLowerCase()),
+      splitterOnline: !customer.splitter || ['active', 'online', 'up'].includes(String(customer.splitter.status || '').toLowerCase()),
+      recommendation: 'Run Radius session, signal, bandwidth, and CPE diagnostics; create a NOC ticket if any check fails.'
+    } : null;
+    return { operation, performed: ['getCustomer', ...(diagnostic ? ['getCustomerServices', 'getTR069DeviceDetails', 'getOLTStatus', 'getSplitterDetails'] : [])], data: { found: true, customer: { ...customer, fullName }, tr069Devices, diagnostic } };
+  }
+
+  if (operation === 'getTr069WifiDetails') {
+    if (!canAny(user, ['services_read', 'services_manage'])) return { operation, approvalRequired: true, error: 'Your role cannot read TR-069 Wi-Fi details.' };
+    const lookup = await resolveLinkedTr069Lookup(prisma, ispId, message, contextMessage);
+    if (!lookup) return { operation, performed: ['getTR069WifiDetails'], data: { found: false, reason: 'No device serial number was found in the active conversation.' } };
+    const serial = String(lookup.serial || '').trim();
+    const device = lookup.device || await prisma.tr069Device.findFirst({ where: lookup.id ? { id: lookup.id, ispId, isDeleted: false } : { ispId, isDeleted: false, OR: [{ serialNumber: serial }, { serialNumber: { contains: serial } }] }, select: { id: true, serialNumber: true, modelName: true, status: true, lastContact: true, leadId: true } });
+    if (!device) return { operation, performed: ['getTR069WifiDetails'], data: { found: false, serialNumber: serial } };
+    const customer = await prisma.customer.findFirst({ where: { ispId, isDeleted: false, ...(device.leadId ? { leadId: device.leadId } : {}) }, select: { id: true, customerUniqueId: true } }).catch(() => null);
+    const wifi = customer ? await prisma.customerWiFiCredential.findMany({ where: { customerId: customer.id, serialNumber: device.serialNumber }, select: { ssidIndex: true, instance: true, ssidName: true, password: true, source: true, lastSyncedAt: true }, orderBy: { ssidIndex: 'asc' } }).catch(() => []) : [];
+    return { operation, performed: ['getTR069WifiDetails'], data: { found: true, device, customer, wifi: wifi.map(item => ({ ...item, passwordConfigured: Boolean(item.password), password: undefined })) } };
+  }
 
   if (operation === 'updateTr069WifiSsid') {
     if (!canAny(user, ['services_manage'])) return { operation, approvalRequired: true, error: 'Your role cannot update TR-069 Wi-Fi settings.' };
@@ -354,7 +457,7 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
 
     const serial = request.lookup.serial ? String(request.lookup.serial).trim() : '';
     const serialVariants = serial ? [...new Set([serial, serial.toUpperCase(), serial.toLowerCase()])] : [];
-    const device = await prisma.tr069Device.findFirst({
+    const device = request.lookup.device || await prisma.tr069Device.findFirst({
       where: request.lookup.id
         ? { ispId, isDeleted: false, id: request.lookup.id }
         : {
@@ -446,7 +549,7 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
 
   if (operation === 'getTr069DeviceDetail') {
     if (!canAny(user, ['services_read', 'services_manage'])) return { operation, approvalRequired: true, error: 'Your role cannot read TR-069 device details.' };
-    const lookup = extractTr069Lookup(message, contextMessage) || extractTr069Lookup(contextMessage, contextMessage);
+    const lookup = await resolveLinkedTr069Lookup(prisma, ispId, message, contextMessage);
     if (!lookup) return { operation, performed: ['getTR069DeviceDetails'], data: { found: false, reason: 'No TR-069 serial number or device ID was detected.' } };
 
     const serial = lookup.serial ? String(lookup.serial).trim() : '';
@@ -462,7 +565,7 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
             ...serialVariants.map(value => ({ serialNumber: { contains: value } }))
           ]
         };
-    const device = await prisma.tr069Device.findFirst({
+    const device = lookup.device || await prisma.tr069Device.findFirst({
       where,
       select: {
         id: true,
@@ -554,6 +657,11 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
 
   if (operation === 'getNasSummary') {
     if (!canAny(user, ['nas_read', 'nas_update'])) return { operation, approvalRequired: true, error: 'Your role cannot read NAS devices.' };
+    const requestedIp=String(message||'').match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0]||null;
+    if(requestedIp){
+      const device=await prisma.nas.findFirst({where:{ispId,isDeleted:false,nasname:requestedIp}});
+      return{operation,performed:['getNasSummary'],data:{found:Boolean(device),requestedIp,device:device?safeNas(device):null}};
+    }
     const devices = await prisma.nas.findMany({ where: { ispId, isDeleted: false } });
     return {
       operation,
@@ -609,7 +717,12 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
 
   if (operation === 'getTicketSummary' || operation === 'listTickets' || operation === 'listOpenTickets') {
     if (!canAny(user, ['tickets_read', 'tickets_manage', 'tickets_read_self'])) return { operation, approvalRequired: true, error: 'Your role cannot read tickets.' };
-    const baseWhere = { ispId, isDeleted: false };
+    const requestedPriorities = ['CRITICAL','HIGH','MEDIUM','LOW'].filter(priority => new RegExp(`\\b${priority}\\b`,'i').test(message));
+    const assignedOnly = /\bassigned\b/i.test(message) && !/\bunassigned\b/i.test(message);
+    const selfOnly = allowed(user,'tickets_read_self') && !canAny(user,['tickets_read','tickets_manage']);
+    const activeCustomerRef=customerRefFrom(message)||customerRefFrom(contextMessage);
+    const activeCustomer=activeCustomerRef?await findTicketCustomer(prisma,ispId,activeCustomerRef):null;
+    const baseWhere = { ispId, isDeleted: false, ...(activeCustomer?{customerId:activeCustomer.id}:{}), ...(requestedPriorities.length?{priority:{in:requestedPriorities}}:{}), ...(assignedOnly?{assignedToId:{not:null}}:{}), ...(selfOnly?{assignedToId:user.id}:{}) };
     const [total, open, inProgress, closed] = await Promise.all([
       prisma.ticket.count({ where: baseWhere }),
       prisma.ticket.count({ where: { ...baseWhere, status: 'OPEN' } }),
@@ -645,7 +758,7 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
         take: 25
       });
     }
-    return { operation, performed: ['getTicketSummary'], data: { total, open, inProgress, closed, tickets } };
+    return { operation, performed: ['getTicketSummary'], data: { total, open, inProgress, closed, tickets, customerRef:activeCustomer?.customerUniqueId||activeCustomerRef||null, filters:{priorities:requestedPriorities,assignedOnly,selfOnly} } };
   }
 
   if (operation === 'getLeadSummary') {
@@ -671,6 +784,24 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
     return { operation, performed: ['getCustomerSummary'], data: { total, active, inactive } };
   }
 
+  if (operation === 'listCustomers') {
+    if (!canAny(user, ['customer_read', 'dashboard_view'])) return { operation, approvalRequired: true, error: 'Your role cannot read customers.' };
+    const [total, customers] = await Promise.all([
+      prisma.customer.count({ where: { ispId, isDeleted: false } }),
+      prisma.customer.findMany({
+        where: { ispId, isDeleted: false },
+        select: {
+          id: true, customerUniqueId: true, status: true, createdAt: true,
+          lead: { select: { firstName: true, middleName: true, lastName: true, phoneNumber: true, email: true } },
+          branch: { select: { id: true, name: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 25
+      })
+    ]);
+    return { operation, performed: ['searchCustomers'], data: { total, customers: customers.map(customer => ({ ...customer, fullName: [customer.lead?.firstName,customer.lead?.middleName,customer.lead?.lastName].filter(Boolean).join(' ') })) } };
+  }
+
   if (operation === 'syncTr069') {
     if (!allowed(user, 'services_manage')) return { operation, approvalRequired: true, error: 'Your role cannot synchronize TR-069 devices.' };
     const sync = await invoke(syncDevices, { prisma, ispId, branchId: user?.selectedBranchId || user?.branchId || null, selectedBranchId: user?.selectedBranchId || null, user, headers: {}, query: {}, params: {}, body: {} });
@@ -688,4 +819,4 @@ async function executeOperation({ prisma, ispId, user, message, contextMessage }
   return null;
 }
 
-module.exports = { inferOperation, executeOperation };
+module.exports = { inferOperation, executeOperation, resolveCustomerDevices,resolveCustomerTr069Devices };

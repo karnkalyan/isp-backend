@@ -1,5 +1,8 @@
+const { toCanonicalAdValue } = require('./externalDatePayload');
+
 function formatRadiusExpiration(date) {
-  const expirationDate = date instanceof Date ? date : new Date(date);
+  const canonicalDate = date instanceof Date ? date : toCanonicalAdValue(date);
+  const expirationDate = canonicalDate instanceof Date ? canonicalDate : new Date(canonicalDate);
   if (Number.isNaN(expirationDate.getTime())) throw new Error('Invalid RADIUS expiration date');
 
   const parts = new Intl.DateTimeFormat('en-GB', {

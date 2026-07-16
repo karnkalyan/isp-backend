@@ -1,3 +1,6 @@
+// Express 4 does not forward rejected async route handlers by default. Patch it
+// before routes are registered so database failures reach our error middleware.
+require('express-async-errors');
 const express = require('express');
 const http = require('http');
 const prisma = require('../prisma/client.js'); // Adjust the path as necessary
@@ -7,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const WebSocketManager = require('./lib/websocket.js'); // Your WebSocketManager class
 const YeastarService = require('./services/yeaster.service');
 const { licenseGuard } = require('./services/license.service');
+const { errorHandler } = require('./middlewares/errorHandler');
 
 require('dotenv').config();
 // Trigger nodemon reload
@@ -55,15 +59,23 @@ const mailRouter = require('./routes/mail.routes');
 const templateRouter = require('./routes/template.routes');
 const taskRouter = require('./routes/task.routes');
 const taskLogger = require('./middlewares/taskLogger');
+const calendarDateSupport = require('./middlewares/calendarDateSupport');
 const createRateLimit = require('./middlewares/rateLimit');
 const aiAgentRouter = require('./routes/ai-agent.routes');
 const aiAgentConversationRouter = require('./routes/ai-agent-conversation.routes');
 const aiAgentApprovalRouter = require('./routes/ai-agent-approval.routes');
+const themeRouter = require('./routes/theme.routes');
+const managedDeviceRouter = require('./routes/managed-device.routes');
+const { DeviceConnectionService } = require('./services/device-management/device-connection.service');
+const DeviceStatusService = require('./services/device-management/device-status.service');
+const managedDeviceConnections = new DeviceConnectionService(prisma);
+const managedDeviceStatus = new DeviceStatusService(prisma, managedDeviceConnections);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(taskLogger());
+app.use(calendarDateSupport());
 app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
 app.use(createRateLimit({
     windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60000),
@@ -173,6 +185,9 @@ app.use('/reports', require('./routes/report.routes')(prisma));
 app.use('/ai-agents', aiAgentRouter(prisma));
 app.use('/ai-agent-conversations', aiAgentConversationRouter(prisma));
 app.use('/ai-agent-approvals', aiAgentApprovalRouter(prisma));
+app.use('/themes', themeRouter(prisma));
+app.use('/devices', managedDeviceRouter(prisma));
+app.use('/network-operations', require('./routes/network-operations.routes')(prisma));
 
 app.use('/api/users', usersRouter(prisma));
 app.use('/api/auth', authRouter(prisma));
@@ -227,16 +242,13 @@ app.use('/api/reports', require('./routes/report.routes')(prisma));
 app.use('/api/ai-agents', aiAgentRouter(prisma));
 app.use('/api/ai-agent-conversations', aiAgentConversationRouter(prisma));
 app.use('/api/ai-agent-approvals', aiAgentApprovalRouter(prisma));
+app.use('/api/themes', themeRouter(prisma));
+app.use('/api/devices', managedDeviceRouter(prisma));
+app.use('/api/network-operations', require('./routes/network-operations.routes')(prisma));
 
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(err.status || 500).json({
-        error: err.message || 'Internal Server Error',
-        details: process.env.NODE_ENV === 'development' ? err : {},
-    });
-});
+// Error handling middleware (must remain after all routes).
+app.use(errorHandler);
 
 // Create HTTP server
 const PORT = process.env.PORT || 3200;
@@ -275,15 +287,20 @@ server.listen(PORT, '0.0.0.0', () => {
         console.error('[YEASTAR] Failed to auto-start listeners:', error.message);
     });
 
+    // Resume approved and non-sensitive AI work even after a server restart.
+    require('./controllers/ai-agent.controller').startTaskWorker(prisma);
+
     const { runCustomerLifecycle } = require('./services/customerLifecycle.service');
     runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message));
     const lifecycleTimer = setInterval(() => runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message)), 6 * 60 * 60 * 1000);
     lifecycleTimer.unref();
+    managedDeviceStatus.start();
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
     console.log('Shutting down server...');
+    managedDeviceStatus.stop();
     if (webSocketManager.shutdown) {
         webSocketManager.shutdown();
     }
@@ -292,4 +309,11 @@ process.on('SIGTERM', async () => {
 
 process.on('beforeExit', async () => {
     await prisma.$disconnect();
+});
+
+process.on('SIGINT', async () => {
+    console.log('Shutting down server...');
+    managedDeviceStatus.stop();
+    if (webSocketManager.shutdown) webSocketManager.shutdown();
+    process.exit(0);
 });
