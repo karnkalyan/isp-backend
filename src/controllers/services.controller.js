@@ -476,45 +476,27 @@ class ServiceController {
         });
       }
 
-      // Auto-provision credentials if none exist yet for this service
-      const credentialCount = await this.prisma.serviceCredential.count({
-        where: { ispServiceId: result.id, isDeleted: false }
-      });
-
-      if (credentialCount === 0) {
-        const defaultCreds = DEFAULT_CREDENTIALS[serviceCode] || [];
-        const parsedConfig = typeof result.config === 'string' ? JSON.parse(result.config) : (result.config || {});
-        const demoCredentials = parsedConfig?.defaultCredentials || parsedConfig?.demoCredentials || {};
-
-        const credentialsToCreate = [];
-        for (const c of defaultCreds) {
-          let val = '';
-          if (c.key === 'base_url') {
-            val = result.baseUrl || '';
-          } else if (demoCredentials[c.key] !== undefined) {
-            val = demoCredentials[c.key];
-          }
-
-          if (val) {
-            credentialsToCreate.push({
-              ispServiceId: result.id,
-              credentialType: c.credentialType || 'api_key',
-              key: c.key,
-              value: String(val),
-              label: c.label || c.key,
-              isEncrypted: c.isEncrypted !== false,
-              isActive: true,
-              isDeleted: false
-            });
-          }
-        }
-
-        if (credentialsToCreate.length > 0) {
-          await this.prisma.serviceCredential.createMany({
-            data: credentialsToCreate,
-            skipDuplicates: true
-          });
-        }
+      const defaultCreds = DEFAULT_CREDENTIALS[serviceCode] || [];
+      const parsedConfig = typeof result.config === 'string' ? JSON.parse(result.config) : (result.config || {});
+      const configuredCredentials = parsedConfig?.defaultCredentials || parsedConfig?.demoCredentials || {};
+      const credentialDefinitions = new Map(defaultCreds.map(credential => [credential.key, credential]));
+      for (const key of Object.keys(configuredCredentials)) {
+        if (!credentialDefinitions.has(key)) credentialDefinitions.set(key, {
+          key,
+          label: key.replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase()),
+          credentialType: /user(name)?|password|secret/i.test(key) ? 'username_password' : 'api_key',
+          isEncrypted: /password|secret|token|api[_-]?key/i.test(key)
+        });
+      }
+      if (!credentialDefinitions.has('base_url') && result.baseUrl) credentialDefinitions.set('base_url', { key: 'base_url', label: 'Base URL', credentialType: 'api_key', isEncrypted: false });
+      for (const credential of credentialDefinitions.values()) {
+        const value = credential.key === 'base_url' ? result.baseUrl : configuredCredentials[credential.key];
+        if (value === undefined || value === null || String(value).trim() === '') continue;
+        await this.prisma.serviceCredential.upsert({
+          where: { ispServiceId_key: { ispServiceId: result.id, key: credential.key } },
+          update: { value: String(value), credentialType: credential.credentialType || 'api_key', label: credential.label || credential.key, isEncrypted: credential.isEncrypted !== false, isActive: true, isDeleted: false },
+          create: { ispServiceId: result.id, credentialType: credential.credentialType || 'api_key', key: credential.key, value: String(value), label: credential.label || credential.key, isEncrypted: credential.isEncrypted !== false, isActive: true, isDeleted: false }
+        });
       }
 
       return res.json({
@@ -1666,8 +1648,9 @@ class ServiceController {
   async getAccountingDashboard(req, res) {
     try {
       const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const callList = async (resource, label) => !resource || typeof resource.list !== 'function' ? { unsupported: true, label, data: [] } : resource.list();
       const [customersResult, itemsResult, invoicesResult] = await Promise.allSettled([
-        client.customer.list(), client.item.list(), client.sales.list()
+        callList(client.customer, 'customers'), callList(client.item, 'items'), callList(client.sales, 'sales-invoices')
       ]);
       const customers = this.#accountingArray(customersResult.status === 'fulfilled' ? customersResult.value : []);
       const items = this.#accountingArray(itemsResult.status === 'fulfilled' ? itemsResult.value : []);
@@ -1682,7 +1665,7 @@ class ServiceController {
           salesInvoices,
           errors: {
             customers: customersResult.status === 'rejected' ? customersResult.reason?.message : null,
-            items: itemsResult.status === 'rejected' ? itemsResult.reason?.message : null,
+            items: itemsResult.status === 'rejected' ? itemsResult.reason?.message : (itemsResult.value?.unsupported ? 'Items are not supported by this provider' : null),
             salesInvoices: invoicesResult.status === 'rejected' ? invoicesResult.reason?.message : null
           }
         }
@@ -1697,6 +1680,7 @@ class ServiceController {
     try {
       const client = await this.#getAccountingClient(req.params.provider, req.ispId);
       const resource = this.#accountingResource(client, req.params.resource);
+      if (!resource || typeof resource.list !== 'function') return res.json({ success: true, data: [], unsupported: true });
       const result = await resource.list();
       return res.json({ success: true, data: this.#accountingArray(result), raw: result });
     } catch (error) {
