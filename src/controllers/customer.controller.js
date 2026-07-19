@@ -2456,7 +2456,11 @@ async function getCustomerById(req, res, next) {
       district: customer.lead?.district,
       state: customer.lead?.province,
       zipCode: customer.lead?.zipCode,
-      lead: undefined,
+      // Keep the source lead available to provisioning forms. Location data is
+      // commonly stored in lead.metadata and was previously discarded here.
+      lead: customer.lead,
+      latitude: customer.lead?.metadata?.latitude ?? customer.lead?.metadata?.lat ?? null,
+      longitude: customer.lead?.metadata?.longitude ?? customer.lead?.metadata?.lng ?? customer.lead?.metadata?.lon ?? null,
       ontRealtimeStatus: realtimeNet.ontRealtimeStatus,
       radiusRealtimeStatus: realtimeNet.radiusRealtimeStatus,
       radiusAccounting: realtimeNet.radiusAccounting,
