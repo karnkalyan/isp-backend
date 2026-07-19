@@ -1645,9 +1645,52 @@ class ServiceController {
     return [];
   }
 
+  async #localAccountingCustomers(provider, ispId) {
+    const db = this.prisma;
+    if (!db) return [];
+    const links = await db.customerSubscribedService.findMany({
+      where: {
+        status: 'active',
+        service: { code: String(provider || '').toUpperCase(), isDeleted: false },
+        customer: { ispId, isDeleted: false }
+      },
+      include: { customer: { include: { lead: true } } },
+      orderBy: { updatedAt: 'desc' }
+    });
+    return links.map(link => ({
+      ...(link.serviceData && typeof link.serviceData === 'object' ? link.serviceData : {}),
+      id: link.customer.id,
+      referenceId: link.customer.customerUniqueId,
+      name: `${link.customer.lead?.firstName || ''} ${link.customer.lead?.lastName || ''}`.trim(),
+      email: link.customer.email || link.customer.lead?.email || '',
+      phone: link.customer.phoneNumber || link.customer.lead?.phoneNumber || '',
+      localStatus: link.status,
+      lastSynchronizedAt: link.updatedAt
+    }));
+  }
+
   async getAccountingDashboard(req, res) {
     try {
-      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const provider = String(req.params.provider || '').toUpperCase();
+      // TSHUL currently returns 404 for /sales and an internal .NET
+      // NullReferenceException for /customers. Use locally provisioned records
+      // until those provider routes are healthy instead of generating repeated
+      // failed upstream requests on every dashboard refresh.
+      if (provider === SERVICE_CODES.TSHUL) {
+        const customers = await this.#localAccountingCustomers(provider, req.ispId);
+        return res.json({
+          success: true,
+          data: {
+            totals: { customers: customers.length, items: 0, salesInvoices: 0, invoiceAmount: 0 },
+            customers,
+            items: [],
+            salesInvoices: [],
+            source: 'local-provisioning-cache',
+            errors: { customers: null, items: 'Not supported by TSHUL', salesInvoices: 'Not supported by TSHUL' }
+          }
+        });
+      }
+      const client = await this.#getAccountingClient(provider, req.ispId);
       const callList = async (resource, label) => !resource || typeof resource.list !== 'function' ? { unsupported: true, label, data: [] } : resource.list();
       const [customersResult, itemsResult, invoicesResult] = await Promise.allSettled([
         callList(client.customer, 'customers'), callList(client.item, 'items'), callList(client.sales, 'sales-invoices')
@@ -1678,7 +1721,13 @@ class ServiceController {
 
   async listAccountingResources(req, res) {
     try {
-      const client = await this.#getAccountingClient(req.params.provider, req.ispId);
+      const provider = String(req.params.provider || '').toUpperCase();
+      const resourceName = String(req.params.resource || '').toLowerCase();
+      if (provider === SERVICE_CODES.TSHUL) {
+        if (resourceName === 'customers') return res.json({ success: true, data: await this.#localAccountingCustomers(provider, req.ispId), source: 'local-provisioning-cache' });
+        return res.json({ success: true, data: [], unsupported: true });
+      }
+      const client = await this.#getAccountingClient(provider, req.ispId);
       const resource = this.#accountingResource(client, req.params.resource);
       if (!resource || typeof resource.list !== 'function') return res.json({ success: true, data: [], unsupported: true });
       const result = await resource.list();
