@@ -855,35 +855,38 @@ class ServiceController {
         
         if (Array.isArray(items) && items.length > 0) {
           const usernames = items.map(sub => sub.username).filter(Boolean);
-          const localCustomers = await db.customer.findMany({
+          const nettvService = await db.service.findFirst({
+            where: { code: SERVICE_CODES.NETTV, isDeleted: false },
+            select: { id: true }
+          });
+          const links = nettvService ? await db.customerSubscribedService.findMany({
             where: {
-              customerUniqueId: { in: usernames },
-              ispId,
-              isDeleted: false
+              serviceId: nettvService.id,
+              externalUsername: { in: usernames },
+              customer: { ispId, isDeleted: false }
             },
-            select: {
-              id: true,
-              customerUniqueId: true,
-              status: true,
-              lead: {
-                select: {
-                  firstName: true,
-                  lastName: true
-                }
-              }
-            }
+            include: { customer: { include: { lead: true } } }
+          }) : [];
+          // Retain compatibility with records created before externalUsername
+          // was introduced, while making the explicit service link authoritative.
+          const linkedNames = new Set(links.map(link => link.externalUsername));
+          const legacyCustomers = await db.customer.findMany({
+            where: { customerUniqueId: { in: usernames.filter(name => !linkedNames.has(name)) }, ispId, isDeleted: false },
+            include: { lead: true }
           });
           
           const customerMap = {};
-          localCustomers.forEach(cust => {
-            customerMap[cust.customerUniqueId] = {
+          const addCustomer = (username, cust) => {
+            customerMap[username] = {
               id: cust.id,
               customerUniqueId: cust.customerUniqueId,
               status: cust.status,
               firstName: cust.lead?.firstName || "",
               lastName: cust.lead?.lastName || ""
             };
-          });
+          };
+          links.forEach(link => addCustomer(link.externalUsername, link.customer));
+          legacyCustomers.forEach(cust => addCustomer(cust.customerUniqueId, cust));
           
           items.forEach(sub => {
             if (sub.username && customerMap[sub.username]) {
@@ -920,14 +923,53 @@ class ServiceController {
   async createNetTVSubscriber(req, res) {
     try {
       const ispId = req.ispId;
-      const subscriberData = req.body;
+      const { customerId, provisioning, ...subscriberData } = req.body || {};
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
       const result = await client.createSubscriber(subscriberData);
+      if (provisioning?.stb?.serial) {
+        await client.addSTBToSubscriber(subscriberData.username, provisioning.stb);
+        if (provisioning.package?.packages?.length) {
+          await client.subscribePackages(provisioning.stb.serial, provisioning.package);
+        }
+      }
+      if (customerId) await this.#linkNetTVCustomer(subscriberData.username, customerId, ispId, subscriberData, result);
       return res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error creating NetTV subscriber:', error);
       return res.status(500).json({ success: false, error: 'Failed to create subscriber', message: error.message });
     }
+  }
+
+  async linkNetTVCustomer(req, res) {
+    try {
+      const { username } = req.params;
+      const { customerId } = req.body || {};
+      await this.#linkNetTVCustomer(username, customerId, req.ispId);
+      return res.json({ success: true, message: 'NetTV subscriber linked to customer' });
+    } catch (error) {
+      const status = /already linked/i.test(error.message) ? 409 : 400;
+      return res.status(status).json({ success: false, error: error.message });
+    }
+  }
+
+  async #linkNetTVCustomer(username, customerId, ispId, requestData = {}, apiResult = null) {
+    if (!username || !Number(customerId) || !this.prisma) throw new Error('Subscriber username and customer are required');
+    const [customer, service] = await Promise.all([
+      this.prisma.customer.findFirst({ where: { id: Number(customerId), ispId, isDeleted: false }, select: { id: true } }),
+      this.prisma.service.findFirst({ where: { code: SERVICE_CODES.NETTV, isDeleted: false }, select: { id: true } })
+    ]);
+    if (!customer) throw new Error('Customer not found');
+    if (!service) throw new Error('NetTV service is not available');
+    const duplicate = await this.prisma.customerSubscribedService.findFirst({
+      where: { serviceId: service.id, externalUsername: username, customerId: { not: customer.id } },
+      select: { customerId: true }
+    });
+    if (duplicate) throw new Error(`NetTV username '${username}' is already linked to another customer`);
+    await this.prisma.customerSubscribedService.upsert({
+      where: { customerId_serviceId: { customerId: customer.id, serviceId: service.id } },
+      update: { status: 'active', externalUsername: username, serviceData: { ...requestData, username, apiResult, lastNetTVSync: new Date().toISOString() } },
+      create: { customerId: customer.id, serviceId: service.id, status: 'active', externalUsername: username, serviceData: { ...requestData, username, apiResult, lastNetTVSync: new Date().toISOString() } }
+    });
   }
 
   async updateNetTVSubscriber(req, res) {
@@ -952,7 +994,14 @@ class ServiceController {
     if (!username || !this.prisma) return;
     const [customer, service] = await Promise.all([
       this.prisma.customer.findFirst({
-        where: { customerUniqueId: username, ispId, isDeleted: false },
+        where: {
+          ispId,
+          isDeleted: false,
+          OR: [
+            { customerUniqueId: username },
+            { subscribedApps: { some: { externalUsername: username, service: { code: SERVICE_CODES.NETTV } } } }
+          ]
+        },
         select: { id: true }
       }),
       this.prisma.service.findFirst({
@@ -973,12 +1022,14 @@ class ServiceController {
       where: { customerId_serviceId: { customerId: customer.id, serviceId: service.id } },
       update: {
         status: localStatus,
+        externalUsername: username,
         serviceData: { ...requestData, lastNetTVSync: new Date().toISOString(), apiResult }
       },
       create: {
         customerId: customer.id,
         serviceId: service.id,
         status: localStatus,
+        externalUsername: username,
         serviceData: { ...requestData, lastNetTVSync: new Date().toISOString(), apiResult }
       }
     });

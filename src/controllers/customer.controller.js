@@ -1963,7 +1963,14 @@ async function provisionCustomer(req, res, next) {
                   select: { customerId: true }
                 });
                 if (existingLink) throw new Error(`NetTV username '${nettvUsername}' is already linked to another customer`);
-                result = await client.createSubscriber(data);
+                const { provisioning: nettvProvisioning, ...subscriberData } = data;
+                result = await client.createSubscriber(subscriberData);
+                if (nettvProvisioning?.stb?.serial) {
+                  await client.addSTBToSubscriber(nettvUsername, nettvProvisioning.stb);
+                  if (nettvProvisioning.package?.packages?.length) {
+                    await client.subscribePackages(nettvProvisioning.stb.serial, nettvProvisioning.package);
+                  }
+                }
                 const overviewData = await client.getSubscriberOverview(nettvUsername).catch(error => {
                   console.warn('Failed to fetch full overview on NetTV provision:', error.message);
                   return null;
@@ -2023,7 +2030,8 @@ async function provisionCustomer(req, res, next) {
 
     // Update customer status and device/service connection statuses. This endpoint can also add
     // missing add-on services for an already-active customer.
-    if (customer.status !== 'active' || customer.onboardStatus !== 'fully_onboarded') {
+    const provisioningSucceeded = serviceResults.length > 0 && serviceResults.every(item => item.success);
+    if (provisioningSucceeded) {
       await prisma.$transaction([
         prisma.customer.update({
           where: { id: customerId },
@@ -4819,7 +4827,14 @@ async function reprovisionNettv(req, res, next) {
     const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, req.ispId);
     
     // Reprovision is equivalent to calling createSubscriber to upsert/update configuration on NetTV
-    const result = await client.createSubscriber(nettvData);
+    const { provisioning: nettvProvisioning, ...subscriberData } = nettvData;
+    const result = await client.createSubscriber(subscriberData);
+    if (nettvProvisioning?.stb?.serial) {
+      await client.addSTBToSubscriber(nettvUsername, nettvProvisioning.stb);
+      if (nettvProvisioning.package?.packages?.length) {
+        await client.subscribePackages(nettvProvisioning.stb.serial, nettvProvisioning.package);
+      }
+    }
 
     // Fetch full overview details right after provision to keep local DB fully in sync
     const overviewData = await client.getSubscriberOverview(nettvData.username).catch(error => {
@@ -4838,6 +4853,15 @@ async function reprovisionNettv(req, res, next) {
       update: { status: 'active', externalUsername: nettvUsername, serviceData: finalNettvData },
       create: { customerId, serviceId, status: 'active', externalUsername: nettvUsername, serviceData: finalNettvData }
     });
+
+    // A successful manual retry completes the same local lifecycle work as the
+    // add-customer provisioning flow, so profiles do not remain PENDING after
+    // NetTV has actually been provisioned.
+    await prisma.$transaction([
+      prisma.customer.update({ where: { id: customerId }, data: { status: 'active', onboardStatus: 'fully_onboarded' } }),
+      prisma.customerDevice.updateMany({ where: { customerId, deviceType: 'ONT' }, data: { provisioningStatus: 'active' } }),
+      prisma.customerServiceConnection.updateMany({ where: { customerId }, data: { status: 'active', provisioningNotes: `Completed after manual NetTV provisioning on ${new Date().toISOString()}` } })
+    ]);
 
     return res.json({
       success: true,

@@ -56,6 +56,7 @@ module.exports = (prisma) => {
     router.post('/nettv/stbs', checkPermission('services_manage'), serviceController.createNetTVSTB.bind(serviceController));
     router.get('/nettv/subscribers/:username', checkPermission('services_read'), serviceController.getNetTVSubscriber.bind(serviceController));
     router.patch('/nettv/subscribers/:username', checkPermission('services_manage'), serviceController.updateNetTVSubscriber.bind(serviceController));
+    router.post('/nettv/subscribers/:username/link-customer', checkPermission('services_manage'), serviceController.linkNetTVCustomer.bind(serviceController));
     router.delete('/nettv/subscribers/:username', checkPermission('services_manage'), serviceController.deleteNetTVSubscriber.bind(serviceController));
     router.patch('/nettv/subscribers/:username/pwd', checkPermission('services_manage'), serviceController.forceNetTVPassword.bind(serviceController));
     router.get('/nettv/subscribers/:username/stbs/:serial', checkPermission('services_read'), serviceController.getNetTVSubscriberSTB.bind(serviceController));
