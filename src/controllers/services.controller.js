@@ -1,6 +1,11 @@
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES, SERVICE_CATEGORIES, DEFAULT_CREDENTIALS } = require('../lib/serviceConstants');
 const QRCode = require('qrcode');
+const {
+  getCachedGenieACSResponse,
+  setCachedGenieACSResponse,
+  invalidateGenieACSResponseCache
+} = require('../lib/genieacsResponseCache');
 
 const smsCampaignQueue = {
   processing: false,
@@ -2752,6 +2757,12 @@ class ServiceController {
       const ispId = req.ispId;
       const { serialNumber } = req.params;
 
+      const cached = getCachedGenieACSResponse(ispId, serialNumber, 'deviceinfo');
+      if (cached) {
+        res.set('X-GenieACS-Cache', 'HIT');
+        return res.json(cached);
+      }
+
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
 
 
@@ -2901,10 +2912,13 @@ class ServiceController {
 
       };
 
-      return res.json({
+      const response = {
         success: true,
         data: formattedDevice
-      });
+      };
+      setCachedGenieACSResponse(ispId, serialNumber, 'deviceinfo', response);
+      res.set('X-GenieACS-Cache', 'MISS');
+      return res.json(response);
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
@@ -2916,9 +2930,14 @@ class ServiceController {
 
   async getGenieACSDeviceWanInfo(req, res) {
     try {
-      res.set('Cache-Control', 'no-store');
       const ispId = req.ispId;
       const { serialNumber } = req.params;
+
+      const cached = getCachedGenieACSResponse(ispId, serialNumber, 'waninfo');
+      if (cached) {
+        res.set('X-GenieACS-Cache', 'HIT');
+        return res.json(cached);
+      }
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
 
@@ -2983,10 +3002,13 @@ class ServiceController {
 
       };
 
-      return res.json({
+      const response = {
         success: true,
         data: formattedDevice
-      });
+      };
+      setCachedGenieACSResponse(ispId, serialNumber, 'waninfo', response);
+      res.set('X-GenieACS-Cache', 'MISS');
+      return res.json(response);
 
     } catch (error) {
       console.error("Error getting GenieACS device:", error);
@@ -3968,6 +3990,8 @@ class ServiceController {
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
       const result = await client.refreshObject(serialNumber, objectName);
+
+      invalidateGenieACSResponseCache(ispId, serialNumber);
 
       return res.json({ success: true, data: result });
     } catch (error) {
