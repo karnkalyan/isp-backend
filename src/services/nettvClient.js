@@ -176,9 +176,10 @@ class NetTVClient {
 
     async #apiRequest(method, endpoint, data = null, params = null) {
         try {
+            const isAbsoluteUrl = /^https?:\/\//i.test(endpoint);
             const config = {
                 method,
-                url: endpoint.startsWith('/') ? endpoint : `/${endpoint}`,
+                url: isAbsoluteUrl ? endpoint : (endpoint.startsWith('/') ? endpoint : `/${endpoint}`),
                 headers: {
                     'Content-Type': 'application/json',
                     'api-key': this.#config.apiKey,
@@ -261,7 +262,7 @@ class NetTVClient {
                     case 403:
                         throw new Error('Access forbidden');
                     case 404:
-                        throw new Error('Endpoint not found');
+                        throw new Error(this.#formatApiMessage(errorData, 'Endpoint not found'));
                     case 429:
                         throw new Error('Rate limit exceeded');
                     default:
@@ -345,8 +346,12 @@ class NetTVClient {
     }
 
     async assignSubscriberGroup(subscriberId, subscriberGroupId = 6) {
-        return this.#apiRequest('post', `/subscribers/${encodeURIComponent(subscriberId)}/subscriber-groups`, {
-            subscriber_group_id: Number(subscriberGroupId)
+        const resellerId = this.#config.resellerId;
+        if (!resellerId) throw new Error('NetTV reseller/namespace ID is not configured');
+        const apiOrigin = new URL(this.#config.baseUrl).origin;
+        const endpoint = `${apiOrigin}/reseller/subscriber/v2/namespace/${encodeURIComponent(resellerId)}/subscribers/${encodeURIComponent(subscriberId)}/subscriber-groups`;
+        return this.#apiRequest('post', endpoint, {
+            subscriber_groups: [{ subscriber_group_id: Number(subscriberGroupId) }]
         });
     }
 

@@ -4919,7 +4919,7 @@ async function reprovisionNettv(req, res, next) {
     });
   } catch (error) {
     console.error('Error reprovisioning NetTV:', error);
-    return res.status(500).json({ error: 'NetTV reprovisioning failed', details: error.message });
+    return res.status(500).json({ error: error.message || 'NetTV reprovisioning failed', message: error.message, details: error.message });
   }
 }
 

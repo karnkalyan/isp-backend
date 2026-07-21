@@ -932,7 +932,7 @@ class ServiceController {
       return res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error creating NetTV subscriber:', error);
-      return res.status(500).json({ success: false, error: 'Failed to create subscriber', message: error.message });
+      return res.status(500).json({ success: false, error: error.message || 'Failed to create subscriber', message: error.message, details: error.message });
     }
   }
 
@@ -988,7 +988,7 @@ class ServiceController {
       console.error('Error updating NetTV subscriber:', error);
       const optional = this.#optionalServiceUnavailable(res, 'NetTV', error);
       if (optional) return optional;
-      return res.status(500).json({ success: false, error: 'Failed to update subscriber', message: error.message });
+      return res.status(500).json({ success: false, error: error.message || 'Failed to update subscriber', message: error.message, details: error.message });
     }
   }
 
