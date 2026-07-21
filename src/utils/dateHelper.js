@@ -40,6 +40,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 
   if (!durationString && durationString !== 0) {
     date.setMonth(date.getMonth() + 1);
+    date.setHours(0, 0, 0, 0);
     return date;
   }
 
@@ -52,9 +53,11 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   if (isoMatch) {
     const v = parseInt(isoMatch[1], 10);
     const u = isoMatch[2].toLowerCase();
-    if (u === 'd') { date.setDate(date.getDate() + v); return date; }
-    if (u === 'm') { date.setMonth(date.getMonth() + v); return date; }
-    if (u === 'y') { date.setFullYear(date.getFullYear() + v); return date; }
+    if (u === 'd') date.setDate(date.getDate() + v);
+    else if (u === 'm') date.setMonth(date.getMonth() + v);
+    else if (u === 'y') date.setFullYear(date.getFullYear() + v);
+    date.setHours(0, 0, 0, 0);
+    return date;
   }
 
   const re = /(\d+)\s*(?:-?\s*)?(d(?:ays?)?|day|m(?:o(?:nths?)?)?|mo|month(?:s)?|months?|y(?:ears?|r)?|yr|year(?:s)?)/i;
@@ -64,9 +67,11 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
     const anyNum = s.match(/(\d+)/);
     if (anyNum) {
       date.setMonth(date.getMonth() + parseInt(anyNum[1], 10));
+      date.setHours(0, 0, 0, 0);
       return date;
     }
     date.setMonth(date.getMonth() + 1);
+    date.setHours(0, 0, 0, 0);
     return date;
   }
 
@@ -81,7 +86,28 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   else if (unit === 'month') date.setMonth(date.getMonth() + value);
   else if (unit === 'year') date.setFullYear(date.getFullYear() + value);
 
+  date.setHours(0, 0, 0, 0);
   return date;
+}
+
+function atPlanBoundary(value = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date(NaN);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getDeductibleRenewalBase(subscription, now = new Date()) {
+  const currentBoundary = atPlanBoundary(now);
+  const planEnd = atPlanBoundary(subscription?.planEnd || currentBoundary);
+  const deductibleDays = Math.max(0, Number(subscription?.graceDaysBalance || 0))
+    + Math.max(0, Number(subscription?.adminExtensionDays || 0));
+
+  if (deductibleDays > 0) {
+    planEnd.setDate(planEnd.getDate() - deductibleDays);
+    return planEnd;
+  }
+  return planEnd >= currentBoundary ? planEnd : currentBoundary;
 }
 
 /**
@@ -141,5 +167,7 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
 
 module.exports = {
   computeExpiryFromBase,
-  convertToNepaliDate
+  convertToNepaliDate,
+  atPlanBoundary,
+  getDeductibleRenewalBase
 };

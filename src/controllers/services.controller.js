@@ -912,14 +912,19 @@ class ServiceController {
       const ispId = req.ispId;
       const { customerId, provisioning, ...subscriberData } = req.body || {};
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
-      const result = await client.createSubscriber(subscriberData);
+      const normalizedSubscriberData = { ...subscriberData, has_ratv: 1, status: 1 };
+      const subscriberGroupId = Number(normalizedSubscriberData.subscriber_group_id || provisioning?.subscriber_group_id || 6);
+      delete normalizedSubscriberData.subscriber_group_id;
+      const result = await client.createSubscriber(normalizedSubscriberData);
+      const subscriberId = result?.subscriber?.id || result?.data?.id || result?.id;
+      if (subscriberId && subscriberGroupId) await client.assignSubscriberGroup(subscriberId, subscriberGroupId);
       if (provisioning?.stb?.serial) {
         await client.addSTBToSubscriber(subscriberData.username, provisioning.stb);
         if (provisioning.package?.packages?.length) {
           await client.subscribePackages(provisioning.stb.serial, provisioning.package);
         }
       }
-      if (customerId) await this.#linkNetTVCustomer(subscriberData.username, customerId, ispId, subscriberData, result);
+      if (customerId) await this.#linkNetTVCustomer(normalizedSubscriberData.username, customerId, ispId, normalizedSubscriberData, result);
       return res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error creating NetTV subscriber:', error);
@@ -999,12 +1004,6 @@ class ServiceController {
     if (!customer || !service) return;
     const normalizedStatus = String(requestData.status ?? '').trim();
     const localStatus = normalizedStatus === '0' ? 'inactive' : 'active';
-    if (normalizedStatus === '0' || normalizedStatus === '1') {
-      await this.prisma.customer.update({
-        where: { id: customer.id },
-        data: { status: localStatus }
-      });
-    }
     await this.prisma.customerSubscribedService.upsert({
       where: { customerId_serviceId: { customerId: customer.id, serviceId: service.id } },
       update: {

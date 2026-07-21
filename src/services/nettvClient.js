@@ -344,6 +344,12 @@ class NetTVClient {
         return this.#apiRequest('post', '/subscribers', subscriberData);
     }
 
+    async assignSubscriberGroup(subscriberId, subscriberGroupId = 6) {
+        return this.#apiRequest('post', `/subscribers/${encodeURIComponent(subscriberId)}/subscriber-groups`, {
+            subscriber_group_id: Number(subscriberGroupId)
+        });
+    }
+
 
 
     async getCountriesProvices() {

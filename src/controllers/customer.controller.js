@@ -10,20 +10,17 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');  // <-- add this l
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const getDriver = require('../drivers');
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
+const { atPlanBoundary, getDeductibleRenewalBase } = require('../utils/dateHelper');
 
 function getSubscriptionRenewalBase(subscription, now = new Date()) {
-  const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
-  const deductibleDays = Math.max(0, Number(subscription?.graceDaysBalance || 0)) + Math.max(0, Number(subscription?.adminExtensionDays || 0));
-  if (deductibleDays > 0) {
-    const originalExpiry = new Date(planEnd);
-    originalExpiry.setDate(originalExpiry.getDate() - deductibleDays);
-    return originalExpiry;
-  }
-  return planEnd >= now ? planEnd : now;
+  return getDeductibleRenewalBase(subscription, now);
 }
 
 async function getSubscriptionRenewalWindow(prisma, ispId, subscription) {
-  const now = new Date();
+  const now = atPlanBoundary();
+  if (Number(subscription?.graceDaysBalance || 0) + Number(subscription?.adminExtensionDays || 0) > 0) {
+    return { planStart: getSubscriptionRenewalBase(subscription, now), trialDeductionDays: 0 };
+  }
   if (!subscription?.isTrial) return { planStart: getSubscriptionRenewalBase(subscription, now), trialDeductionDays: 0 };
   const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
   const trialMs = Math.max(0, new Date(subscription.planEnd) - new Date(subscription.planStart));
@@ -3165,6 +3162,7 @@ const subscribePackage = async (req, res, next) => {
     const durationStr = String(pkg.packageDuration || "1 month");
     const expiryDateObj = computeExpiryFromBase(previousPlanEnd, durationStr);
     if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
+    expiryDateObj.setHours(0, 0, 0, 0);
 
     const basePrice = customer.isFree ? 0 : (pkg.price || 0);
     const otcItemsTotal = otcItems.reduce((sum, item) => sum + item.amount, 0);
@@ -4760,16 +4758,9 @@ async function syncNettv(req, res, next) {
     const overviewData = await client.getSubscriberOverview(username);
     
     // Store in local DB
-    const localStatus = overviewData?.subscriber?.status === 1 ? 'active' : 'inactive';
+    const remoteStatus = overviewData?.subscriber?.status;
+    const localStatus = remoteStatus === 0 || remoteStatus === '0' ? 'inactive' : 'active';
     
-    // Sync customer status
-    if (overviewData?.subscriber?.status === 0 || overviewData?.subscriber?.status === 1) {
-      await prisma.customer.update({
-        where: { id: customer.id },
-        data: { status: localStatus }
-      });
-    }
-
     const updatedSubscribedService = await prisma.customerSubscribedService.upsert({
       where: { customerId_serviceId: { customerId, serviceId } },
       update: { 
@@ -4877,7 +4868,12 @@ async function reprovisionNettv(req, res, next) {
     
     // Reprovision is equivalent to calling createSubscriber to upsert/update configuration on NetTV
     const { provisioning: nettvProvisioning, ...subscriberData } = nettvData;
-    const result = await client.createSubscriber(subscriberData);
+    const normalizedSubscriberData = { ...subscriberData, has_ratv: 1, status: 1 };
+    const subscriberGroupId = Number(subscriberData.subscriber_group_id || nettvProvisioning?.subscriber_group_id || 6);
+    delete normalizedSubscriberData.subscriber_group_id;
+    const result = await client.createSubscriber(normalizedSubscriberData);
+    const subscriberId = result?.subscriber?.id || result?.data?.id || result?.id;
+    if (subscriberId && subscriberGroupId) await client.assignSubscriberGroup(subscriberId, subscriberGroupId);
     if (nettvProvisioning?.stb?.serial) {
       await client.addSTBToSubscriber(nettvUsername, nettvProvisioning.stb);
       if (nettvProvisioning.package?.packages?.length) {

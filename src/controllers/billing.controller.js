@@ -1,4 +1,4 @@
-const { computeExpiryFromBase, convertToNepaliDate } = require('../utils/dateHelper');
+const { computeExpiryFromBase, convertToNepaliDate, atPlanBoundary, getDeductibleRenewalBase } = require('../utils/dateHelper');
 
 const formatADDate = (date) => {
     if (!date) return '';
@@ -99,18 +99,14 @@ async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expirat
 }
 
 function getRenewalBase(subscription, now = new Date()) {
-    const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
-    const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
-    const adminDays = Math.max(0, Number(subscription?.adminExtensionDays || 0));
-    const deductibleDays = graceDays + adminDays;
-    const expiryBeforeExtension = new Date(planEnd);
-    expiryBeforeExtension.setDate(expiryBeforeExtension.getDate() - deductibleDays);
-    if (deductibleDays > 0) return expiryBeforeExtension;
-    return planEnd >= now ? planEnd : now;
+    return getDeductibleRenewalBase(subscription, now);
 }
 
 async function getRenewalWindow(prisma, ispId, subscription) {
-    const now = new Date();
+    const now = atPlanBoundary();
+    if (Number(subscription?.graceDaysBalance || 0) + Number(subscription?.adminExtensionDays || 0) > 0) {
+        return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
+    }
     if (!subscription?.isTrial) return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
     const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
     const deductTrial = setting?.value === 'true';
@@ -201,10 +197,11 @@ async function extendSubscription(req, res, next) {
 
         let newPlanEnd;
         if (extendToDate) {
-            newPlanEnd = new Date(extendToDate);
+            newPlanEnd = atPlanBoundary(extendToDate);
         } else {
             newPlanEnd = new Date(subscription.planEnd);
             newPlanEnd.setDate(newPlanEnd.getDate() + Number(days));
+            newPlanEnd = atPlanBoundary(newPlanEnd);
         }
 
         if (isNaN(newPlanEnd.getTime()) || newPlanEnd <= new Date(subscription.planEnd)) {

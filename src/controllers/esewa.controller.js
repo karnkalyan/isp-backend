@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
 const { logAudit } = require('../utils/auditLogger');
+const { atPlanBoundary, getDeductibleRenewalBase } = require('../utils/dateHelper');
 
 async function syncEsewaAccounting(prisma, ispId, orderId) {
   try {
@@ -41,18 +42,14 @@ function generateEsewaReferenceCode(orderId) {
 }
 
 function getRenewalBase(subscription, now = new Date()) {
-  const planEnd = subscription?.planEnd ? new Date(subscription.planEnd) : now;
-  const graceDays = Math.max(0, Number(subscription?.graceDaysBalance || 0));
-  const adminDays = Math.max(0, Number(subscription?.adminExtensionDays || 0));
-  const deductibleDays = graceDays + adminDays;
-  const expiryBeforeExtension = new Date(planEnd);
-  expiryBeforeExtension.setDate(expiryBeforeExtension.getDate() - deductibleDays);
-  if (deductibleDays > 0) return expiryBeforeExtension;
-  return planEnd >= now ? planEnd : now;
+  return getDeductibleRenewalBase(subscription, now);
 }
 
 async function getRenewalWindow(prisma, ispId, subscription) {
-  const now = new Date();
+  const now = atPlanBoundary();
+  if (Number(subscription?.graceDaysBalance || 0) + Number(subscription?.adminExtensionDays || 0) > 0) {
+    return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
+  }
   if (!subscription?.isTrial) return { planStart: getRenewalBase(subscription, now), trialDeductionDays: 0 };
   const setting = await prisma.iSPSettings.findFirst({ where: { ispId: Number(ispId), key: 'trialDeductionOnSubscriptionActivation' } });
   const trialMs = Math.max(0, new Date(subscription.planEnd) - new Date(subscription.planStart));
@@ -1151,6 +1148,7 @@ const processPayment = async (req, res, next) => {
     const durationStr = String(pkg.packageDuration || "1 month");
     const expiryDateObj = computeExpiryFromBase(renewalBase, durationStr);
     if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
+    expiryDateObj.setHours(0, 0, 0, 0);
 
     const orderItemsData = buildPackageOrderItems(pkg, otcItems, customer.isFree);
 
@@ -1434,6 +1432,7 @@ const confirmPayment = async (req, res) => {
       const renewalBase = renewalWindow.planStart;
       const expiryDateObj = computeExpiryFromBase(renewalBase, String(pkg.packageDuration || "1 month"));
       if (renewalWindow.trialDeductionDays > 0) expiryDateObj.setDate(expiryDateObj.getDate() - renewalWindow.trialDeductionDays);
+      expiryDateObj.setHours(0, 0, 0, 0);
 
       // Update Subscription
       const updatedSubData = {
@@ -1769,6 +1768,7 @@ const completeEpayRenewal = async (req, res, next) => {
     const planStart = renewalWindow.planStart;
     const planEnd = computeExpiryFromBase(planStart, pkg.packageDuration);
     if (renewalWindow.trialDeductionDays > 0) planEnd.setDate(planEnd.getDate() - renewalWindow.trialDeductionDays);
+    planEnd.setHours(0, 0, 0, 0);
     const renewalItems = buildPackageOrderItems(pkg, pkg.oneTimeCharges, payment.customer.isFree);
 
     const order = await req.prisma.$transaction(async tx => {
