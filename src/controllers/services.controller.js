@@ -912,7 +912,11 @@ class ServiceController {
       const ispId = req.ispId;
       const { customerId, provisioning, ...subscriberData } = req.body || {};
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
-      const normalizedSubscriberData = { ...subscriberData, has_ratv: 1, status: 1 };
+      const normalizedSubscriberData = {
+        ...subscriberData,
+        has_ratv: subscriberData.has_ratv === 0 || subscriberData.has_ratv === '0' ? 0 : 1,
+        status: subscriberData.status === 0 || subscriberData.status === '0' ? 0 : 1
+      };
       const subscriberGroupId = Number(normalizedSubscriberData.subscriber_group_id || provisioning?.subscriber_group_id || 6);
       delete normalizedSubscriberData.subscriber_group_id;
       const result = await client.createSubscriber(normalizedSubscriberData);
@@ -969,8 +973,14 @@ class ServiceController {
       const ispId = req.ispId;
       const { username } = req.params;
       const client = await ServiceFactory.getClient(SERVICE_CODES.NETTV, ispId);
-      const result = await client.updateSubscriber(username, req.body || {});
-      await this.#syncNetTVCustomerService(username, req.body || {}, result, ispId).catch(error => {
+      const { subscriber_group_id: subscriberGroupId, ...updateData } = req.body || {};
+      const result = await client.updateSubscriber(username, updateData);
+      if (subscriberGroupId) {
+        const overview = await client.getSubscriberOverview(username);
+        const subscriberId = result?.subscriber?.id || result?.data?.id || result?.id || overview?.subscriber?.id || overview?.data?.id;
+        if (subscriberId) await client.assignSubscriberGroup(subscriberId, Number(subscriberGroupId));
+      }
+      await this.#syncNetTVCustomerService(username, updateData, result, ispId).catch(error => {
         console.warn('NetTV local customer sync skipped:', error.message);
       });
       return res.json({ success: true, data: result });

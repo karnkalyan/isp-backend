@@ -4868,7 +4868,11 @@ async function reprovisionNettv(req, res, next) {
     
     // Reprovision is equivalent to calling createSubscriber to upsert/update configuration on NetTV
     const { provisioning: nettvProvisioning, ...subscriberData } = nettvData;
-    const normalizedSubscriberData = { ...subscriberData, has_ratv: 1, status: 1 };
+    const normalizedSubscriberData = {
+      ...subscriberData,
+      has_ratv: subscriberData.has_ratv === 0 || subscriberData.has_ratv === '0' ? 0 : 1,
+      status: subscriberData.status === 0 || subscriberData.status === '0' ? 0 : 1
+    };
     const subscriberGroupId = Number(subscriberData.subscriber_group_id || nettvProvisioning?.subscriber_group_id || 6);
     delete normalizedSubscriberData.subscriber_group_id;
     const result = await client.createSubscriber(normalizedSubscriberData);
