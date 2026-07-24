@@ -550,6 +550,10 @@ async function payOrder(req, res, next) {
                 where: { customerId: customer.id },
                 data: { status: 'active' }
             });
+            await prisma.connectionUser.updateMany({
+                where: { customerId: customer.id, isDeleted: false },
+                data: { isActive: true }
+            });
         }
 
         const pppUsers = await prisma.connectionUser.findMany({
@@ -770,6 +774,10 @@ async function renewSubscription(req, res, next) {
             await tx.customerServiceConnection.updateMany({
                 where: { customerId: customer.id },
                 data: { status: 'active' }
+            });
+            await tx.connectionUser.updateMany({
+                where: { customerId: customer.id, isDeleted: false },
+                data: { isActive: true }
             });
 
             return created;

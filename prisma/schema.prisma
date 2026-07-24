@@ -2019,6 +2019,8 @@ model Tr069Device {
   ipAddress       String?
   status          String?   @default("offline")
   lastContact     DateTime?
+  rxPower         Float?
+  uptime          Int?
   firmwareVersion String?
   macAddress      String?
   notes           String?

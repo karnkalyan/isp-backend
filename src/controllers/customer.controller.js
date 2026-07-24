@@ -3201,13 +3201,22 @@ const subscribePackage = async (req, res, next) => {
         data: updatedSubData
       });
 
-      // FIX: update the correct field 'isRechargeable' to true after first order
-      if (!customer.isRechargeable) {
-        await tx.customer.update({
-          where: { id: customer.id },
-          data: { isRechargeable: true }
-        });
-      }
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: {
+          isRechargeable: true,
+          status: 'active',
+          onboardStatus: 'fully_onboarded'
+        }
+      });
+      await tx.customerServiceConnection.updateMany({
+        where: { customerId: customer.id },
+        data: { status: 'active' }
+      });
+      await tx.connectionUser.updateMany({
+        where: { customerId: customer.id, isDeleted: false },
+        data: { isActive: true }
+      });
 
       const order = await tx.customerOrderManagement.create({
         data: {
@@ -3242,6 +3251,23 @@ const subscribePackage = async (req, res, next) => {
     }
 
     await logAudit(req.prisma, req.user?.id, 'CUSTOMER_PACKAGE_RENEW', { id: customer.id, packageId: pkg.id, packageName: pkg.packageName, totalAmount }, req);
+
+    try {
+      const radius = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
+      const users = await req.prisma.connectionUser.findMany({
+        where: { customerId: customer.id, isDeleted: false, isActive: true },
+        select: { username: true }
+      });
+      for (const user of users) {
+        if (!user.username) continue;
+        await radius.updateExpiration(user.username, expiryDateObj);
+        await radius.disconnectAllSessions(user.username).catch(error => {
+          console.warn(`[CUSTOMER RECHARGE] RADIUS disconnect failed for ${user.username}:`, error.message);
+        });
+      }
+    } catch (radiusError) {
+      console.error('[CUSTOMER RECHARGE] RADIUS synchronization failed:', radiusError.message);
+    }
 
     return res.status(201).json({
       success: true,

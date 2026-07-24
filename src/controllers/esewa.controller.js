@@ -1221,7 +1221,9 @@ const processPayment = async (req, res, next) => {
 
       // C. Update Customer Status & Subscribed Package
       const customerUpdateData = {
-        isRechargeable: true
+        isRechargeable: true,
+        status: 'active',
+        onboardStatus: 'fully_onboarded'
       };
       if (pkg.id !== customer.subscribedPkgId) {
         customerUpdateData.subscribedPkgId = pkg.id;
@@ -1229,6 +1231,14 @@ const processPayment = async (req, res, next) => {
       await tx.customer.update({
         where: { id: customer.id },
         data: customerUpdateData
+      });
+      await tx.customerServiceConnection.updateMany({
+        where: { customerId: customer.id },
+        data: { status: 'active' }
+      });
+      await tx.connectionUser.updateMany({
+        where: { customerId: customer.id, isDeleted: false },
+        data: { isActive: true }
       });
 
       // D. Create Order Management Record
@@ -1456,7 +1466,9 @@ const confirmPayment = async (req, res) => {
 
       // Update Customer Status & Subscribed Package
       const customerUpdateData = {
-        isRechargeable: true
+        isRechargeable: true,
+        status: 'active',
+        onboardStatus: 'fully_onboarded'
       };
       if (pkg.id !== customer.subscribedPkgId) {
         customerUpdateData.subscribedPkgId = pkg.id;
@@ -1464,6 +1476,14 @@ const confirmPayment = async (req, res) => {
       await tx.customer.update({
         where: { id: customer.id },
         data: customerUpdateData
+      });
+      await tx.customerServiceConnection.updateMany({
+        where: { customerId: customer.id },
+        data: { status: 'active' }
+      });
+      await tx.connectionUser.updateMany({
+        where: { customerId: customer.id, isDeleted: false },
+        data: { isActive: true }
       });
 
       // Mark eSewa Token as Completed
@@ -1793,6 +1813,14 @@ const completeEpayRenewal = async (req, res, next) => {
         customerUpdateData.subscribedPkgId = pkg.id;
       }
       await tx.customer.update({ where: { id: customerId }, data: customerUpdateData });
+      await tx.customerServiceConnection.updateMany({
+        where: { customerId },
+        data: { status: 'active' }
+      });
+      await tx.connectionUser.updateMany({
+        where: { customerId, isDeleted: false },
+        data: { isActive: true }
+      });
       
       await tx.eSewaTokenPayment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', paidAt: new Date(), eSewaTransactionCode: response.transaction_code, referenceCode: statusResponse.data.ref_id || response.transaction_code, orderId: String(createdOrder.id) } });
 

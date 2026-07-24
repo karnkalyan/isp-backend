@@ -30,7 +30,7 @@ async function syncDevices(req, res, next) {
 
     // Fetch devices from GenieACS with enough WAN data to list IP and PPPoE username.
     const devices = await genieClient.getDevices({
-      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo.SoftwareVersion,InternetGatewayDevice.WANDevice'
+      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,VirtualParameters'
     });
 
     if (!Array.isArray(devices)) {
@@ -79,6 +79,8 @@ async function syncDevices(req, res, next) {
         modelName: device._deviceId?._ModelName || null,
         status: isOnline(device._lastInform) ? 'online' : 'offline',
         lastContact: device._lastInform ? new Date(device._lastInform) : null,
+        rxPower: extractRxPower(device),
+        uptime: extractUptime(device),
         firmwareVersion: extractValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion'),
         ipAddress,
         notes: JSON.stringify({ username: username || null }),
@@ -150,7 +152,7 @@ async function syncDevice(req, res, next) {
 
     const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, req.ispId);
     const device = await genieClient.getDeviceBySerial(serialNumber, {
-      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice'
+      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,VirtualParameters'
     });
     if (!device) return res.status(404).json({ error: 'Device was not found in ACS' });
 
@@ -166,6 +168,8 @@ async function syncDevice(req, res, next) {
         modelName: device._deviceId?._ModelName || localDevice.modelName,
         status: isOnline(device._lastInform) ? 'online' : 'offline',
         lastContact: device._lastInform ? new Date(device._lastInform) : localDevice.lastContact,
+        rxPower: extractRxPower(device),
+        uptime: extractUptime(device),
         firmwareVersion: extractValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion') || localDevice.firmwareVersion,
         ipAddress: ipAddress || localDevice.ipAddress,
         notes: JSON.stringify({ ...oldNotes, username: username || oldNotes.username || null }),
@@ -278,9 +282,9 @@ async function listDevices(req, res, next) {
       ipAddress: d.ipAddress || 'N/A',
       username: parseDeviceNotes(d.notes).username || 'N/A',
       status: d.status,
-      signal: 'N/A', // Signal currently not stored in local DB
+      signal: formatRxPower(d.rxPower),
       lastContact: d.lastContact,
-      uptime: 'N/A', // Uptime currently not stored in local DB
+      uptime: formatUptime(d.uptime),
       ProductClass: d.productClass,
       Manufacturer: d.manufacturer,
       SerialNumber: d.serialNumber,
@@ -400,9 +404,9 @@ async function getDeviceBySerial(req, res, next) {
       ipAddress: device.ipAddress || 'N/A',
       status: device.status,
       username: parseDeviceNotes(device.notes).username || 'N/A',
-      signal: 'N/A',
+      signal: formatRxPower(device.rxPower),
       lastContact: device.lastContact,
-      uptime: 'N/A',
+      uptime: formatUptime(device.uptime),
       ProductClass: device.productClass,
       Manufacturer: device.manufacturer,
       SerialNumber: device.serialNumber,
@@ -590,6 +594,40 @@ function readGenieValue(value) {
     return value._value == null ? null : String(value._value);
   }
   return value == null ? null : String(value);
+}
+
+function extractRxPower(device) {
+  const candidates = [
+    extractValue(device, 'VirtualParameters.RxPower'),
+    extractValue(device, 'VirtualParameters.SignalStrength'),
+    extractValue(device, 'InternetGatewayDevice.DeviceInfo.XponInterface.RXPower')
+  ];
+  for (const candidate of candidates) {
+    const match = String(candidate ?? '').match(/[+-]?\d+(?:\.\d+)?/);
+    if (match) return Number(match[0]);
+  }
+  return null;
+}
+
+function extractUptime(device) {
+  const value = extractValue(device, 'InternetGatewayDevice.DeviceInfo.UpTime');
+  const seconds = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function formatRxPower(value) {
+  return value === null || value === undefined || !Number.isFinite(Number(value))
+    ? 'N/A'
+    : `${Number(value)} dBm`;
+}
+
+function formatUptime(value) {
+  const totalSeconds = Number(value);
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return 'N/A';
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  return [days ? `${days}d` : '', hours ? `${hours}h` : '', `${minutes}m`].filter(Boolean).join(' ');
 }
 
 function parseDeviceNotes(notes) {
