@@ -149,20 +149,22 @@ async function approveRejectRequest(req, res, next) {
                 });
 
                 const now = new Date();
-                const expiryDate = computeExpiryFromBase(String(newPackage.packageDuration || '1 Day'));
 
-                let updatedSubscription;
                 if (customer.customerSubscriptions.length > 0) {
                     const sub = customer.customerSubscriptions[0];
-                    updatedSubscription = await tx.customerSubscription.update({
+                    await tx.customerSubscription.update({
                         where: { id: sub.id },
-                        data: { packagePriceId: Number(newPackageId), planEnd: expiryDate, updatedAt: now }
+                        data: {
+                            packagePrice: { connect: { id: Number(newPackageId) } },
+                            updatedAt: now
+                        }
                     });
                 } else {
-                    updatedSubscription = await tx.customerSubscription.create({
+                    const expiryDate = computeExpiryFromBase(String(newPackage.packageDuration || '1 Month'));
+                    await tx.customerSubscription.create({
                         data: {
                             customer: { connect: { id: customer.id } },
-                            packagePriceId: Number(newPackageId),
+                            packagePrice: { connect: { id: Number(newPackageId) } },
                             planStart: now,
                             planEnd: expiryDate,
                             isTrial: newPackage.isTrial || false,
@@ -171,36 +173,6 @@ async function approveRejectRequest(req, res, next) {
                         }
                     });
                 }
-
-                const renewalAmount = newPackage.renewAmountWithTax !== null && newPackage.renewAmountWithTax !== undefined
-                    ? Number(newPackage.renewAmountWithTax)
-                    : Number(newPackage.price || 0);
-                const orderAmount = customer.isFree ? 0 : renewalAmount;
-                const baseItemPrice = customer.isFree ? 0 : (newPackage.price || 0);
-
-                await tx.customerOrderManagement.create({
-                    data: {
-                        customerId: customer.id,
-                        subscriptionId: updatedSubscription.id,
-                        packagePriceId: Number(newPackageId),
-                        packageStart: updatedSubscription.planStart,
-                        packageEnd: updatedSubscription.planEnd,
-                        orderDate: now,
-                        totalAmount: orderAmount,
-                        isActive: true,
-                        isDeleted: false,
-                        orderType: 'package_change',
-                        items: {
-                            create: [
-                                {
-                                    itemName: `${newPackage.packageName || 'Package'} - Package Change`,
-                                    referenceId: newPackage.referenceId || null,
-                                    itemPrice: baseItemPrice
-                                }
-                            ]
-                        }
-                    }
-                });
             });
         } 
         else if (request.type === 'DISCOUNT') {

@@ -3596,7 +3596,6 @@ async function changePackage(req, res, next) {
       });
 
       const now = new Date();
-      const expiryDate = computeExpiryFromBase(String(newPackage.packageDuration || '1 Day'));
 
       if (customer.customerSubscriptions.length > 0) {
         const sub = customer.customerSubscriptions[0];
@@ -3604,11 +3603,11 @@ async function changePackage(req, res, next) {
           where: { id: sub.id },
           data: {
             packagePrice: { connect: { id: Number(newPackageId) } },
-            planEnd: expiryDate,
             updatedAt: now
           }
         });
       } else {
+        const expiryDate = computeExpiryFromBase(String(newPackage.packageDuration || '1 Month'));
         updatedSubscription = await tx.customerSubscription.create({
           data: {
             customer: { connect: { id: customerId } },
@@ -3621,38 +3620,9 @@ async function changePackage(req, res, next) {
           }
         });
       }
-
-      // Create order for package change
-      const renewalAmount = newPackage.renewAmountWithTax !== null && newPackage.renewAmountWithTax !== undefined
-        ? Number(newPackage.renewAmountWithTax)
-        : Number(newPackage.price || 0);
-      const orderAmount = customer.isFree ? 0 : renewalAmount;
-      const baseItemPrice = customer.isFree ? 0 : (newPackage.price || 0);
-      await tx.customerOrderManagement.create({
-        data: {
-          customer: { connect: { id: customerId } },
-          subscription: { connect: { id: updatedSubscription.id } },
-          packagePrice: { connect: { id: Number(newPackageId) } },
-          packageStart: updatedSubscription.planStart,
-          packageEnd: updatedSubscription.planEnd,
-          orderDate: now,
-          totalAmount: orderAmount,
-          isActive: true,
-          isDeleted: false,
-          items: {
-            create: [
-              {
-                itemName: `${newPackage.packageName || 'Package'} - Package Change`,
-                referenceId: newPackage.referenceId || null,
-                itemPrice: baseItemPrice
-              }
-            ]
-          }
-        }
-      });
     });
 
-    // Sync package change to RADIUS (update radusergroup and Expiration)
+    // Sync package change to RADIUS (update radusergroup and send CoA disconnect)
     try {
       const connectionUser = await req.prisma.connectionUser.findFirst({
         where: { customerId, isDeleted: false }
@@ -3665,9 +3635,6 @@ async function changePackage(req, res, next) {
                          newPackage.packageName;
         if (planCode) {
           await radiusClient.updateUserGroup(connectionUser.username, planCode);
-        }
-        if (updatedSubscription?.planEnd) {
-          await radiusClient.updateExpiration(connectionUser.username, updatedSubscription.planEnd);
         }
         await radiusClient.sendCoA(connectionUser.username, { action: 'disconnect' }).catch(() => {});
       }
