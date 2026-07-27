@@ -2,6 +2,19 @@
  * Date Helper Utility
  */
 
+function setNepalMidnight(dateInput) {
+  const d = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput || Date.now());
+  if (isNaN(d.getTime())) return d;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kathmandu',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(d);
+  const getVal = type => parts.find(p => p.type === type)?.value;
+  return new Date(`${getVal('year')}-${getVal('month')}-${getVal('day')}T00:00:00+05:45`);
+}
+
 /**
  * Compute expiry date from a base date + duration string.
  */
@@ -40,8 +53,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 
   if (!durationString && durationString !== 0) {
     date.setMonth(date.getMonth() + 1);
-    date.setHours(0, 0, 0, 0);
-    return date;
+    return setNepalMidnight(date);
   }
 
   let s = String(durationString).trim().toLowerCase()
@@ -56,8 +68,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
     if (u === 'd') date.setDate(date.getDate() + v);
     else if (u === 'm') date.setMonth(date.getMonth() + v);
     else if (u === 'y') date.setFullYear(date.getFullYear() + v);
-    date.setHours(0, 0, 0, 0);
-    return date;
+    return setNepalMidnight(date);
   }
 
   const re = /(\d+)\s*(?:-?\s*)?(d(?:ays?)?|day|m(?:o(?:nths?)?)?|mo|month(?:s)?|months?|y(?:ears?|r)?|yr|year(?:s)?)/i;
@@ -67,12 +78,10 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
     const anyNum = s.match(/(\d+)/);
     if (anyNum) {
       date.setMonth(date.getMonth() + parseInt(anyNum[1], 10));
-      date.setHours(0, 0, 0, 0);
-      return date;
+      return setNepalMidnight(date);
     }
     date.setMonth(date.getMonth() + 1);
-    date.setHours(0, 0, 0, 0);
-    return date;
+    return setNepalMidnight(date);
   }
 
   const value = parseInt(m[1], 10);
@@ -86,15 +95,13 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   else if (unit === 'month') date.setMonth(date.getMonth() + value);
   else if (unit === 'year') date.setFullYear(date.getFullYear() + value);
 
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return setNepalMidnight(date);
 }
 
 function atPlanBoundary(value = new Date()) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return new Date(NaN);
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return setNepalMidnight(date);
 }
 
 function getDeductibleRenewalBase(subscription, now = new Date()) {

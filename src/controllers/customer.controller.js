@@ -491,6 +491,19 @@ async function assertCustomerOwnsSerial(req, res, next) {
   }
 }
 
+function setNepalMidnight(dateInput) {
+  const d = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput || Date.now());
+  if (isNaN(d.getTime())) return d;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kathmandu',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(d);
+  const getVal = type => parts.find(p => p.type === type)?.value;
+  return new Date(`${getVal('year')}-${getVal('month')}-${getVal('day')}T00:00:00+05:45`);
+}
+
 /**
  * Compute expiry date from a base date + duration string.
  */
@@ -529,7 +542,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
 
   if (!durationString && durationString !== 0) {
     date.setMonth(date.getMonth() + 1);
-    return date;
+    return setNepalMidnight(date);
   }
 
   let s = String(durationString).trim().toLowerCase()
@@ -541,9 +554,9 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   if (isoMatch) {
     const v = parseInt(isoMatch[1], 10);
     const u = isoMatch[2].toLowerCase();
-    if (u === 'd') { date.setDate(date.getDate() + v); return date; }
-    if (u === 'm') { date.setMonth(date.getMonth() + v); return date; }
-    if (u === 'y') { date.setFullYear(date.getFullYear() + v); return date; }
+    if (u === 'd') { date.setDate(date.getDate() + v); return setNepalMidnight(date); }
+    if (u === 'm') { date.setMonth(date.getMonth() + v); return setNepalMidnight(date); }
+    if (u === 'y') { date.setFullYear(date.getFullYear() + v); return setNepalMidnight(date); }
   }
 
   const re = /(\d+)\s*(?:-?\s*)?(d(?:ays?)?|day|m(?:o(?:nths?)?)?|mo|month(?:s)?|months?|y(?:ears?|r)?|yr|year(?:s)?)/i;
@@ -553,10 +566,10 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
     const anyNum = s.match(/(\d+)/);
     if (anyNum) {
       date.setMonth(date.getMonth() + parseInt(anyNum[1], 10));
-      return date;
+      return setNepalMidnight(date);
     }
     date.setMonth(date.getMonth() + 1);
-    return date;
+    return setNepalMidnight(date);
   }
 
   const value = parseInt(m[1], 10);
@@ -570,7 +583,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   else if (unit === 'month') date.setMonth(date.getMonth() + value);
   else if (unit === 'year') date.setFullYear(date.getFullYear() + value);
 
-  return date;
+  return setNepalMidnight(date);
 }
 
 /**
@@ -1215,9 +1228,8 @@ async function createCustomer(req, res, next) {
       if (autoTrialEnabled) {
         const parsedTrialDays = trialSetting ? parseInt(trialSetting.value, 10) : 3;
         const trialDays = Number.isFinite(parsedTrialDays) && parsedTrialDays > 0 ? parsedTrialDays : 3;
-        const testStart = new Date();
-        const testEnd = new Date(testStart);
-        testEnd.setDate(testEnd.getDate() + trialDays);
+        const testStart = setNepalMidnight(new Date());
+        const testEnd = setNepalMidnight(new Date(testStart.getTime() + trialDays * 24 * 60 * 60 * 1000));
 
         subscription = await tx.customerSubscription.create({
           data: {
