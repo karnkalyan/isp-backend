@@ -1256,7 +1256,7 @@ async function createCustomer(req, res, next) {
         let radiusGroupName = '';
         if (subscribedPackage) {
           radiusGroupName = subscribedPackage.packagePlanDetails?.planCode ||
-                            subscribedPackage.referenceId ||
+                            subscribedPackage.packagePlanDetails?.planName ||
                             subscribedPackage.packageName ||
                             '';
         }
@@ -1264,6 +1264,25 @@ async function createCustomer(req, res, next) {
         const expiryDate = subscription?.planEnd ? formatRadiusExpiration(subscription.planEnd) : null;
         const attributes = {};
         if (expiryDate) attributes.Expiration = expiryDate;
+
+        let selectedNasName = null;
+        if (newCustomer.nasId || req.body.nasId) {
+          const nasRecord = await prisma.nas.findFirst({
+            where: { id: Number(newCustomer.nasId || req.body.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
+          });
+          if (nasRecord) selectedNasName = nasRecord.nasname;
+        }
+        if (!selectedNasName) {
+          const defaultNas = await prisma.nas.findFirst({
+            where: { ispId: req.ispId, isActive: true, isDeleted: false },
+            orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }]
+          });
+          if (defaultNas) selectedNasName = defaultNas.nasname;
+        }
+        if (selectedNasName) {
+          attributes['NAS-IP-Address'] = selectedNasName;
+        }
+
         const groups = radiusGroupName ? [radiusGroupName] : [];
 
         // Get Service ID
@@ -1912,25 +1931,31 @@ async function provisionCustomer(req, res, next) {
                   ...(data.attributes || {}),
                   Expiration: formatRadiusExpiration(testSubscription.planEnd)
                 };
-                if (data.nasId) {
-                  const selectedNas = await prisma.nas.findFirst({
-                    where: { id: Number(data.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
-                  });
-                  if (!selectedNas) throw new Error('Selected NAS is not available');
-                  data.attributes = { ...(data.attributes || {}), 'NAS-IP-Address': selectedNas.nasname };
-                } else {
+                let nasIp = data.attributes?.['NAS-IP-Address'];
+                if (!nasIp) {
                   const availableNas = await prisma.nas.findMany({
                     where: { ispId: req.ispId, isActive: true, isDeleted: false },
                     orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }]
                   });
-                  const fallbackNas = availableNas.find(nas => nas.isDefault) || (availableNas.length === 1 ? availableNas[0] : null);
-                  if (fallbackNas) data.attributes = { ...(data.attributes || {}), 'NAS-IP-Address': fallbackNas.nasname };
+                  let selectedNas = null;
+                  if (data.nasId) {
+                    selectedNas = availableNas.find(n => n.id === Number(data.nasId));
+                  }
+                  if (!selectedNas) {
+                    selectedNas = availableNas.find(nas => nas.isDefault) || availableNas[0] || null;
+                  }
+                  if (selectedNas) {
+                    nasIp = selectedNas.nasname;
+                  }
+                }
+                if (nasIp) {
+                  data.attributes = { ...(data.attributes || {}), 'NAS-IP-Address': nasIp };
                 }
                 if (testSubscription?.packagePrice) {
                   const radiusGroupName =
                     data.planCode ||
                     testSubscription.packagePrice.packagePlanDetails?.planCode ||
-                    (Array.isArray(data.groups) ? data.groups.find(Boolean) : null) ||
+                    testSubscription.packagePrice.packagePlanDetails?.planName ||
                     testSubscription.packagePrice.packageName;
                   if (radiusGroupName) data.groups = [radiusGroupName];
                 }
@@ -3534,27 +3559,26 @@ async function changePackage(req, res, next) {
     });
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
-    const isGlobalAdmin = req.user.role === 'admin' || 
-                         req.user.role?.name === 'administrator' || 
-                         req.user.role?.name === 'isp_admin' || 
-                         req.user.role?.name === 'super admin' || 
-                         req.user.role?.name?.startsWith('global') ||
-                         req.user.role?.name?.toLowerCase().includes('admin');
+    if (req.body.requestApproval) {
+      const targetBranch = await req.prisma.branch.findFirst({
+        where: { id: req.branchId || customer.branchId || undefined, ispId: req.ispId }
+      }) || await req.prisma.branch.findFirst({ where: { ispId: req.ispId } });
 
-    if (!isGlobalAdmin) {
-      await req.prisma.branchRequest.create({
-        data: {
-          ispId: req.ispId,
-          branchId: req.branchId || customer.branchId || 1,
-          customerId: customerId,
-          type: 'PACKAGE_CHANGE',
-          status: 'PENDING',
-          details: JSON.stringify({ newPackageId: Number(newPackageId) }),
-          reason: req.body.reason || 'Package change requested by branch user',
-          requestedBy: req.user.id
-        }
-      });
-      return res.json({ success: true, message: "Package change request submitted to admin for approval." });
+      if (targetBranch) {
+        await req.prisma.branchRequest.create({
+          data: {
+            ispId: req.ispId,
+            branchId: targetBranch.id,
+            customerId: customerId,
+            type: 'PACKAGE_CHANGE',
+            status: 'PENDING',
+            details: JSON.stringify({ newPackageId: Number(newPackageId) }),
+            reason: req.body.reason || 'Package change requested by branch user',
+            requestedBy: req.user.id
+          }
+        });
+        return res.json({ success: true, message: "Package change request submitted to admin for approval." });
+      }
     }
 
     const newPackage = await req.prisma.packagePrice.findFirst({
@@ -3578,13 +3602,17 @@ async function changePackage(req, res, next) {
         const sub = customer.customerSubscriptions[0];
         updatedSubscription = await tx.customerSubscription.update({
           where: { id: sub.id },
-          data: { packagePriceId: Number(newPackageId), planEnd: expiryDate, updatedAt: now }
+          data: {
+            packagePrice: { connect: { id: Number(newPackageId) } },
+            planEnd: expiryDate,
+            updatedAt: now
+          }
         });
       } else {
         updatedSubscription = await tx.customerSubscription.create({
           data: {
             customer: { connect: { id: customerId } },
-            packagePriceId: Number(newPackageId),
+            packagePrice: { connect: { id: Number(newPackageId) } },
             planStart: now,
             planEnd: expiryDate,
             isTrial: newPackage.isTrial || false,
@@ -3602,16 +3630,15 @@ async function changePackage(req, res, next) {
       const baseItemPrice = customer.isFree ? 0 : (newPackage.price || 0);
       await tx.customerOrderManagement.create({
         data: {
-          customerId: customerId,
-          subscriptionId: updatedSubscription.id,
-          packagePriceId: Number(newPackageId),
+          customer: { connect: { id: customerId } },
+          subscription: { connect: { id: updatedSubscription.id } },
+          packagePrice: { connect: { id: Number(newPackageId) } },
           packageStart: updatedSubscription.planStart,
           packageEnd: updatedSubscription.planEnd,
           orderDate: now,
           totalAmount: orderAmount,
           isActive: true,
           isDeleted: false,
-          orderType: 'package_change',
           items: {
             create: [
               {
@@ -3625,11 +3652,34 @@ async function changePackage(req, res, next) {
       });
     });
 
+    // Sync package change to RADIUS (update radusergroup and Expiration)
+    try {
+      const connectionUser = await req.prisma.connectionUser.findFirst({
+        where: { customerId, isDeleted: false }
+      });
+      if (connectionUser) {
+        const { RadiusClient } = require('../services/radiusClient');
+        const radiusClient = await RadiusClient.create(req.ispId);
+        const planCode = newPackage.packagePlanDetails?.planCode ||
+                         newPackage.packagePlanDetails?.planName ||
+                         newPackage.packageName;
+        if (planCode) {
+          await radiusClient.updateUserGroup(connectionUser.username, planCode);
+        }
+        if (updatedSubscription?.planEnd) {
+          await radiusClient.updateExpiration(connectionUser.username, updatedSubscription.planEnd);
+        }
+        await radiusClient.sendCoA(connectionUser.username, { action: 'disconnect' }).catch(() => {});
+      }
+    } catch (radErr) {
+      console.warn('[CHANGE PACKAGE] RADIUS update error:', radErr.message);
+    }
+
     await logAudit(req.prisma, req.user?.id, 'CUSTOMER_PACKAGE_CHANGE', { id: customerId, newPackageId: Number(newPackageId), packageName: newPackage.packageName }, req);
 
     return res.json({
       success: true,
-      message: "Package updated successfully (database only)",
+      message: "Package updated successfully",
       data: { oldPackage: customer.subscribedPkg, newPackage, subscription: updatedSubscription }
     });
   } catch (err) {
@@ -4625,7 +4675,7 @@ async function reprovisionRadius(req, res, next) {
         include: { packagePlanDetails: true }
       });
       radiusGroupName = packagePrice?.packagePlanDetails?.planCode ||
-                        packagePrice?.referenceId ||
+                        packagePrice?.packagePlanDetails?.planName ||
                         packagePrice?.packageName ||
                         '';
     }
@@ -4661,6 +4711,25 @@ async function reprovisionRadius(req, res, next) {
     // Create user in Radius
     const attributes = {};
     if (expiryDate) attributes.Expiration = expiryDate;
+
+    let selectedNasName = null;
+    if (customer.nasId) {
+      const nasRecord = await prisma.nas.findFirst({
+        where: { id: Number(customer.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
+      });
+      if (nasRecord) selectedNasName = nasRecord.nasname;
+    }
+    if (!selectedNasName) {
+      const defaultNas = await prisma.nas.findFirst({
+        where: { ispId: req.ispId, isActive: true, isDeleted: false },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }]
+      });
+      if (defaultNas) selectedNasName = defaultNas.nasname;
+    }
+    if (selectedNasName) {
+      attributes['NAS-IP-Address'] = selectedNasName;
+    }
+
     const groups = radiusGroupName ? [radiusGroupName] : [];
 
     const result = await client.createUser(

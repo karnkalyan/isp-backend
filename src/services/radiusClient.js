@@ -774,6 +774,31 @@ class RadiusClient {
   }
 
   /**
+   * Update User Group in Radius (radusergroup)
+   */
+  async updateUserGroup(username, groupname) {
+    try {
+      const existingEntries = await this.getRadusergroupByUsername(username).catch(() => []);
+      for (const entry of existingEntries) {
+        if (entry.id) {
+          await this.deleteRadusergroup(entry.id).catch(() => {});
+        }
+      }
+      if (groupname) {
+        return await this.createRadusergroup({
+          username,
+          groupname,
+          priority: 0
+        });
+      }
+      return null;
+    } catch (error) {
+      console.error(`[RADIUS GROUP] Failed to update group for user ${username}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Update User Expiration in Radius
    */
   async updateExpiration(username, date) {

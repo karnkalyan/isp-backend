@@ -200,7 +200,7 @@ class NetTVClient {
             // Check for API errors
             if (response.data && response.data.error) {
                 console.error(`[NETTV RESPONSE ERROR] ${method.toUpperCase()} ${endpoint} - Error:`, response.data.error);
-                
+
                 await prisma.serviceLog.create({
                     data: {
                         ispId: Number(this.#config.ispId || 1),
