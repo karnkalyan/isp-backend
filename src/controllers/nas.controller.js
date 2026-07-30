@@ -44,7 +44,8 @@ async function createNas(req, res, next) {
                 secret: nas.secret,
                 server: nas.server,
                 community: nas.community,
-                description: nas.description
+                description: nas.description,
+                ispid: req.ispId
             });
 
             await req.prisma.nas.update({
@@ -178,7 +179,8 @@ async function updateNas(req, res, next) {
                     secret: updated.secret,
                     server: updated.server,
                     community: updated.community,
-                    description: updated.description
+                    description: updated.description,
+                    ispid: req.ispId
                 });
 
             } catch (err) {
@@ -267,8 +269,13 @@ async function resyncNas(req, res, next) {
         let deletedRadius = 0;
         let createdRadius = 0;
 
+        // Filter radius list to ensure only entries matching req.ispId (or untagged if matching radiusNasId)
+        const filteredRadiusList = Array.isArray(radiusList)
+            ? radiusList.filter(r => !r.ispid || Number(r.ispid) === Number(req.ispId))
+            : [];
+
         // ================= RADIUS → LOCAL =================
-        for (const r of radiusList) {
+        for (const r of filteredRadiusList) {
 
             const local = localList.find(n => n.radiusNasId === r.id);
 
@@ -293,7 +300,8 @@ async function resyncNas(req, res, next) {
                         secret: r.secret,
                         server: r.server,
                         community: r.community,
-                        description: r.description
+                        description: r.description,
+                        ispId: req.ispId
                     }
                 });
 
@@ -327,7 +335,7 @@ async function resyncNas(req, res, next) {
 
             if (local.isDeleted) continue;
 
-            const exists = radiusList.some(r => r.id === local.radiusNasId);
+            const exists = filteredRadiusList.some(r => r.id === local.radiusNasId);
 
             if (!exists) {
 
@@ -339,7 +347,8 @@ async function resyncNas(req, res, next) {
                     secret: local.secret,
                     server: local.server,
                     community: local.community,
-                    description: local.description
+                    description: local.description,
+                    ispid: req.ispId
                 });
 
                 await req.prisma.nas.update({

@@ -1564,7 +1564,7 @@ model nas {
   server      String?
   community   String?
   description String?
-  radiusNasId Int?     @unique
+  radiusNasId Int?
   isActive    Boolean  @default(true)
   isDeleted   Boolean  @default(false)
   isDefault   Boolean  @default(false)
@@ -1574,6 +1574,7 @@ model nas {
   ispId    Int?
   branchId Int?
 
+  @@unique([ispId, radiusNasId], name: "nas_ispId_radiusNasId_key")
   @@index([nasname])
   @@index([ispId])
   @@index([branchId])

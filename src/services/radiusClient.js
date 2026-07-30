@@ -9,9 +9,11 @@ class RadiusClient {
   #token = null;
   #tokenExpiry = null;
   #api;
+  #ispId;
 
   constructor(config) {
     this.#config = config;
+    this.#ispId = config.ispId;
     this.#api = axios.create({
       baseURL: config.baseUrl,
       headers: { 'Content-Type': 'application/json' },
@@ -73,7 +75,8 @@ class RadiusClient {
       username: username,
       password: password,
       apiVersion: radiusService.apiVersion || 'v1',
-      config: radiusService.config || {}
+      config: radiusService.config || {},
+      ispId: ispId
     });
   }
 
@@ -219,12 +222,22 @@ class RadiusClient {
         timeout: 10000
       };
 
-      if (method.toLowerCase() === 'get' && data) {
-        config.params = data;
+      if (method.toLowerCase() === 'get') {
+        config.params = data && typeof data === 'object' ? { ...data } : {};
+        if (this.#ispId && config.params.ispid === undefined) {
+          config.params.ispid = this.#ispId;
+        }
       }
 
-      if (['post', 'put', 'patch'].includes(method.toLowerCase()) && data) {
-        config.data = data;
+      if (['post', 'put', 'patch'].includes(method.toLowerCase())) {
+        if (data && typeof data === 'object') {
+          config.data = { ...data };
+          if (this.#ispId && config.data.ispid === undefined) {
+            config.data.ispid = this.#ispId;
+          }
+        } else {
+          config.data = data;
+        }
       }
 
       const response = await this.#api.request(config);

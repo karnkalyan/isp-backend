@@ -50,6 +50,7 @@ module.exports = (prisma) => {
   // Apply authentication middleware
   router.use(isAuthenticated(prisma));
   router.put('/:id/status', checkPermission('olt_update'), updateOltStatus);
+  router.patch('/:id/status', checkPermission('olt_update'), updateOltStatus);
 
   // OLT Management Routes
   router.get('/', listOlts);
@@ -62,15 +63,6 @@ module.exports = (prisma) => {
   router.get('/:id', getOltById);
   router.put('/:id', checkPermission('olt_update'), updateOlt);
   router.delete('/:id', checkPermission('olt_update'), deleteOlt);
-
-  // OLT Status and Ports
-  router.put('/:id/status', checkPermission('olt_update'), updateOltStatus);
-  router.get('/:id/ports', getOltPortsStatus);
-
-  // OLT ONT Management
-  router.get('/:id/onts', checkPermission('olt_read'), getOntsForOlt);
-
-  // ONT Sync Routes - Updated with separate endpoints
   router.post('/:id/onts/sync', checkPermission('olt_update'), syncOntsFromOlt); // Legacy endpoint
   router.post('/:id/onts/sync-basic', checkPermission('olt_update'), syncOntsBasicFromOlt); // New: Sync basic ONT info
   router.post('/:id/onts/:ontId/sync-details', checkPermission('olt_update'), syncOntDetailsFromOlt); // New: Sync specific ONT details
