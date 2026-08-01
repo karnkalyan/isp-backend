@@ -725,14 +725,14 @@ async function refreshOltPowerBySerial(req, res, next) {
 
         // Upsert ONTDetails record in DB
         await req.prisma.oNTDetails.upsert({
-          where: { serialNumber: ont.serialNumber },
+          where: { ontIdRef: ont.id },
           update: {
             opticalDiagnostics: JSON.parse(JSON.stringify(diagnostics)),
             lastSync: new Date()
           },
           create: {
             ontIdRef: ont.id,
-            ontId: ont.ontId,
+            ontId: ont.ontId || "0",
             fsp: ont.servicePort || "0/0/0",
             serialNumber: ont.serialNumber,
             controlFlag: "active",
