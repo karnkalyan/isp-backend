@@ -11,7 +11,8 @@ const {
   linkLead,
   unlinkLead,
   deleteDevice,
-  getOltPowerBySerial
+  getOltPowerBySerial,
+  refreshOltPowerBySerial
 } = require('../controllers/tr069device.controller');
 
 module.exports = (prisma) => {
@@ -54,6 +55,13 @@ module.exports = (prisma) => {
     '/:serial/olt-power',
     checkPermission('services_read'),
     getOltPowerBySerial
+  );
+
+  // Refresh live OLT power data for a device directly from OLT
+  router.post(
+    '/:serial/refresh-olt-power',
+    checkPermission('services_manage'),
+    refreshOltPowerBySerial
   );
 
   // Get device by serial number

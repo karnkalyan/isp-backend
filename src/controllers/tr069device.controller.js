@@ -45,12 +45,12 @@ async function syncDevices(req, res, next) {
     const serialNumbersToSync = devices.map(d => d._deviceId?._SerialNumber).filter(Boolean);
     const customerDevices = serialNumbersToSync.length
       ? await req.prisma.customerDevice.findMany({
-          where: {
-            serialNumber: { in: serialNumbersToSync },
-            customer: { ispId }
-          },
-          include: { customer: { select: { leadId: true } } }
-        })
+        where: {
+          serialNumber: { in: serialNumbersToSync },
+          customer: { ispId }
+        },
+        include: { customer: { select: { leadId: true } } }
+      })
       : [];
 
     const leadIdBySerial = new Map(
@@ -113,17 +113,17 @@ async function syncDevices(req, res, next) {
 
     const staleResult = syncedSerialNumbers.length
       ? await req.prisma.tr069Device.updateMany({
-          where: {
-            ispId,
-            serialNumber: { notIn: syncedSerialNumbers },
-            isDeleted: false
-          },
-          data: {
-            isActive: false,
-            isDeleted: true,
-            updatedAt: syncStartedAt
-          }
-        })
+        where: {
+          ispId,
+          serialNumber: { notIn: syncedSerialNumbers },
+          isDeleted: false
+        },
+        data: {
+          isActive: false,
+          isDeleted: true,
+          updatedAt: syncStartedAt
+        }
+      })
       : { count: 0 };
 
     return res.json({
@@ -258,32 +258,79 @@ async function listDevices(req, res, next) {
     const leadIds = [...new Set(devices.map(device => device.leadId).filter(Boolean))];
     const leads = leadIds.length
       ? await req.prisma.Lead.findMany({
-          where: { id: { in: leadIds } },
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            phoneNumber: true,
-            status: true,
-            customers: {
-              select: {
-                id: true
-              }
+        where: { id: { in: leadIds } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phoneNumber: true,
+          status: true,
+          customers: {
+            select: {
+              id: true
             }
           }
-        })
+        }
+      })
       : [];
     const leadById = new Map(leads.map(lead => [lead.id, lead]));
 
-    // Batch lookup ONT records by serial number to get OLT RX Power
-    const ontSerials = devices.map(d => d.serialNumber).filter(Boolean);
+    // Batch lookup ONT records by serial number variations to get OLT RX Power
+    const tr069Serials = devices.map(d => d.serialNumber).filter(Boolean);
     let oltRxPowerMap = new Map();
-    if (ontSerials.length > 0) {
+    if (tr069Serials.length > 0) {
       try {
+        const serialToVariationsMap = new Map();
+        const allSearchVariationsSet = new Set();
+
+        tr069Serials.forEach(sn => {
+          const vars = getSnVariations(sn);
+          serialToVariationsMap.set(sn, vars);
+          vars.forEach(v => allSearchVariationsSet.add(v));
+        });
+
+        // Search CustomerDevice table for cross-referencing
+        const customerDevicesForPower = await req.prisma.customerDevice.findMany({
+          where: {
+            OR: [
+              { serialNumber: { in: Array.from(allSearchVariationsSet) } },
+              { ponSerial: { in: Array.from(allSearchVariationsSet) } },
+              { macAddress: { in: Array.from(allSearchVariationsSet) } }
+            ]
+          }
+        });
+
+        customerDevicesForPower.forEach(cd => {
+          const cdVars = [];
+          if (cd.serialNumber) cdVars.push(...getSnVariations(cd.serialNumber));
+          if (cd.ponSerial) cdVars.push(...getSnVariations(cd.ponSerial));
+          if (cd.macAddress) cdVars.push(cd.macAddress);
+
+          for (const [sn, vars] of serialToVariationsMap.entries()) {
+            if (
+              vars.includes(cd.serialNumber) ||
+              vars.includes(cd.ponSerial) ||
+              vars.includes(cd.macAddress)
+            ) {
+              cdVars.forEach(v => {
+                vars.push(v);
+                allSearchVariationsSet.add(v);
+              });
+            }
+          }
+        });
+
+        const allSearchVariations = Array.from(allSearchVariationsSet);
+
+        // Query ONT records matching variations
         const ontRecords = await req.prisma.oNT.findMany({
           where: {
-            serialNumber: { in: ontSerials },
-            isDeleted: false
+            isDeleted: false,
+            OR: [
+              { serialNumber: { in: allSearchVariations } },
+              { ontId: { in: allSearchVariations } },
+              { macAddress: { in: allSearchVariations } }
+            ]
           },
           include: {
             ontDetails: {
@@ -296,15 +343,29 @@ async function listDevices(req, res, next) {
             }
           }
         });
-        for (const ont of ontRecords) {
-          const diag = ont.ontDetails?.opticalDiagnostics;
-          const oltRx = diag?.olt_rx_power || null;
-          oltRxPowerMap.set(ont.serialNumber, {
-            oltRxPower: oltRx,
-            ontRxPowerFromOlt: ont.rxPower !== null ? formatRxPower(ont.rxPower) : null,
-            oltName: ont.olt?.name || null,
-            oltId: ont.olt?.id || null
+
+        for (const sn of tr069Serials) {
+          const vars = serialToVariationsMap.get(sn) || [sn];
+          const cleanSn = sn.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const tail = cleanSn.length >= 6 ? cleanSn.slice(-8) : null;
+
+          let matchedOnt = ontRecords.find(ont => {
+            const ontVars = getSnVariations(ont.serialNumber);
+            if (vars.some(v => ontVars.includes(v) || ont.serialNumber.toUpperCase().includes(v))) return true;
+            if (tail && ont.serialNumber.toUpperCase().includes(tail)) return true;
+            return false;
           });
+
+          if (matchedOnt) {
+            const diag = matchedOnt.ontDetails?.opticalDiagnostics;
+            const oltRx = diag?.olt_rx_power || null;
+            oltRxPowerMap.set(sn, {
+              oltRxPower: oltRx,
+              ontRxPowerFromOlt: matchedOnt.rxPower !== null ? formatRxPower(matchedOnt.rxPower) : null,
+              oltName: matchedOnt.olt?.name || null,
+              oltId: matchedOnt.olt?.id || null
+            });
+          }
         }
       } catch (e) {
         console.error('Failed to lookup ONT records for OLT RX Power:', e.message);
@@ -421,21 +482,21 @@ async function getDeviceBySerial(req, res, next) {
 
     const lead = device.leadId
       ? await req.prisma.Lead.findFirst({
-          where: { id: device.leadId, ispId: req.ispId, isDeleted: false },
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            phoneNumber: true,
-            email: true,
-            status: true,
-            customers: {
-              select: {
-                id: true
-              }
+        where: { id: device.leadId, ispId: req.ispId, isDeleted: false },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phoneNumber: true,
+          email: true,
+          status: true,
+          customers: {
+            select: {
+              id: true
             }
           }
-        })
+        }
+      })
       : null;
 
     // Map to frontend expected structure
@@ -583,7 +644,7 @@ async function deleteDevice(req, res, next) {
 
 /**
  * Get OLT RX Power for a TR069 device by serial number.
- * Looks up the ONT record synced from OLT and returns optical diagnostics.
+ * Looks up the ONT record synced from OLT (handling SN variations & CustomerDevice links)
  */
 async function getOltPowerBySerial(req, res, next) {
   try {
@@ -592,30 +653,7 @@ async function getOltPowerBySerial(req, res, next) {
       return res.status(400).json({ success: false, error: 'Serial number is required' });
     }
 
-    // Find matching ONT record by serial number
-    const ont = await req.prisma.oNT.findFirst({
-      where: {
-        serialNumber: serial,
-        isDeleted: false
-      },
-      include: {
-        ontDetails: {
-          select: {
-            opticalDiagnostics: true,
-            fsp: true,
-            ontId: true,
-            runState: true
-          }
-        },
-        olt: {
-          select: {
-            id: true,
-            name: true,
-            ipAddress: true
-          }
-        }
-      }
-    });
+    const ont = await findOntForSerial(req.prisma, serial);
 
     if (!ont) {
       return res.json({
@@ -642,11 +680,108 @@ async function getOltPowerBySerial(req, res, next) {
       runState: ont.ontDetails?.runState || ont.status || null,
       oltName: ont.olt?.name || null,
       oltId: ont.olt?.id || null,
-      oltIp: ont.olt?.ipAddress || null
+      oltIp: ont.olt?.ipAddress || null,
+      lastSync: ont.ontDetails?.lastSync || ont.updatedAt || null
     });
   } catch (err) {
     console.error('getOltPowerBySerial error:', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to get OLT power data' });
+  }
+}
+
+/**
+ * Live Fetch/Refresh OLT RX Power directly from OLT via Driver
+ */
+async function refreshOltPowerBySerial(req, res, next) {
+  try {
+    const { serial } = req.params;
+    if (!serial) {
+      return res.status(400).json({ success: false, error: 'Serial number is required' });
+    }
+
+    const ont = await findOntForSerial(req.prisma, serial);
+    if (!ont || !ont.olt) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching ONT/OLT found for this device to fetch live signal'
+      });
+    }
+
+    const getDriver = require('../drivers');
+    let driver;
+    try {
+      driver = getDriver(ont.olt);
+      await driver.connect();
+
+      console.log(`Live fetching optical info from OLT ${ont.olt.name} for ONT SN: ${ont.serialNumber}`);
+      const detailedInfo = await driver.getOntInfoBySN(ont.serialNumber);
+
+      if (driver && driver.ssh) {
+        driver.ssh.close();
+      }
+
+      if (detailedInfo) {
+        const diagnostics = detailedInfo.optical_diagnostics || {};
+
+        // Upsert ONTDetails record in DB
+        await req.prisma.oNTDetails.upsert({
+          where: { serialNumber: ont.serialNumber },
+          update: {
+            opticalDiagnostics: JSON.parse(JSON.stringify(diagnostics)),
+            lastSync: new Date()
+          },
+          create: {
+            ontIdRef: ont.id,
+            ontId: ont.ontId,
+            fsp: ont.servicePort || "0/0/0",
+            serialNumber: ont.serialNumber,
+            controlFlag: "active",
+            runState: ont.status || "online",
+            configState: "normal",
+            matchState: "match",
+            opticalDiagnostics: JSON.parse(JSON.stringify(diagnostics)),
+            lastSync: new Date()
+          }
+        });
+
+        // Also update ONT table rxPower if available
+        if (diagnostics.rx_power) {
+          const cleaned = parseFloat(diagnostics.rx_power.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(cleaned)) {
+            await req.prisma.oNT.update({
+              where: { id: ont.id },
+              data: { rxPower: cleaned }
+            }).catch(e => console.error("Error updating ONT rxPower:", e.message));
+          }
+        }
+
+        return res.json({
+          success: true,
+          message: 'Live OLT signal power fetched successfully',
+          found: true,
+          oltRxPower: diagnostics.olt_rx_power || null,
+          ontRxPower: diagnostics.rx_power || null,
+          txPower: diagnostics.tx_power || null,
+          temperature: diagnostics.temperature || null,
+          voltage: diagnostics.voltage || null,
+          current: diagnostics.current || null,
+          oltName: ont.olt.name,
+          lastSync: new Date().toISOString()
+        });
+      }
+    } catch (driverErr) {
+      console.error(`Driver error fetching live OLT signal:`, driverErr);
+      if (driver && driver.ssh) driver.ssh.close();
+      return res.status(500).json({
+        success: false,
+        error: `Failed to connect to OLT: ${driverErr.message}`
+      });
+    }
+
+    return res.status(500).json({ success: false, error: 'Could not retrieve live OLT signal' });
+  } catch (err) {
+    console.error('refreshOltPowerBySerial error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to refresh OLT power' });
   }
 }
 
@@ -750,6 +885,144 @@ function parseDeviceNotes(notes) {
   }
 }
 
+/**
+ * Generate all variations of a serial number (ASCII vendor vs Hex vendor, clean, tail)
+ */
+function getSnVariations(sn) {
+  if (!sn || typeof sn !== 'string') return [];
+  const clean = sn.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!clean) return [];
+
+  const set = new Set([clean, sn.trim(), sn.toUpperCase().trim()]);
+
+  // Case 1: ASCII vendor prefix like ALCLB2C86351 (4 letters + 8 hex chars)
+  if (/^[A-Z]{4}[A-F0-9]{8}$/.test(clean)) {
+    const vendor = clean.slice(0, 4);
+    const rest = clean.slice(4);
+    const hexVendor = Array.from(vendor).map(c => c.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase()).join('');
+    set.add(hexVendor + rest); // 414C434CB2C86351
+    set.add(rest); // B2C86351
+  }
+
+  // Case 2: Hex vendor prefix like 414C434CB2C86351 (16 hex chars)
+  if (/^[A-F0-9]{16}$/.test(clean)) {
+    const hexVendor = clean.slice(0, 8);
+    const rest = clean.slice(8);
+    let asciiVendor = '';
+    for (let i = 0; i < 8; i += 2) {
+      const code = parseInt(hexVendor.substr(i, 2), 16);
+      if (code >= 32 && code <= 126) {
+        asciiVendor += String.fromCharCode(code);
+      }
+    }
+    if (asciiVendor.length === 4) {
+      set.add(asciiVendor + rest); // ALCLB2C86351
+    }
+    set.add(rest); // B2C86351
+  }
+
+  if (clean.length > 8) {
+    set.add(clean.slice(-8));
+  }
+
+  return Array.from(set);
+}
+
+/**
+ * Multi-stage lookup to find ONT record by TR069 device serial number
+ */
+async function findOntForSerial(prisma, serialNumber) {
+  if (!serialNumber) return null;
+  const initialVariations = getSnVariations(serialNumber);
+
+  // Check if assigned to CustomerDevice to get extra serial/ponSerial/mac
+  let extraVariations = [];
+  try {
+    const customerDevices = await prisma.customerDevice.findMany({
+      where: {
+        OR: [
+          { serialNumber: { in: initialVariations } },
+          { ponSerial: { in: initialVariations } },
+          { macAddress: { in: initialVariations } }
+        ]
+      }
+    });
+    for (const cd of customerDevices) {
+      if (cd.serialNumber) extraVariations.push(...getSnVariations(cd.serialNumber));
+      if (cd.ponSerial) extraVariations.push(...getSnVariations(cd.ponSerial));
+      if (cd.macAddress) extraVariations.push(cd.macAddress);
+    }
+  } catch (e) {
+    console.error('Error checking CustomerDevice in findOntForSerial:', e.message);
+  }
+
+  const allVariations = Array.from(new Set([...initialVariations, ...extraVariations]));
+
+  // 1. Find ONT record by exact or variation match
+  let ont = await prisma.oNT.findFirst({
+    where: {
+      isDeleted: false,
+      OR: [
+        { serialNumber: { in: allVariations } },
+        { ontId: { in: allVariations } },
+        { macAddress: { in: allVariations } }
+      ]
+    },
+    include: {
+      ontDetails: true,
+      olt: {
+        select: {
+          id: true,
+          name: true,
+          ipAddress: true,
+          vendor: true,
+          sshHost: true,
+          sshPort: true,
+          sshUsername: true,
+          sshPassword: true,
+          sshEnablePassword: true,
+          defaultTransport: true,
+          telnetPort: true
+        }
+      }
+    }
+  });
+
+  // 2. Fallback: search ONT table where serialNumber contains tail (last 8 chars)
+  if (!ont) {
+    const clean = serialNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (clean.length >= 6) {
+      const tail = clean.slice(-8);
+      ont = await prisma.oNT.findFirst({
+        where: {
+          isDeleted: false,
+          serialNumber: { contains: tail }
+        },
+        include: {
+          ontDetails: true,
+          olt: {
+            select: {
+              id: true,
+              name: true,
+              ipAddress: true,
+              vendor: true,
+              sshHost: true,
+              sshPort: true,
+              sshUsername: true,
+              sshPassword: true,
+              sshEnablePassword: true,
+              defaultTransport: true,
+              telnetPort: true
+            }
+          }
+        }
+      });
+    }
+  }
+
+  return ont;
+}
+
 module.exports = {
   syncDevices,
   syncDevice,
@@ -759,5 +1032,6 @@ module.exports = {
   linkLead,
   unlinkLead,
   deleteDevice,
-  getOltPowerBySerial
+  getOltPowerBySerial,
+  refreshOltPowerBySerial
 };
