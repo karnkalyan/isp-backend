@@ -12,7 +12,7 @@ const {
   unlinkLead,
   deleteDevice,
   getOltPowerBySerial
-} = require('../controllers/tr069Device.controller');
+} = require('../controllers/tr069device.controller');
 
 module.exports = (prisma) => {
   const router = express.Router();
