@@ -2149,17 +2149,15 @@ async function enrichServiceDetailsWithVlans(prisma, customers) {
     }
   }
 
-  if (vlanIdsSet.size === 0) return customers;
+  let vlanMap = new Map();
+  if (vlanIdsSet.size > 0) {
+    const vlans = await prisma.oLTVLAN.findMany({
+      where: { id: { in: Array.from(vlanIdsSet) } }
+    });
+    vlanMap = new Map(vlans.map(v => [v.id, v]));
+  }
 
-  // Fetch all VLANs in one query
-  const vlans = await prisma.oLTVLAN.findMany({
-    where: { id: { in: Array.from(vlanIdsSet) } }
-  });
-
-  // Create a map for quick lookup
-  const vlanMap = new Map(vlans.map(v => [v.id, v]));
-
-  // Enrich each service detail
+  // Enrich each service detail and sanitize OLT object to hide sensitive credentials
   for (const cust of customerArray) {
     if (cust.serviceDetails && Array.isArray(cust.serviceDetails)) {
       for (const sd of cust.serviceDetails) {
@@ -2170,6 +2168,12 @@ async function enrichServiceDetailsWithVlans(prisma, customers) {
           sd.vlanDetails = ids.map(id => vlanMap.get(id)).filter(Boolean);
         } else {
           sd.vlanDetails = [];
+        }
+
+        // Sanitize sensitive OLT SSH and SNMP credentials before sending to customer/profile APIs
+        if (sd.olt) {
+          const { sshUsername, sshPassword, sshEnablePassword, sshKey, snmpCommunity, ...safeOlt } = sd.olt;
+          sd.olt = safeOlt;
         }
       }
     }
