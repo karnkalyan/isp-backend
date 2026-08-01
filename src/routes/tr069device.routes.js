@@ -10,8 +10,9 @@ const {
   getDeviceBySerial,
   linkLead,
   unlinkLead,
-  deleteDevice
-} = require('../controllers/tr069device.controller');
+  deleteDevice,
+  getOltPowerBySerial
+} = require('../controllers/tr069Device.controller');
 
 module.exports = (prisma) => {
   const router = express.Router();
@@ -46,6 +47,13 @@ module.exports = (prisma) => {
     '/:serialNumber/radius-credentials',
     checkPermission('services_manage'),
     getRadiusCredentialsBySerial
+  );
+
+  // Get OLT power data for a device by serial number
+  router.get(
+    '/:serial/olt-power',
+    checkPermission('services_read'),
+    getOltPowerBySerial
   );
 
   // Get device by serial number

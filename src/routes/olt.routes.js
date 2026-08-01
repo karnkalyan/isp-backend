@@ -61,6 +61,7 @@ module.exports = (prisma) => {
 
   router.post('/', checkPermission('olt_update'), createOlt);
   router.get('/:id', getOltById);
+  router.get('/:id/onts', getOntsForOlt);
   router.put('/:id', checkPermission('olt_update'), updateOlt);
   router.delete('/:id', checkPermission('olt_update'), deleteOlt);
   router.post('/:id/onts/sync', checkPermission('olt_update'), syncOntsFromOlt); // Legacy endpoint

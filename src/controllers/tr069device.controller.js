@@ -275,23 +275,64 @@ async function listDevices(req, res, next) {
       : [];
     const leadById = new Map(leads.map(lead => [lead.id, lead]));
 
+    // Batch lookup ONT records by serial number to get OLT RX Power
+    const ontSerials = devices.map(d => d.serialNumber).filter(Boolean);
+    let oltRxPowerMap = new Map();
+    if (ontSerials.length > 0) {
+      try {
+        const ontRecords = await req.prisma.oNT.findMany({
+          where: {
+            serialNumber: { in: ontSerials },
+            isDeleted: false
+          },
+          include: {
+            ontDetails: {
+              select: {
+                opticalDiagnostics: true
+              }
+            },
+            olt: {
+              select: { id: true, name: true }
+            }
+          }
+        });
+        for (const ont of ontRecords) {
+          const diag = ont.ontDetails?.opticalDiagnostics;
+          const oltRx = diag?.olt_rx_power || null;
+          oltRxPowerMap.set(ont.serialNumber, {
+            oltRxPower: oltRx,
+            ontRxPowerFromOlt: ont.rxPower !== null ? formatRxPower(ont.rxPower) : null,
+            oltName: ont.olt?.name || null,
+            oltId: ont.olt?.id || null
+          });
+        }
+      } catch (e) {
+        console.error('Failed to lookup ONT records for OLT RX Power:', e.message);
+      }
+    }
+
     // Map to frontend expected structure (PascalCase for hardware identification fields)
-    const formattedDevices = devices.map(d => ({
-      id: d.id,
-      device: d.modelName || d.productClass || 'Unknown Device',
-      ipAddress: d.ipAddress || 'N/A',
-      username: parseDeviceNotes(d.notes).username || 'N/A',
-      status: d.status,
-      signal: formatRxPower(d.rxPower),
-      lastContact: d.lastContact,
-      uptime: formatUptime(d.uptime),
-      ProductClass: d.productClass,
-      Manufacturer: d.manufacturer,
-      SerialNumber: d.serialNumber,
-      OUI: d.oui,
-      leadId: d.leadId,
-      lead: d.leadId ? leadById.get(d.leadId) || null : null
-    }));
+    const formattedDevices = devices.map(d => {
+      const oltData = oltRxPowerMap.get(d.serialNumber);
+      return {
+        id: d.id,
+        device: d.modelName || d.productClass || 'Unknown Device',
+        ipAddress: d.ipAddress || 'N/A',
+        username: parseDeviceNotes(d.notes).username || 'N/A',
+        status: d.status,
+        signal: formatRxPower(d.rxPower),
+        lastContact: d.lastContact,
+        uptime: formatUptime(d.uptime),
+        ProductClass: d.productClass,
+        Manufacturer: d.manufacturer,
+        SerialNumber: d.serialNumber,
+        OUI: d.oui,
+        leadId: d.leadId,
+        lead: d.leadId ? leadById.get(d.leadId) || null : null,
+        oltRxPower: oltData?.oltRxPower || null,
+        oltName: oltData?.oltName || null
+      };
+    });
 
     return res.json({
       success: true,
@@ -540,6 +581,75 @@ async function deleteDevice(req, res, next) {
   }
 }
 
+/**
+ * Get OLT RX Power for a TR069 device by serial number.
+ * Looks up the ONT record synced from OLT and returns optical diagnostics.
+ */
+async function getOltPowerBySerial(req, res, next) {
+  try {
+    const { serial } = req.params;
+    if (!serial) {
+      return res.status(400).json({ success: false, error: 'Serial number is required' });
+    }
+
+    // Find matching ONT record by serial number
+    const ont = await req.prisma.oNT.findFirst({
+      where: {
+        serialNumber: serial,
+        isDeleted: false
+      },
+      include: {
+        ontDetails: {
+          select: {
+            opticalDiagnostics: true,
+            fsp: true,
+            ontId: true,
+            runState: true
+          }
+        },
+        olt: {
+          select: {
+            id: true,
+            name: true,
+            ipAddress: true
+          }
+        }
+      }
+    });
+
+    if (!ont) {
+      return res.json({
+        success: true,
+        found: false,
+        message: 'No matching ONT found in OLT records'
+      });
+    }
+
+    const diag = ont.ontDetails?.opticalDiagnostics || {};
+
+    return res.json({
+      success: true,
+      found: true,
+      oltRxPower: diag.olt_rx_power || null,
+      ontRxPower: diag.rx_power || (ont.rxPower !== null ? formatRxPower(ont.rxPower) : null),
+      txPower: diag.tx_power || null,
+      temperature: diag.temperature || null,
+      voltage: diag.voltage || null,
+      current: diag.current || null,
+      distance: diag.distance || null,
+      fsp: ont.ontDetails?.fsp || null,
+      ontId: ont.ontDetails?.ontId || ont.ontId || null,
+      runState: ont.ontDetails?.runState || ont.status || null,
+      oltName: ont.olt?.name || null,
+      oltId: ont.olt?.id || null,
+      oltIp: ont.olt?.ipAddress || null
+    });
+  } catch (err) {
+    console.error('getOltPowerBySerial error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to get OLT power data' });
+  }
+}
+
 // Helper: check if device is online (informed in last 5 minutes)
 function isOnline(lastInform) {
   if (!lastInform) return false;
@@ -648,5 +758,6 @@ module.exports = {
   getDeviceBySerial,
   linkLead,
   unlinkLead,
-  deleteDevice
+  deleteDevice,
+  getOltPowerBySerial
 };
