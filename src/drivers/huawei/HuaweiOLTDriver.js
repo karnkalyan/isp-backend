@@ -232,6 +232,14 @@ class HuaweiOLTDriver {
         });
     }
 
+    parseOntId(output) {
+        if (!output || typeof output !== 'string') return null;
+        const match = output.match(/ONT[-_\s]*ID\s*[:=\s]\s*(\d+)/i) ||
+                      output.match(/ONT[-_\s]*ID\s+is\s+(\d+)/i) ||
+                      output.match(/\bONT\s+(\d+)\s+(?:is\s+)?added/i);
+        return match ? match[1] : null;
+    }
+
     async registerONT(data) {
         const {
             frame,
@@ -245,67 +253,145 @@ class HuaweiOLTDriver {
             load_file = null
         } = data;
 
+        console.log('[DEBUG registerONT] Starting ONT registration with params:', {
+            frame,
+            slot,
+            port,
+            serial,
+            line_profile_id,
+            service_profile_id,
+            description,
+            vlansCount: vlans.length,
+            load_file
+        });
+
         return this.runSession(async (send) => {
             const boardType = await this.serviceBoardType(slot);
+            console.log(`[DEBUG registerONT] Service board type for slot ${slot}: ${boardType}`);
+
             const results = { ont_registration: {}, service_ports: [] };
 
             if (boardType === 'gpon') {
-                await send(`interface gpon ${frame}/${slot}`);
-                const ontAddResult = await send(
-                    `ont add ${port} sn-auth "${serial}" omci ont-lineprofile-id ${line_profile_id} ont-srvprofile-id ${service_profile_id} desc "${description}"`
-                );
+                const intfCmd = `interface gpon ${frame}/${slot}`;
+                console.log(`[DEBUG registerONT] Entering interface mode: ${intfCmd}`);
+                await send(intfCmd);
+
+                const ontAddCmd = `ont add ${port} sn-auth "${serial}" omci ont-lineprofile-id ${line_profile_id} ont-srvprofile-id ${service_profile_id} desc "${description}"`;
+                console.log(`[DEBUG registerONT] Executing ONT add command: ${ontAddCmd}`);
+                const ontAddResult = await send(ontAddCmd);
+                console.log('[DEBUG registerONT] ONT add raw response:\n', ontAddResult);
                 results.ont_registration.result = ontAddResult.trim();
 
-                const ontIdMatch = ontAddResult.match(/ONTID\s*:\s*(\d+)/i);
-                if (!ontIdMatch) {
-                    throw new Error('Could not parse ONT ID from ont add response');
+                let ont_id = this.parseOntId(ontAddResult);
+                if (ont_id) {
+                    console.log(`[DEBUG registerONT] Parsed ONT ID directly from add response: ${ont_id}`);
                 }
-                const ont_id = ontIdMatch[1];
 
+                if (!ont_id && serial) {
+                    console.log(`[DEBUG registerONT] Direct ONT ID parse yielded null. Attempting fallback query by SN (${serial})...`);
+                    try {
+                        const infoResult = await send(`display ont info by-sn ${serial}`);
+                        console.log('[DEBUG registerONT] display ont info by-sn raw response:\n', infoResult);
+                        ont_id = this.parseOntId(infoResult);
+                        if (ont_id) {
+                            console.log(`[DEBUG registerONT] Parsed ONT ID from fallback by-sn query: ${ont_id}`);
+                        }
+                    } catch (e) {
+                        console.error('[DEBUG registerONT] Fallback by-sn query error:', e.message);
+                    }
+                }
+
+                if (!ont_id) {
+                    const cleanResult = ontAddResult.replace(/\s+/g, ' ').trim();
+                    console.error('[DEBUG registerONT] Failed to parse ONT ID. Clean OLT response:', cleanResult);
+                    if (/\b(failure|error)\b/i.test(cleanResult)) {
+                        throw new Error(`OLT returned error during ONT add: ${cleanResult}`);
+                    }
+                    throw new Error(`Could not parse ONT ID from ont add response: ${cleanResult}`);
+                }
+
+                console.log(`[DEBUG registerONT] Exiting interface mode (quit) with confirmed ONT ID: ${ont_id}`);
                 await send('quit');
 
                 for (const vlanConfig of vlans) {
                     if (vlanConfig.vlan && vlanConfig.gemport) {
                         const spCmd = `service-port vlan ${vlanConfig.vlan} gpon ${frame}/${slot}/${port} ont ${ont_id} gemport ${vlanConfig.gemport} multi-service user-vlan ${vlanConfig.vlan} tag-transform translate`;
+                        console.log(`[DEBUG registerONT] Creating GPON service port: ${spCmd}`);
+                        const spResult = (await send(spCmd)).trim();
+                        console.log(`[DEBUG registerONT] Service port result for VLAN ${vlanConfig.vlan}:`, spResult);
                         results.service_ports.push({
                             vlan: vlanConfig.vlan,
-                            result: (await send(spCmd)).trim()
+                            result: spResult
                         });
                     }
                 }
 
                 if (load_file) {
+                    console.log(`[DEBUG registerONT] Loading config file '${load_file}' to ONT ${ont_id}...`);
                     results.ont_load = await this.loadOntWithSend(send, frame, slot, port, ont_id, load_file, serial);
+                    console.log('[DEBUG registerONT] ONT load config result:', results.ont_load);
                 }
 
+                console.log('[DEBUG registerONT] Registration completed successfully.');
                 return results;
             }
 
             if (boardType === 'epon') {
-                await send(`interface epon ${frame}/${slot}`);
-                const ontAddResult = await send(
-                    `ont add ${port} sn-auth "${serial}" desc "${description}"`
-                );
+                const intfCmd = `interface epon ${frame}/${slot}`;
+                console.log(`[DEBUG registerONT] Entering EPON interface mode: ${intfCmd}`);
+                await send(intfCmd);
+
+                const ontAddCmd = `ont add ${port} sn-auth "${serial}" desc "${description}"`;
+                console.log(`[DEBUG registerONT] Executing EPON ONT add command: ${ontAddCmd}`);
+                const ontAddResult = await send(ontAddCmd);
+                console.log('[DEBUG registerONT] EPON ONT add raw response:\n', ontAddResult);
                 results.ont_registration.result = ontAddResult.trim();
 
-                const ontIdMatch = ontAddResult.match(/ONTID\s*:\s*(\d+)/i) || ontAddResult.match(/ONT\s*ID\s*:\s*(\d+)/i);
-                if (!ontIdMatch) {
-                    throw new Error('Could not parse ONT ID from EPON ont add response');
+                let ont_id = this.parseOntId(ontAddResult);
+                if (ont_id) {
+                    console.log(`[DEBUG registerONT] Parsed EPON ONT ID directly from add response: ${ont_id}`);
                 }
-                const ont_id = ontIdMatch[1];
 
+                if (!ont_id && serial) {
+                    console.log(`[DEBUG registerONT] Direct EPON ONT ID parse yielded null. Attempting fallback query by SN (${serial})...`);
+                    try {
+                        const infoResult = await send(`display ont info by-sn ${serial}`);
+                        console.log('[DEBUG registerONT] EPON display ont info by-sn raw response:\n', infoResult);
+                        ont_id = this.parseOntId(infoResult);
+                        if (ont_id) {
+                            console.log(`[DEBUG registerONT] Parsed EPON ONT ID from fallback by-sn query: ${ont_id}`);
+                        }
+                    } catch (e) {
+                        console.error('[DEBUG registerONT] EPON fallback by-sn query error:', e.message);
+                    }
+                }
+
+                if (!ont_id) {
+                    const cleanResult = ontAddResult.replace(/\s+/g, ' ').trim();
+                    console.error('[DEBUG registerONT] Failed to parse EPON ONT ID. Clean OLT response:', cleanResult);
+                    if (/\b(failure|error)\b/i.test(cleanResult)) {
+                        throw new Error(`OLT returned error during EPON ONT add: ${cleanResult}`);
+                    }
+                    throw new Error(`Could not parse ONT ID from EPON ont add response: ${cleanResult}`);
+                }
+
+                console.log(`[DEBUG registerONT] Exiting EPON interface mode (quit) with confirmed ONT ID: ${ont_id}`);
                 await send('quit');
 
                 for (const vlanConfig of vlans) {
                     if (vlanConfig.vlan) {
                         const spCmd = `service-port vlan ${vlanConfig.vlan} epon ${frame}/${slot}/${port} ont ${ont_id} multi-service user-vlan ${vlanConfig.vlan} tag-transform translate`;
+                        console.log(`[DEBUG registerONT] Creating EPON service port: ${spCmd}`);
+                        const spResult = (await send(spCmd)).trim();
+                        console.log(`[DEBUG registerONT] EPON service port result for VLAN ${vlanConfig.vlan}:`, spResult);
                         results.service_ports.push({
                             vlan: vlanConfig.vlan,
-                            result: (await send(spCmd)).trim()
+                            result: spResult
                         });
                     }
                 }
 
+                console.log('[DEBUG registerONT] EPON registration completed successfully.');
                 return results;
             }
 
