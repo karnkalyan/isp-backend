@@ -232,6 +232,21 @@ class HuaweiOLTDriver {
         });
     }
 
+    formatHuaweiSerial(serial) {
+        if (!serial || typeof serial !== 'string') return '';
+        const clean = serial.trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
+        if (/^[0-9A-F]{16}$/.test(clean)) {
+            return clean;
+        }
+        if (/^[A-Z]{4}[0-9A-F]{8}$/.test(clean) || (clean.length === 12 && /^[A-Z]{4}/.test(clean))) {
+            const vendor = clean.slice(0, 4);
+            const rest = clean.slice(4);
+            const hexVendor = vendor.split('').map(ch => ch.charCodeAt(0).toString(16).toUpperCase()).join('');
+            return hexVendor + rest;
+        }
+        return clean;
+    }
+
     parseOntId(output) {
         if (!output || typeof output !== 'string') return null;
         const match = output.match(/ONT[-_\s]*ID\s*[:=\s]\s*(\d+)/i) ||
@@ -253,11 +268,14 @@ class HuaweiOLTDriver {
             load_file = null
         } = data;
 
+        const formattedSerial = this.formatHuaweiSerial(serial) || serial;
+
         console.log('[DEBUG registerONT] Starting ONT registration with params:', {
             frame,
             slot,
             port,
             serial,
+            formattedSerial,
             line_profile_id,
             service_profile_id,
             description,
@@ -276,7 +294,7 @@ class HuaweiOLTDriver {
                 console.log(`[DEBUG registerONT] Entering interface mode: ${intfCmd}`);
                 await send(intfCmd);
 
-                const ontAddCmd = `ont add ${port} sn-auth "${serial}" omci ont-lineprofile-id ${line_profile_id} ont-srvprofile-id ${service_profile_id} desc "${description}"`;
+                const ontAddCmd = `ont add ${port} sn-auth "${formattedSerial}" omci ont-lineprofile-id ${line_profile_id} ont-srvprofile-id ${service_profile_id} desc "${description}"`;
                 console.log(`[DEBUG registerONT] Executing ONT add command: ${ontAddCmd}`);
                 const ontAddResult = await send(ontAddCmd);
                 console.log('[DEBUG registerONT] ONT add raw response:\n', ontAddResult);
@@ -287,10 +305,10 @@ class HuaweiOLTDriver {
                     console.log(`[DEBUG registerONT] Parsed ONT ID directly from add response: ${ont_id}`);
                 }
 
-                if (!ont_id && serial) {
-                    console.log(`[DEBUG registerONT] Direct ONT ID parse yielded null. Attempting fallback query by SN (${serial})...`);
+                if (!ont_id && formattedSerial) {
+                    console.log(`[DEBUG registerONT] Direct ONT ID parse yielded null. Attempting fallback query by SN (${formattedSerial})...`);
                     try {
-                        const infoResult = await send(`display ont info by-sn ${serial}`);
+                        const infoResult = await send(`display ont info by-sn ${formattedSerial}`);
                         console.log('[DEBUG registerONT] display ont info by-sn raw response:\n', infoResult);
                         ont_id = this.parseOntId(infoResult);
                         if (ont_id) {
