@@ -232,7 +232,7 @@ class HuaweiOLTDriver {
         });
     }
 
-    formatHuaweiSerial(serial) {
+    formatHuaweiSerial(serial, description = '') {
         if (!serial || typeof serial !== 'string') return '';
         const clean = serial.trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
         if (/^[0-9A-F]{16}$/.test(clean)) {
@@ -243,6 +243,18 @@ class HuaweiOLTDriver {
             const rest = clean.slice(4);
             const hexVendor = vendor.split('').map(ch => ch.charCodeAt(0).toString(16).toUpperCase()).join('');
             return hexVendor + rest;
+        }
+        if (/^[0-9A-F]{8}$/.test(clean)) {
+            const d = String(description).toLowerCase();
+            let hexVendor = '';
+            if (d.includes('nokia') || d.includes('alcatel') || d.includes('alcl') || d.includes('mahadefsthan') || d.includes('raj')) hexVendor = '414C434C';
+            else if (d.includes('huawei') || d.includes('hwtc')) hexVendor = '48575443';
+            else if (d.includes('zte') || d.includes('zteg')) hexVendor = '5A544547';
+            else if (d.includes('vsol')) hexVendor = '56534F4C';
+            else if (d.includes('fiberhome') || d.includes('fhtt')) hexVendor = '46485454';
+            else hexVendor = '414C434C'; // Default to Nokia ALCL prefix for 8-char GPON SNs
+
+            if (hexVendor) return hexVendor + clean;
         }
         return clean;
     }
@@ -268,7 +280,7 @@ class HuaweiOLTDriver {
             load_file = null
         } = data;
 
-        const formattedSerial = this.formatHuaweiSerial(serial) || serial;
+        const formattedSerial = this.formatHuaweiSerial(serial, description) || serial;
 
         console.log('[DEBUG registerONT] Starting ONT registration with params:', {
             frame,
