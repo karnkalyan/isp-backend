@@ -193,8 +193,18 @@ async function listDevices(req, res, next) {
     const { search, status, secretKey, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
+    const dbSecretSetting = await req.prisma.iSPSettings.findFirst({
+      where: { key: 'tr069SecretKey' }
+    });
+    const dbSecret = dbSecretSetting?.value || null;
     const expectedSecret = process.env.TR069_SECRET_KEY || process.env.ACCESS_SECRET || 'CMSADMIN2026';
-    const isSecretValid = Boolean(secretKey && (String(secretKey).trim() === String(expectedSecret).trim() || String(secretKey).trim() === 'CMSADMIN2026' || String(secretKey).trim() === 'supersecret'));
+    const inputSecret = String(secretKey || '').trim();
+    const isSecretValid = Boolean(inputSecret && (
+      inputSecret === String(expectedSecret).trim() ||
+      (dbSecret && inputSecret === String(dbSecret).trim()) ||
+      inputSecret === 'CMSADMIN2026' ||
+      inputSecret === 'supersecret'
+    ));
 
     const conditions = [
       { ispId: req.ispId },

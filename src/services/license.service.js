@@ -461,7 +461,7 @@ function licenseGuard(prisma) {
       return next();
     }
 
-    const status = await getStatus(prisma);
+    const status = await getStatus(prisma, req.ispId);
     if (!status.active) {
       return res.status(402).json({
         success: false,
