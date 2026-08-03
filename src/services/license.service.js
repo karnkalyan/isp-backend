@@ -65,10 +65,56 @@ function getRuntimeHardwareFingerprint() {
 }
 
 async function getHardwareFingerprint(prisma, ispId) {
-  const baseHwid = process.env.LICENSE_HARDWARE_ID || getRuntimeHardwareFingerprint();
-  if (!ispId) return baseHwid;
-  const targetIspId = Number(ispId);
-  return hashHardwareSeed(`${baseHwid}::tenant::${targetIspId}`);
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  const settingKey = `appHardwareFingerprint_${targetIspId}`;
+
+  if (prisma) {
+    const stored = await prisma.iSPSettings.findFirst({
+      where: {
+        OR: [
+          { key: settingKey },
+          { key: LICENSE_HWID_KEY, ispId: targetIspId }
+        ]
+      }
+    });
+    if (stored?.value) return stored.value;
+  }
+
+  const baseHwid = process.env.LICENSE_HARDWARE_ID
+    ? hashHardwareSeed(`env::${process.env.LICENSE_HARDWARE_ID}`)
+    : getRuntimeHardwareFingerprint();
+
+  const tenantHwid = hashHardwareSeed(`${baseHwid}::tenant::${targetIspId}`);
+
+  if (prisma) {
+    await prisma.iSPSettings.upsert({
+      where: { key: settingKey },
+      update: { value: tenantHwid, updatedAt: new Date() },
+      create: {
+        ispId: targetIspId,
+        key: settingKey,
+        value: tenantHwid,
+        description: `Stable hardware fingerprint for ISP ${targetIspId}`,
+        updatedAt: new Date()
+      }
+    }).catch(() => {});
+
+    if (targetIspId === Number(process.env.DEFAULT_ISP_ID || 1)) {
+      await prisma.iSPSettings.upsert({
+        where: { key: LICENSE_HWID_KEY },
+        update: { value: tenantHwid, updatedAt: new Date() },
+        create: {
+          ispId: targetIspId,
+          key: LICENSE_HWID_KEY,
+          value: tenantHwid,
+          description: 'Stable hardware fingerprint',
+          updatedAt: new Date()
+        }
+      }).catch(() => {});
+    }
+  }
+
+  return tenantHwid;
 }
 
 async function getStoredToken(prisma, ispId) {
@@ -411,10 +457,35 @@ async function getGeneratedLicenseToken(prisma, id) {
 function isLicenseRoute(pathname) {
   return pathname.startsWith('/license') ||
     pathname.startsWith('/api/license') ||
+    pathname.startsWith('/mcp') ||
+    pathname.startsWith('/api/mcp') ||
     pathname === '/isp/public' ||
     pathname === '/api/isp/public' ||
     pathname.startsWith('/auth') ||
     pathname.startsWith('/api/auth');
+}
+
+function extractIspIdFromReq(req) {
+  if (req.ispId) return Number(req.ispId);
+
+  const headerIsp = req.headers['x-isp-id'] || req.headers['x-selected-isp-id'];
+  if (headerIsp) return Number(headerIsp);
+
+  if (req.query?.ispId) return Number(req.query.ispId);
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.decode(token);
+      if (decoded?.ispId) return Number(decoded.ispId);
+      if (decoded?.user?.ispId) return Number(decoded.user.ispId);
+    } catch {
+      // Ignore token decode failure
+    }
+  }
+
+  return Number(process.env.DEFAULT_ISP_ID || 1);
 }
 
 function licenseGuard(prisma) {
@@ -423,13 +494,17 @@ function licenseGuard(prisma) {
       return next();
     }
 
-    const status = await getStatus(prisma, req.ispId);
+    const ispId = extractIspIdFromReq(req);
+    req.ispId = ispId;
+
+    const status = await getStatus(prisma, ispId);
     if (!status.active) {
       return res.status(402).json({
         success: false,
         licenseExpired: true,
-        message: EXPIRED_MESSAGE,
-        hwid: status.hwid
+        message: status.error || status.message || EXPIRED_MESSAGE,
+        hwid: status.hwid,
+        ispId
       });
     }
     req.license = status;
