@@ -274,8 +274,9 @@ async function verifyToken(prisma, token, ispId) {
 }
 
 async function getStatus(prisma, ispId) {
-  const hwid = await getHardwareFingerprint(prisma);
-  const token = await getStoredToken(prisma, ispId);
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  const hwid = await getHardwareFingerprint(prisma, targetIspId);
+  const token = await getStoredToken(prisma, targetIspId);
 
   if (!token) {
     return {
@@ -289,7 +290,7 @@ async function getStatus(prisma, ispId) {
   try {
     return {
       configured: true,
-      ...(await verifyToken(prisma, token))
+      ...(await verifyToken(prisma, token, targetIspId))
     };
   } catch (error) {
     return {
@@ -297,7 +298,7 @@ async function getStatus(prisma, ispId) {
       configured: true,
       hwid,
       error: error.message,
-      message: EXPIRED_MESSAGE
+      message: error.message || EXPIRED_MESSAGE
     };
   }
 }

@@ -214,7 +214,7 @@ module.exports = (prisma) => {
       if (!hasGeneratorAccess(req)) return res.status(403).json({ error: 'License generator access has expired. Please enter the access secret again.' });
       const { token } = await getGeneratedLicenseToken(prisma, req.params.id);
       await saveToken(prisma, req.ispId, token);
-      res.json(await getStatus(prisma));
+      res.json(await getStatus(prisma, req.ispId));
     } catch (error) {
       next(error);
     }
