@@ -115,6 +115,11 @@ app.use(cors((req, callback) => {
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
 app.use('/api/uploads', express.static(path.resolve(__dirname, '../uploads')));
 
+
+app.use('/mcp', mcpRouter(prisma));
+app.use('/api/mcp', mcpRouter(prisma));
+
+
 app.use('/license', licenseRouter(prisma));
 app.use('/api/license', licenseRouter(prisma));
 app.use(licenseGuard(prisma));
@@ -213,8 +218,6 @@ app.use('/api/messages', messageRouter(prisma));
 app.use('/api/mail', mailRouter(prisma));
 app.use('/api/templates', templateRouter(prisma));
 app.use('/api/tasks', taskRouter(prisma));
-app.use('/mcp', mcpRouter(prisma));
-app.use('/api/mcp', mcpRouter(prisma));
 app.use('/api/dashboard', require('./routes/dashboard.routes')(prisma));
 app.use('/api/customer-types', require('./routes/customertype.routes')(prisma));
 app.use('/api/bulk-inventory', require('./routes/bulkinventory.routes')(prisma));
