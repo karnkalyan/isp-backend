@@ -30,17 +30,9 @@ module.exports = (prisma) => {
     );
     res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
 
-    // Ensure rawHeaders and headers.accept include text/event-stream for StreamableHTTPServerTransport
-    const acceptIdx = req.rawHeaders ? req.rawHeaders.findIndex(h => typeof h === 'string' && h.toLowerCase() === 'accept') : -1;
-    if (acceptIdx !== -1) {
-      if (!req.rawHeaders[acceptIdx + 1].includes('text/event-stream')) {
-        req.rawHeaders[acceptIdx + 1] = req.rawHeaders[acceptIdx + 1] + ', text/event-stream, application/json, */*';
-      }
-    } else if (req.rawHeaders) {
-      req.rawHeaders.push('Accept', 'application/json, text/event-stream, */*');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
     }
-    req.headers.accept = 'application/json, text/event-stream, */*';
-    req.headers['accept'] = 'application/json, text/event-stream, */*';
 
     // Comprehensive debug logging
     const sessionId = req.get('Mcp-Session-Id') || req.query.sessionId || 'none';
@@ -51,6 +43,21 @@ module.exports = (prisma) => {
 
     next();
   });
+
+  // Helper to ensure rawHeaders has text/event-stream for StreamableHTTPServerTransport
+  const normalizeAcceptHeaderForStreamable = (req) => {
+    if (!req.rawHeaders) return;
+    const acceptIdx = req.rawHeaders.findIndex(h => typeof h === 'string' && h.toLowerCase() === 'accept');
+    if (acceptIdx !== -1) {
+      if (!req.rawHeaders[acceptIdx + 1].includes('text/event-stream')) {
+        req.rawHeaders[acceptIdx + 1] = req.rawHeaders[acceptIdx + 1] + ', text/event-stream, application/json, */*';
+      }
+    } else {
+      req.rawHeaders.push('Accept', 'application/json, text/event-stream, */*');
+    }
+    req.headers.accept = 'application/json, text/event-stream, */*';
+    req.headers['accept'] = 'application/json, text/event-stream, */*';
+  };
 
   // POST handler: Streamable HTTP / JSON-RPC / Legacy SSE Messages
   const handlePost = async (req, res, next) => {
@@ -76,6 +83,8 @@ module.exports = (prisma) => {
           });
         }
 
+        normalizeAcceptHeaderForStreamable(req);
+
         const server = createMcpServer();
         let transport;
 
@@ -97,6 +106,8 @@ module.exports = (prisma) => {
 
         await server.connect(transport);
         session = { transport, server };
+      } else {
+        normalizeAcceptHeaderForStreamable(req);
       }
 
       await session.transport.handleRequest(req, res, req.body);
@@ -120,13 +131,16 @@ module.exports = (prisma) => {
       const sessionId = req.get('Mcp-Session-Id') || req.query.sessionId;
 
       if (sessionId && streamableSessions.has(sessionId)) {
+        normalizeAcceptHeaderForStreamable(req);
         const session = streamableSessions.get(sessionId);
         return await session.transport.handleRequest(req, res);
       }
 
-      const isSseRequest = (req.get('accept') || '').includes('text/event-stream') || req.path === '/sse';
+      const rawAccept = req.get('accept') || '';
+      // Only enter legacy SSE if explicitly requested via /sse or Accept: text/event-stream without wildcard probe
+      const isExplicitSse = req.path === '/sse' || (rawAccept.includes('text/event-stream') && !rawAccept.includes('*/*'));
 
-      if (isSseRequest) {
+      if (isExplicitSse) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
@@ -146,7 +160,7 @@ module.exports = (prisma) => {
         return await server.connect(transport);
       }
 
-      // Probing response for GET without session/SSE headers
+      // Fast JSON Probe response for GET without active session or explicit SSE header
       res.json({
         status: 'ok',
         mcp: true,
