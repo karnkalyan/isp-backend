@@ -266,7 +266,9 @@ async function verifyToken(prisma, token, ispId) {
   });
 
   if (decoded.aud !== tenantHwid && decoded.aud !== baseHwid) {
-    const error = new Error('License key was generated for a different hardware ID or ISP tenant.');
+    const expectedShort = tenantHwid ? `${tenantHwid.substring(0, 12)}...` : 'Unknown';
+    const actualShort = decoded.aud ? `${String(decoded.aud).substring(0, 12)}...` : 'Unknown';
+    const error = new Error(`License key hardware mismatch: token was generated for HWID (${actualShort}), but target ISP Tenant HWID is (${expectedShort}). Please generate a license key matching this HWID.`);
     error.status = 402;
     throw error;
   }

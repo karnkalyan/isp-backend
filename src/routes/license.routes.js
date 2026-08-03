@@ -111,7 +111,6 @@ module.exports = (prisma) => {
     try {
       if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can view ISP tenant hardware IDs.' });
       const isps = await prisma.iSP.findMany({
-        where: { isDeleted: false },
         select: { id: true, companyName: true, contactPerson: true }
       });
       const items = await Promise.all(isps.map(async (isp) => {
@@ -138,8 +137,24 @@ module.exports = (prisma) => {
       if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can install license.' });
       const token = String(req.body?.token || '').trim();
       if (!token) return res.status(400).json({ error: 'License token is required' });
-      await saveToken(prisma, req.ispId, token);
-      res.json(await getStatus(prisma, req.ispId));
+
+      let targetIspId = req.body?.ispId || req.ispId;
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded?.aud) {
+          const isps = await prisma.iSP.findMany({ select: { id: true } });
+          for (const isp of isps) {
+            const tenantHwid = await getHardwareFingerprint(prisma, isp.id);
+            if (tenantHwid === decoded.aud) {
+              targetIspId = isp.id;
+              break;
+            }
+          }
+        }
+      } catch {}
+
+      await saveToken(prisma, targetIspId, token);
+      res.json(await getStatus(prisma, targetIspId));
     } catch (error) {
       next(error);
     }
@@ -212,9 +227,23 @@ module.exports = (prisma) => {
     try {
       if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can install generated licenses.' });
       if (!hasGeneratorAccess(req)) return res.status(403).json({ error: 'License generator access has expired. Please enter the access secret again.' });
-      const { token } = await getGeneratedLicenseToken(prisma, req.params.id);
-      await saveToken(prisma, req.ispId, token);
-      res.json(await getStatus(prisma, req.ispId));
+      const { token, license } = await getGeneratedLicenseToken(prisma, req.params.id);
+
+      let targetIspId = req.body?.ispId || req.ispId;
+      const targetHwid = license?.hwid;
+      if (targetHwid) {
+        const isps = await prisma.iSP.findMany({ select: { id: true } });
+        for (const isp of isps) {
+          const tenantHwid = await getHardwareFingerprint(prisma, isp.id);
+          if (tenantHwid === targetHwid) {
+            targetIspId = isp.id;
+            break;
+          }
+        }
+      }
+
+      await saveToken(prisma, targetIspId, token);
+      res.json(await getStatus(prisma, targetIspId));
     } catch (error) {
       next(error);
     }
