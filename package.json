@@ -13,11 +13,13 @@
     "defaultFullSeed": "node prisma/defaultFullSeed.js",
     "kisanNetFullSeed": "node prisma/kisanNetFullSeed.js",
     "arrowNetFullSeed": "node prisma/arrowNetFullSeed.js",
-    "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js"
+    "grant:lead-update-field": "node prisma/grantLeadUpdateToFieldRoles.js",
+    "mcp": "node mcp-server/index.js"
   },
   "type": "commonjs",
   "dependencies": {
     "@huggingface/inference": "^4.7.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@prisma/client": "^6.14.0",
     "axios": "^1.10.0",
     "bcrypt": "^6.0.0",

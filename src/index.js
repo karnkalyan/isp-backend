@@ -54,6 +54,7 @@ const messageRouter = require('./routes/message.routes');
 const mailRouter = require('./routes/mail.routes');
 const templateRouter = require('./routes/template.routes');
 const taskRouter = require('./routes/task.routes');
+const mcpRouter = require('./routes/mcp.routes');
 const taskLogger = require('./middlewares/taskLogger');
 const createRateLimit = require('./middlewares/rateLimit');
 
@@ -212,6 +213,7 @@ app.use('/api/messages', messageRouter(prisma));
 app.use('/api/mail', mailRouter(prisma));
 app.use('/api/templates', templateRouter(prisma));
 app.use('/api/tasks', taskRouter(prisma));
+app.use('/api/mcp', mcpRouter(prisma));
 app.use('/api/dashboard', require('./routes/dashboard.routes')(prisma));
 app.use('/api/customer-types', require('./routes/customertype.routes')(prisma));
 app.use('/api/bulk-inventory', require('./routes/bulkinventory.routes')(prisma));
