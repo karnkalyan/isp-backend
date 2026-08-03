@@ -64,59 +64,11 @@ function getRuntimeHardwareFingerprint() {
   return hashHardwareSeed(raw);
 }
 
-async function getHardwareFingerprint(prisma) {
-  if (process.env.LICENSE_HARDWARE_ID) {
-    return getRuntimeHardwareFingerprint();
-  }
-
-  if (!prisma) {
-    return getRuntimeHardwareFingerprint();
-  }
-
-  const stored = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_HWID_KEY } });
-  if (stored?.value) return stored.value;
-
-  const existingTokenSetting = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_TOKEN_KEY } });
-  if (existingTokenSetting?.value) {
-    const decoded = jwt.decode(existingTokenSetting.value);
-    if (decoded?.aud && typeof decoded.aud === 'string') {
-      await prisma.iSPSettings.upsert({
-        where: { key: LICENSE_HWID_KEY },
-        update: {
-          value: decoded.aud,
-          description: 'Stable application hardware fingerprint',
-          updatedAt: new Date()
-        },
-        create: {
-          ispId: Number(process.env.DEFAULT_ISP_ID || 1),
-          key: LICENSE_HWID_KEY,
-          value: decoded.aud,
-          description: 'Stable application hardware fingerprint',
-          updatedAt: new Date()
-        }
-      });
-      return decoded.aud;
-    }
-  }
-
-  const hwid = getRuntimeHardwareFingerprint();
-  await prisma.iSPSettings.upsert({
-    where: { key: LICENSE_HWID_KEY },
-    update: {
-      value: hwid,
-      description: 'Stable application hardware fingerprint',
-      updatedAt: new Date()
-    },
-    create: {
-      ispId: Number(process.env.DEFAULT_ISP_ID || 1),
-      key: LICENSE_HWID_KEY,
-      value: hwid,
-      description: 'Stable application hardware fingerprint',
-      updatedAt: new Date()
-    }
-  });
-
-  return hwid;
+async function getHardwareFingerprint(prisma, ispId) {
+  const baseHwid = process.env.LICENSE_HARDWARE_ID || getRuntimeHardwareFingerprint();
+  if (!ispId) return baseHwid;
+  const targetIspId = Number(ispId);
+  return hashHardwareSeed(`${baseHwid}::tenant::${targetIspId}`);
 }
 
 async function getStoredToken(prisma, ispId) {
@@ -194,7 +146,7 @@ function sanitizeLicenseRecord(record) {
 
 async function saveToken(prisma, ispId, token) {
   const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
-  const status = await verifyToken(prisma, token);
+  const status = await verifyToken(prisma, token, targetIspId);
   if (!status.active) {
     const error = new Error(status.message || EXPIRED_MESSAGE);
     error.status = 402;
@@ -258,12 +210,21 @@ async function deleteToken(prisma, ispId) {
   });
 }
 
-async function verifyToken(prisma, token) {
-  const hwid = await getHardwareFingerprint(prisma);
+async function verifyToken(prisma, token, ispId) {
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  const tenantHwid = await getHardwareFingerprint(prisma, targetIspId);
+  const baseHwid = process.env.LICENSE_HARDWARE_ID || getRuntimeHardwareFingerprint();
+
   const decoded = jwt.verify(token, LICENSE_SECRET, {
-    issuer: ISSUER,
-    audience: hwid
+    issuer: ISSUER
   });
+
+  if (decoded.aud !== tenantHwid && decoded.aud !== baseHwid) {
+    const error = new Error('License key was generated for a different hardware ID or ISP tenant.');
+    error.status = 402;
+    throw error;
+  }
+
   const tokenHash = hashToken(token);
   const storedLicense = await prisma.generatedLicense.findUnique({ where: { tokenHash } });
 
@@ -279,8 +240,8 @@ async function verifyToken(prisma, token) {
     throw error;
   }
 
-  if (storedLicense.hwid !== hwid) {
-    const error = new Error('License key is not valid for this hardware ID.');
+  if (storedLicense.hwid !== decoded.aud) {
+    const error = new Error('License key hardware ID mismatch.');
     error.status = 402;
     throw error;
   }
@@ -300,7 +261,7 @@ async function verifyToken(prisma, token) {
 
   return {
     active: true,
-    hwid,
+    hwid: tenantHwid,
     licenseId: decoded.licenseId,
     company: decoded.company,
     contact: decoded.contact || null,

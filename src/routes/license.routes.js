@@ -104,7 +104,33 @@ module.exports = (prisma) => {
   });
 
   router.get('/hwid', async (req, res) => {
-    res.json({ hwid: await getHardwareFingerprint(prisma) });
+    res.json({ hwid: await getHardwareFingerprint(prisma, req.ispId) });
+  });
+
+  router.get('/isps', auth, async (req, res, next) => {
+    try {
+      if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can view ISP tenant hardware IDs.' });
+      const isps = await prisma.iSP.findMany({
+        where: { isDeleted: false },
+        select: { id: true, companyName: true, contactPerson: true }
+      });
+      const items = await Promise.all(isps.map(async (isp) => {
+        const hwid = await getHardwareFingerprint(prisma, isp.id);
+        const status = await getStatus(prisma, isp.id);
+        return {
+          id: isp.id,
+          companyName: isp.companyName,
+          contactPerson: isp.contactPerson || '',
+          hwid,
+          active: status.active,
+          company: status.company || null,
+          expiresAt: status.expiresAt || null
+        };
+      }));
+      res.json({ isps: items });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post('/install', auth, async (req, res, next) => {
