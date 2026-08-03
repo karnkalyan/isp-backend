@@ -94,7 +94,7 @@ module.exports = (prisma) => {
 
   router.get('/status', async (req, res, next) => {
     try {
-      const status = await getStatus(prisma);
+      const status = await getStatus(prisma, req.ispId);
       const isp = await getRequestIsp(req);
       const publicIsp = isp || await getPublicIsp(status);
       res.json({ ...status, isp, publicIsp });
@@ -113,7 +113,7 @@ module.exports = (prisma) => {
       const token = String(req.body?.token || '').trim();
       if (!token) return res.status(400).json({ error: 'License token is required' });
       await saveToken(prisma, req.ispId, token);
-      res.json(await getStatus(prisma));
+      res.json(await getStatus(prisma, req.ispId));
     } catch (error) {
       next(error);
     }
@@ -122,8 +122,8 @@ module.exports = (prisma) => {
   router.delete('/', auth, async (req, res, next) => {
     try {
       if (!isSystemAdmin(req)) return res.status(403).json({ error: 'Only administrators can delete license.' });
-      await deleteToken(prisma);
-      res.json(await getStatus(prisma));
+      await deleteToken(prisma, req.ispId);
+      res.json(await getStatus(prisma, req.ispId));
     } catch (error) {
       next(error);
     }

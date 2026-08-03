@@ -1143,7 +1143,7 @@ async function createCustomer(req, res, next) {
                 model: device.model,
                 serialNumber: device.serialNumber,
                 macAddress: device.macAddress,
-                ponSerial: device.ponSerial,
+                ponSerial: device.ponSerial || device.serialNumber || null,
                 ponVendorIdIncluded: device.ponVendorIdIncluded !== false,
                 provisioningStatus: 'pending',
               },

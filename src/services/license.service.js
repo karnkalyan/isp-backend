@@ -119,7 +119,19 @@ async function getHardwareFingerprint(prisma) {
   return hwid;
 }
 
-async function getStoredToken(prisma) {
+async function getStoredToken(prisma, ispId) {
+  if (ispId) {
+    const targetIspId = Number(ispId);
+    const ispSetting = await prisma.iSPSettings.findFirst({
+      where: {
+        OR: [
+          { key: `appLicenseToken_${targetIspId}` },
+          { key: LICENSE_TOKEN_KEY, ispId: targetIspId }
+        ]
+      }
+    });
+    if (ispSetting?.value) return ispSetting.value;
+  }
   const setting = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_TOKEN_KEY } });
   return setting?.value || null;
 }
@@ -181,6 +193,7 @@ function sanitizeLicenseRecord(record) {
 }
 
 async function saveToken(prisma, ispId, token) {
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
   const status = await verifyToken(prisma, token);
   if (!status.active) {
     const error = new Error(status.message || EXPIRED_MESSAGE);
@@ -192,29 +205,57 @@ async function saveToken(prisma, ispId, token) {
     where: { tokenHash: hashToken(token) },
     data: {
       installedAt: new Date(),
-      installedIspId: ispId || Number(process.env.DEFAULT_ISP_ID || 1)
+      installedIspId: targetIspId
     }
-  });
+  }).catch(() => {});
 
-  return prisma.iSPSettings.upsert({
-    where: { key: LICENSE_TOKEN_KEY },
-    update: {
-      value: token,
-      description: 'Application license JWT',
-      updatedAt: new Date()
-    },
-    create: {
-      ispId: ispId || Number(process.env.DEFAULT_ISP_ID || 1),
-      key: LICENSE_TOKEN_KEY,
-      value: token,
-      description: 'Application license JWT',
-      updatedAt: new Date()
-    }
-  });
+  const ispKey = `appLicenseToken_${targetIspId}`;
+
+  const existing = await prisma.iSPSettings.findFirst({ where: { key: ispKey } });
+  if (existing) {
+    await prisma.iSPSettings.update({
+      where: { id: existing.id },
+      data: { value: token, updatedAt: new Date() }
+    });
+  } else {
+    await prisma.iSPSettings.create({
+      data: {
+        ispId: targetIspId,
+        key: ispKey,
+        value: token,
+        description: `Application license JWT for ISP ${targetIspId}`,
+        updatedAt: new Date()
+      }
+    });
+  }
+
+  if (targetIspId === Number(process.env.DEFAULT_ISP_ID || 1)) {
+    await prisma.iSPSettings.upsert({
+      where: { key: LICENSE_TOKEN_KEY },
+      update: { value: token, updatedAt: new Date() },
+      create: {
+        ispId: targetIspId,
+        key: LICENSE_TOKEN_KEY,
+        value: token,
+        description: 'Application license JWT',
+        updatedAt: new Date()
+      }
+    }).catch(() => {});
+  }
+
+  return status;
 }
 
-async function deleteToken(prisma) {
-  await prisma.iSPSettings.deleteMany({ where: { key: LICENSE_TOKEN_KEY } });
+async function deleteToken(prisma, ispId) {
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  await prisma.iSPSettings.deleteMany({
+    where: {
+      OR: [
+        { key: `appLicenseToken_${targetIspId}` },
+        ...(targetIspId === Number(process.env.DEFAULT_ISP_ID || 1) ? [{ key: LICENSE_TOKEN_KEY }] : [])
+      ]
+    }
+  });
 }
 
 async function verifyToken(prisma, token) {
@@ -271,9 +312,9 @@ async function verifyToken(prisma, token) {
   };
 }
 
-async function getStatus(prisma) {
+async function getStatus(prisma, ispId) {
   const hwid = await getHardwareFingerprint(prisma);
-  const token = await getStoredToken(prisma);
+  const token = await getStoredToken(prisma, ispId);
 
   if (!token) {
     return {

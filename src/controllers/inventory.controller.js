@@ -883,7 +883,7 @@ async function assignInventoryItem(req, res, next) {
                     model: item.model || 'Unknown',
                     serialNumber: updated.serialNumber || '',
                     macAddress: updated.macAddress || '',
-                    ponSerial: updated.ponSerialNumber || '',
+                    ponSerial: updated.ponSerialNumber || updated.serialNumber || '',
                     ponVendorIdIncluded: updated.ponVendorIdIncluded,
                     provisioningStatus: 'PENDING',
                     updatedAt: new Date()
