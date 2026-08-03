@@ -58,7 +58,7 @@ module.exports = (prisma) => {
       if (!session) {
         return res.status(400).json({ error: 'Invalid or expired MCP SSE session ID' });
       }
-      await session.transport.handlePostMessage(req, res);
+      await session.transport.handlePostMessage(req, res, req.body);
     } catch (err) {
       console.error('MCP message error:', err);
       next(err);
