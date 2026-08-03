@@ -213,6 +213,7 @@ app.use('/api/messages', messageRouter(prisma));
 app.use('/api/mail', mailRouter(prisma));
 app.use('/api/templates', templateRouter(prisma));
 app.use('/api/tasks', taskRouter(prisma));
+app.use('/mcp', mcpRouter(prisma));
 app.use('/api/mcp', mcpRouter(prisma));
 app.use('/api/dashboard', require('./routes/dashboard.routes')(prisma));
 app.use('/api/customer-types', require('./routes/customertype.routes')(prisma));
