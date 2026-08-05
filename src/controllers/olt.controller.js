@@ -467,355 +467,347 @@ async function createOlt(req, res, next) {
 
     // Create OLT with transaction
     const result = await req.prisma.$transaction(async (prisma) => {
-      // Create OLT
-      const olt = await prisma.oLT.create({
-        data: {
-          name,
-          ipAddress,
-          model,
-          vendor,
-          serialNumber: serialNumber || null,
-          firmwareVersion: firmwareVersion || null,
-          status,
-          totalPorts,
-          usedPorts,
-          availablePorts,
-          sshHost: sshConfig?.host || ipAddress,
-          sshPort: sshConfig?.port || 22,
-          sshUsername: sshConfig?.username || "admin",
-          sshPassword: sshConfig?.password || null,
-          sshEnablePassword: sshConfig?.password || null,
-          sshKey: sshConfig?.sshKey || null,
-          telnetEnabled: telnetConfig?.enabled || false,
-          telnetPort: telnetConfig?.port || 23,
-          snmpEnabled: management?.snmpEnabled ?? true,
-          snmpCommunity: management?.snmpCommunity || "public",
-          snmpVersion: management?.snmpVersion || "v2c",
-          webInterface: management?.webInterface ?? true,
-          webPort: management?.webPort || 80,
-          webSSL: management?.webSSL || false,
-          apiEnabled: management?.apiEnabled || false,
-          apiPort: management?.apiPort || 8080,
-          region: location?.region || null,
-          site: location?.site || null,
-          rack: location?.rack || 1,
-          position: location?.position || 1,
-          latitude: location?.latitude || null,
-          longitude: location?.longitude || null,
-          locationNotes: location?.notes || null,
-          capabilities: JSON.stringify(capabilities),
-          autoProvisioning,
-          redundancy,
-          powerSupply,
-          cooling,
-          backupSchedule,
-          notes: notes || null,
-          ispId: req.ispId,
-          defaultTransport,
-          branchId: finalBranchId
-        }
-      });
+      const updatedOnts = [];
+      const updatedOntDetails = [];
 
-      // Create service boards
-      if (serviceBoards.length > 0) {
-        const serviceBoardData = serviceBoards.map(board => ({
-          slot: board.slot,
-          type: board.type || "GPON",
-          portCount: board.portCount,
-          usedPorts: board.usedPorts || 0,
-          availablePorts: board.portCount - (board.usedPorts || 0),
-          status: board.status || "active",
-          temperature: board.temperature || null,
-          powerConsumption: board.powerConsumption || null,
-          firmwareVersion: board.firmwareVersion || null,
-          serialNumber: board.serialNumber || null,
-          oltId: olt.id
-        }));
+      const serials = allOnts.map(o => o.sn).filter(Boolean);
+      const servicePorts = allOnts.map(o => o.fsp).filter(Boolean);
+      const ontIds = allOnts.map(o => String(o.ont_id)).filter(Boolean);
 
-        await prisma.serviceBoard.createMany({
-          data: serviceBoardData
-        });
-      }
-
-      // Return OLT with service boards
-      return await prisma.oLT.findUnique({
-        where: { id: olt.id },
-        include: {
-          serviceBoards: true
-        }
-      });
-    });
-
-    // Return the complete OLT data in frontend format
-    return res.status(201).json({
-      success: true,
-      message: "OLT created successfully",
-      data: {
-        id: result.id.toString(),
-        name: result.name,
-        ipAddress: result.ipAddress,
-        model: result.model,
-        vendor: result.vendor,
-        serialNumber: result.serialNumber || '',
-        firmwareVersion: result.firmwareVersion || '',
-        status: result.status,
-        lastSeen: result.lastSeen?.toISOString() || new Date().toISOString(),
-        totalPorts: result.totalPorts,
-        usedPorts: result.usedPorts,
-        availablePorts: result.availablePorts,
-        totalSubscribers: result.totalSubscribers || 0,
-        activeSubscribers: result.activeSubscribers || 0,
-        serviceBoards: result.serviceBoards.map(board => ({
-          id: board.id.toString(),
-          slot: board.slot,
-          type: board.type,
-          portCount: board.portCount,
-          usedPorts: board.usedPorts,
-          availablePorts: board.availablePorts,
-          status: board.status,
-          temperature: board.temperature,
-          powerConsumption: board.powerConsumption,
-          firmwareVersion: board.firmwareVersion,
-          serialNumber: board.serialNumber
-        })),
-        sshConfig: {
-          host: result.sshHost || result.ipAddress,
-          port: result.sshPort || 22,
-          username: result.sshUsername || 'admin',
-          password: result.sshPassword || '',
-          enablePassword: result.sshEnablePassword || '',
-          sshKey: result.sshKey || ''
-        },
-        telnetConfig: {
-          enabled: result.telnetEnabled || false,
-          port: result.telnetPort || 23
-        },
-        management: {
-          snmpEnabled: result.snmpEnabled || false,
-          snmpCommunity: result.snmpCommunity || 'public',
-          snmpVersion: result.snmpVersion || 'v2c',
-          webInterface: result.webInterface || false,
-          webPort: result.webPort || 80,
-          webSSL: result.webSSL || false,
-          apiEnabled: result.apiEnabled || false,
-          apiPort: result.apiPort || 8080
-        },
-        location: {
-          region: result.region || '',
-          site: result.site || '',
-          rack: result.rack || 1,
-          position: result.position || 1,
-          latitude: result.latitude || 0,
-          longitude: result.longitude || 0,
-          notes: result.locationNotes || ''
-        },
-        capabilities: result.capabilities ? JSON.parse(result.capabilities) : [],
-        createdAt: result.createdAt.toISOString(),
-        updatedAt: result.updatedAt.toISOString(),
-        lastBackup: result.lastBackup ? result.lastBackup.toISOString() : undefined,
-        backupSchedule: result.backupSchedule || 'none',
-        defaultTransport: result.defaultTransport || 'ssh',
-        autoProvisioning: result.autoProvisioning || false,
-        redundancy: result.redundancy || false,
-        powerSupply: result.powerSupply || 1,
-        cooling: result.cooling || 'active',
-        notes: result.notes || ''
-      }
-    });
-  } catch (err) {
-    console.error("createOlt error:", err);
-    return next(err);
-  }
-}
-
-/**
- * Update OLT
- */
-async function updateOlt(req, res, next) {
-  try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return res.status(400).json({ error: "Invalid OLT ID" });
-
-    const branchFilter = await getBranchFilter(req);
-    const existing = await req.prisma.oLT.findFirst({
-      where: {
-        id,
-        isDeleted: false,
-        ispId: req.ispId,
-        ...branchFilter
-      }
-    });
-
-    if (!existing) {
-      return res.status(404).json({ error: "OLT not found" });
-    }
-
-    const {
-      name,
-      ipAddress,
-      model,
-      vendor,
-      serialNumber,
-      firmwareVersion,
-      status,
-      sshConfig,
-      telnetConfig,
-      management,
-      location,
-      serviceBoards,
-      capabilities,
-      autoProvisioning,
-      redundancy,
-      powerSupply,
-      cooling,
-      backupSchedule,
-      notes,
-      defaultTransport,
-    } = req.body;
-
-    const updateData = {};
-
-    // Basic fields
-    if (name !== undefined) updateData.name = name;
-    if (model !== undefined) updateData.model = model;
-    if (vendor !== undefined) updateData.vendor = vendor;
-    if (serialNumber !== undefined) updateData.serialNumber = serialNumber;
-    if (firmwareVersion !== undefined) updateData.firmwareVersion = firmwareVersion;
-    if (status !== undefined) updateData.status = status;
-    if (autoProvisioning !== undefined) updateData.autoProvisioning = Boolean(autoProvisioning);
-    if (redundancy !== undefined) updateData.redundancy = Boolean(redundancy);
-    if (powerSupply !== undefined) updateData.powerSupply = parseInt(powerSupply) || 1;
-    if (cooling !== undefined) updateData.cooling = cooling;
-    if (backupSchedule !== undefined) updateData.backupSchedule = backupSchedule;
-    if (notes !== undefined) updateData.notes = notes;
-    if (capabilities !== undefined) updateData.capabilities = JSON.stringify(capabilities);
-    if (defaultTransport !== undefined) updateData.defaultTransport = defaultTransport;
-
-    // IP Address validation
-    if (ipAddress !== undefined) {
-      const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-      if (!ipRegex.test(ipAddress)) {
-        return res.status(400).json({ error: "Invalid IP address format" });
-      }
-
-      // Check if IP is already used by another OLT
-      const existingIp = await req.prisma.oLT.findFirst({
+      const existingOnts = await prisma.oNT.findMany({
         where: {
-          ipAddress,
-          ispId: req.ispId,
-          isDeleted: false,
-          id: { not: id }
-        }
-      });
-
-      if (existingIp) {
-        return res.status(409).json({ error: "IP address already in use by another OLT" });
-      }
-
-      updateData.ipAddress = ipAddress;
-    }
-
-    // SSH Configuration
-    if (sshConfig) {
-      if (sshConfig.host !== undefined) updateData.sshHost = sshConfig.host;
-      if (sshConfig.port !== undefined) updateData.sshPort = parseInt(sshConfig.port) || 22;
-      if (sshConfig.username !== undefined) updateData.sshUsername = sshConfig.username;
-      if (sshConfig.password !== undefined) updateData.sshPassword = sshConfig.password;
-      if (sshConfig.enablePassword !== undefined) updateData.sshEnablePassword = sshConfig.enablePassword;
-      if (sshConfig.sshKey !== undefined) updateData.sshKey = sshConfig.sshKey;
-    }
-
-    // Telnet Configuration
-    if (telnetConfig) {
-      if (telnetConfig.enabled !== undefined) updateData.telnetEnabled = Boolean(telnetConfig.enabled);
-      if (telnetConfig.port !== undefined) updateData.telnetPort = parseInt(telnetConfig.port) || 23;
-    }
-
-    // Management Configuration
-    if (management) {
-      if (management.snmpEnabled !== undefined) updateData.snmpEnabled = Boolean(management.snmpEnabled);
-      if (management.snmpCommunity !== undefined) updateData.snmpCommunity = management.snmpCommunity;
-      if (management.snmpVersion !== undefined) updateData.snmpVersion = management.snmpVersion;
-      if (management.webInterface !== undefined) updateData.webInterface = Boolean(management.webInterface);
-      if (management.webPort !== undefined) updateData.webPort = parseInt(management.webPort) || 80;
-      if (management.webSSL !== undefined) updateData.webSSL = Boolean(management.webSSL);
-      if (management.apiEnabled !== undefined) updateData.apiEnabled = Boolean(management.apiEnabled);
-      if (management.apiPort !== undefined) updateData.apiPort = parseInt(management.apiPort) || 8080;
-    }
-
-    // Location
-    if (location) {
-      if (location.region !== undefined) updateData.region = location.region;
-      if (location.site !== undefined) updateData.site = location.site;
-      if (location.rack !== undefined) updateData.rack = parseInt(location.rack) || 1;
-      if (location.position !== undefined) updateData.position = parseInt(location.position) || 1;
-      if (location.latitude !== undefined) updateData.latitude = parseFloat(location.latitude);
-      if (location.longitude !== undefined) updateData.longitude = parseFloat(location.longitude);
-      if (location.notes !== undefined) updateData.locationNotes = location.notes;
-    }
-
-    // Update lastSeen if status changed
-    if (status && status !== existing.status) {
-      updateData.lastSeen = new Date();
-    }
-
-    const result = await req.prisma.$transaction(async (prisma) => {
-      // Update OLT
-      const updatedOlt = await prisma.oLT.update({
-        where: { id },
-        data: updateData
-      });
-
-      // Update service boards if provided
-      if (serviceBoards && Array.isArray(serviceBoards)) {
-        // Delete existing service boards
-        await prisma.serviceBoard.deleteMany({
-          where: { oltId: id }
-        });
-
-        // Create new service boards
-        if (serviceBoards.length > 0) {
-          const serviceBoardData = serviceBoards.map(board => ({
-            slot: board.slot,
-            type: board.type || "GPON",
-            portCount: board.portCount,
-            usedPorts: board.usedPorts || 0,
-            availablePorts: board.portCount - (board.usedPorts || 0),
-            status: board.status || "active",
-            temperature: board.temperature || null,
-            powerConsumption: board.powerConsumption || null,
-            firmwareVersion: board.firmwareVersion || null,
-            serialNumber: board.serialNumber || null,
-            oltId: id
-          }));
-
-          await prisma.serviceBoard.createMany({
-            data: serviceBoardData
-          });
-
-          // Recalculate port statistics
-          const totalPorts = serviceBoards.reduce((sum, board) => sum + (board.portCount || 0), 0);
-          const usedPorts = serviceBoards.reduce((sum, board) => sum + (board.usedPorts || 0), 0);
-          const availablePorts = totalPorts - usedPorts;
-
-          await prisma.oLT.update({
-            where: { id },
-            data: {
-              totalPorts,
-              usedPorts,
-              availablePorts
+          oltId,
+          OR: [
+            {
+              serialNumber: {
+                in: serials.length ? serials : ['__NONE__']
+              }
+            },
+            {
+              servicePort: {
+                in: servicePorts.length ? servicePorts : ['__NONE__']
+              }
+            },
+            {
+              ontId: {
+                in: ontIds.length ? ontIds : ['__NONE__']
+              }
             }
-          });
+          ]
+        }
+      });
+
+      const existingDetails = await prisma.oNTDetails.findMany({
+        where: {
+          OR: [
+            {
+              serialNumber: {
+                in: serials.length ? serials : ['__NONE__']
+              }
+            },
+            {
+              ontIdRef: {
+                in: existingOnts.map(o => o.id).filter(Boolean)
+              }
+            }
+          ]
+        }
+      });
+
+      const existingOntBySerial = new Map();
+      const existingOntByOntIdAndPort = new Map();
+
+      for (const ont of existingOnts) {
+        if (ont.serialNumber) {
+          existingOntBySerial.set(ont.serialNumber, ont);
+        }
+        existingOntByOntIdAndPort.set(`${ont.ontId}-${ont.servicePort}`, ont);
+      }
+
+      const existingDetailsBySerial = new Map();
+      const existingDetailsByRef = new Map();
+
+      for (const detail of existingDetails) {
+        if (detail.serialNumber) {
+          existingDetailsBySerial.set(detail.serialNumber, detail);
+        }
+        if (detail.ontIdRef) {
+          existingDetailsByRef.set(detail.ontIdRef, detail);
         }
       }
 
-      // Return updated OLT with service boards
-      return await prisma.oLT.findUnique({
-        where: { id },
-        include: {
-          serviceBoards: true
+      for (const ontData of allOnts) {
+        if (ontData.ont_id === undefined || ontData.ont_id === null || !ontData.fsp) {
+          console.warn('Skipping invalid ONT data:', ontData);
+          continue;
+        }
+
+        const diagnostics = ontData.diagnostics || ontData.optical_diagnostics || {};
+        const isOnline =
+          ontData.run_state === 'online' ||
+          ontData.run_state === 'online normal' ||
+          ontData.status === 'online' ||
+          ontData.status === 'auto-configured';
+
+        const uptimeValue =
+          ontData.online_duration ||
+          ontData.alive_time ||
+          "0";
+
+        const ontRecord = {
+          ontId: String(ontData.ont_id),
+          serialNumber: ontData.sn || ontData.serialNumber || '',
+          vendor: ontData.vendor_id || olt.vendor || 'Unknown',
+          model: ontData.model_id || ontData.model || 'Unknown',
+          status: isOnline ? 'online' : 'offline',
+          distance: parseDistance(ontData.distance || diagnostics.distance),
+          rxPower: parsePower(ontData.rx_power || diagnostics.rx_power),
+          txPower: parsePower(ontData.tx_power || diagnostics.tx_power),
+          temperature: parseTemperature(ontData.temperature || diagnostics.temperature),
+          uptime: String(uptimeValue || "0"),
+          lastOnline: isOnline ? new Date() : null,
+          serviceState: ontData.control_flag || 'active',
+          servicePort: ontData.fsp,
+          vlan: ontData.vlan || null,
+          macAddress: ontData.mac_address || ontData.macAddress || '',
+          ipAddress: ontData.ipAddress || null,
+          description: ontData.description || '',
+          capabilities: JSON.stringify(ontData.capabilities || []),
+          rawData: ontData,
+          oltId,
+          ispId: req.ispId,
+          branchId: olt.branchId || null,
+          lastSync: new Date(),
+          isDeleted: false
+        };
+
+        const pairKey = `${ontRecord.ontId}-${ontRecord.servicePort}`;
+
+        const existingByPair = existingOntByOntIdAndPort.get(pairKey) || null;
+        const existingBySerial = ontRecord.serialNumber
+          ? (existingOntBySerial.get(ontRecord.serialNumber) || null)
+          : null;
+
+        let ontIdRef;
+
+        if (existingByPair && existingBySerial && existingByPair.id === existingBySerial.id) {
+          const updated = await prisma.oNT.update({
+            where: { id: existingByPair.id },
+            data: ontRecord
+          });
+
+          updatedOnts.push(updated);
+          ontIdRef = updated.id;
+
+          if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+          existingOntByOntIdAndPort.set(pairKey, updated);
+        } else if (existingByPair && !existingBySerial) {
+          const updated = await prisma.oNT.update({
+            where: { id: existingByPair.id },
+            data: ontRecord
+          });
+
+          updatedOnts.push(updated);
+          ontIdRef = updated.id;
+
+          if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+          existingOntByOntIdAndPort.set(pairKey, updated);
+        } else if (!existingByPair && existingBySerial) {
+          const currentPairKeyOfSerialRow = `${existingBySerial.ontId}-${existingBySerial.servicePort}`;
+
+          if (currentPairKeyOfSerialRow !== pairKey) {
+            const conflictingPairRow = existingOntByOntIdAndPort.get(pairKey);
+
+            if (conflictingPairRow && conflictingPairRow.id !== existingBySerial.id) {
+              await prisma.oNT.update({
+                where: { id: existingBySerial.id },
+                data: {
+                  isDeleted: true,
+                  updatedAt: new Date()
+                }
+              }).catch(err => {
+                console.error('Failed to soft delete duplicate serial row:', err.message);
+              });
+
+              const updated = await prisma.oNT.update({
+                where: { id: conflictingPairRow.id },
+                data: ontRecord
+              });
+
+              updatedOnts.push(updated);
+              ontIdRef = updated.id;
+
+              if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+              existingOntByOntIdAndPort.set(pairKey, updated);
+            } else {
+              const updated = await prisma.oNT.update({
+                where: { id: existingBySerial.id },
+                data: ontRecord
+              });
+
+              updatedOnts.push(updated);
+              ontIdRef = updated.id;
+
+              if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+              existingOntByOntIdAndPort.delete(currentPairKeyOfSerialRow);
+              existingOntByOntIdAndPort.set(pairKey, updated);
+            }
+          } else {
+            const updated = await prisma.oNT.update({
+              where: { id: existingBySerial.id },
+              data: ontRecord
+            });
+
+            updatedOnts.push(updated);
+            ontIdRef = updated.id;
+
+            if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+            existingOntByOntIdAndPort.set(pairKey, updated);
+          }
+        } else if (existingByPair && existingBySerial && existingByPair.id !== existingBySerial.id) {
+          await prisma.oNT.update({
+            where: { id: existingBySerial.id },
+            data: {
+              isDeleted: true,
+              updatedAt: new Date()
+            }
+          }).catch(err => {
+            console.error('Failed to soft-delete duplicate ONT row:', err.message);
+          });
+
+          const updated = await prisma.oNT.update({
+            where: { id: existingByPair.id },
+            data: ontRecord
+          });
+
+          updatedOnts.push(updated);
+          ontIdRef = updated.id;
+
+          if (updated.serialNumber) existingOntBySerial.set(updated.serialNumber, updated);
+          existingOntByOntIdAndPort.set(pairKey, updated);
+        } else {
+          const created = await prisma.oNT.create({
+            data: ontRecord
+          });
+
+          updatedOnts.push(created);
+          ontIdRef = created.id;
+
+          if (created.serialNumber) existingOntBySerial.set(created.serialNumber, created);
+          existingOntByOntIdAndPort.set(pairKey, created);
+        }
+
+        const ontDetailsRecord = {
+          ontId: ontData.ont_id?.toString() || ontRecord.ontId,
+          fsp: ontData.fsp || ontRecord.servicePort,
+          serialNumber: ontData.sn || ontRecord.serialNumber,
+          description: ontData.description || ontRecord.description,
+          controlFlag: ontData.control_flag || ontRecord.serviceState,
+          runState: ontData.run_state || (ontRecord.status === 'online' ? 'online' : 'offline'),
+          configState: ontData.config_state || 'unknown',
+          matchState: ontData.match_state || 'unknown',
+          isolationState: ontData.isolation_state || null,
+          distance: parseDistance(ontData.distance || diagnostics.distance),
+          batteryState: ontData.battery_state || null,
+          lastUpTime: ontData.last_up_time || ontData.last_reg_time || null,
+          lastDownTime: ontData.last_down_time || ontData.last_dereg_reason || null,
+          lastDownCause: ontData.last_down_cause || ontData.last_dereg_reason || ontData.offline_reason || null,
+          lastDyingGaspTime: ontData.last_dying_gasp_time || null,
+          onlineDuration: ontData.online_duration || ontData.alive_time || null,
+          systemUptime: ontData.system_uptime || ontData.alive_time || null,
+          lineProfileId: ontData.line_profile_id || null,
+          lineProfileName: ontData.line_profile_name || null,
+          serviceProfileId: ontData.service_profile_id || null,
+          serviceProfileName: ontData.service_profile_name || null,
+          mappingMode: ontData.mapping_mode || null,
+          qosMode: ontData.qos_mode || null,
+          tr069: ontData.tr069 || null,
+          protectSide: ontData.protect_side || null,
+          tconts: ontData.tconts ? JSON.parse(JSON.stringify(ontData.tconts)) : null,
+          gems: ontData.gems ? JSON.parse(JSON.stringify(ontData.gems)) : null,
+          vlanTranslations: ontData.vlan_translations ? JSON.parse(JSON.stringify(ontData.vlan_translations)) : null,
+          servicePorts: ontData.service_ports ? JSON.parse(JSON.stringify(ontData.service_ports)) : null,
+          opticalDiagnostics: diagnostics ? JSON.parse(JSON.stringify(diagnostics)) : null,
+          ontIdRef,
+          lastSync: new Date()
+        };
+
+        const existingDetailByRef = ontIdRef ? (existingDetailsByRef.get(ontIdRef) || null) : null;
+        const existingDetailBySerial = ontDetailsRecord.serialNumber
+          ? (existingDetailsBySerial.get(ontDetailsRecord.serialNumber) || null)
+          : null;
+
+        let updatedDetails;
+
+        if (
+          existingDetailByRef &&
+          existingDetailBySerial &&
+          existingDetailByRef.id !== existingDetailBySerial.id
+        ) {
+          try {
+            await prisma.oNTDetails.delete({
+              where: { id: existingDetailBySerial.id }
+            });
+          } catch (e) {
+            console.warn("Could not delete duplicate ONTDetails row:", e.message);
+          }
+          if (ontDetailsRecord.serialNumber) {
+            existingDetailsBySerial.delete(ontDetailsRecord.serialNumber);
+          }
+
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailByRef.id },
+            data: ontDetailsRecord
+          });
+        } else if (existingDetailByRef) {
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailByRef.id },
+            data: ontDetailsRecord
+          });
+        } else if (existingDetailBySerial) {
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailBySerial.id },
+            data: ontDetailsRecord
+          });
+        } else {
+          updatedDetails = await prisma.oNTDetails.create({
+            data: ontDetailsRecord
+          });
+        }
+
+        updatedOntDetails.push(updatedDetails);
+
+        if (updatedDetails.serialNumber) {
+          existingDetailsBySerial.set(updatedDetails.serialNumber, updatedDetails);
+        }
+        if (updatedDetails.ontIdRef) {
+          existingDetailsByRef.set(updatedDetails.ontIdRef, updatedDetails);
+        }
+      }
+
+      const activeOntsCount = await prisma.oNT.count({
+        where: {
+          oltId,
+          isDeleted: false,
+          status: 'online'
         }
       });
+
+      await prisma.oLT.update({
+        where: { id: oltId },
+        data: {
+          usedPorts: activeOntsCount,
+          availablePorts: Math.max(0, (olt.totalPorts || 0) - activeOntsCount),
+          lastSeen: new Date(),
+          status: 'online',
+          updatedAt: new Date()
+        }
+      });
+
+      return {
+        onts: updatedOnts,
+        ontDetails: updatedOntDetails
+      };
     });
 
     return res.json({
@@ -1620,6 +1612,11 @@ async function syncOntsFromOlt(req, res, next) {
               serialNumber: {
                 in: serials.length ? serials : ['__NONE__']
               }
+            },
+            {
+              ontIdRef: {
+                in: existingOnts.map(o => o.id).filter(Boolean)
+              }
             }
           ]
         }
@@ -1730,11 +1727,6 @@ async function syncOntsFromOlt(req, res, next) {
             const conflictingPairRow = existingOntByOntIdAndPort.get(pairKey);
 
             if (conflictingPairRow && conflictingPairRow.id !== existingBySerial.id) {
-              console.warn(
-                `Conflict detected for serial=${ontRecord.serialNumber}, targetPair=${pairKey}, ` +
-                `serialRow=${existingBySerial.id}, pairRow=${conflictingPairRow.id}`
-              );
-
               await prisma.oNT.update({
                 where: { id: existingBySerial.id },
                 data: {
@@ -1781,11 +1773,6 @@ async function syncOntsFromOlt(req, res, next) {
             existingOntByOntIdAndPort.set(pairKey, updated);
           }
         } else if (existingByPair && existingBySerial && existingByPair.id !== existingBySerial.id) {
-          console.warn(
-            `ONT conflict detected. serial=${ontRecord.serialNumber}, pair=${pairKey}, ` +
-            `pairRow=${existingByPair.id}, serialRow=${existingBySerial.id}`
-          );
-
           await prisma.oNT.update({
             where: { id: existingBySerial.id },
             data: {
@@ -1853,40 +1840,56 @@ async function syncOntsFromOlt(req, res, next) {
           lastSync: new Date()
         };
 
-        const existingDetailByRef = existingDetailsByRef.get(ontIdRef) || null;
+        const existingDetailByRef = ontIdRef ? (existingDetailsByRef.get(ontIdRef) || null) : null;
         const existingDetailBySerial = ontDetailsRecord.serialNumber
           ? (existingDetailsBySerial.get(ontDetailsRecord.serialNumber) || null)
           : null;
 
-        const existingDetail = existingDetailByRef || existingDetailBySerial;
+        let updatedDetails;
 
-        if (existingDetail) {
-          const updatedDetails = await prisma.oNTDetails.update({
-            where: { id: existingDetail.id },
+        if (
+          existingDetailByRef &&
+          existingDetailBySerial &&
+          existingDetailByRef.id !== existingDetailBySerial.id
+        ) {
+          try {
+            await prisma.oNTDetails.delete({
+              where: { id: existingDetailBySerial.id }
+            });
+          } catch (e) {
+            console.warn("Could not delete duplicate ONTDetails row:", e.message);
+          }
+          if (ontDetailsRecord.serialNumber) {
+            existingDetailsBySerial.delete(ontDetailsRecord.serialNumber);
+          }
+
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailByRef.id },
             data: ontDetailsRecord
           });
-
-          updatedOntDetails.push(updatedDetails);
-
-          if (updatedDetails.serialNumber) {
-            existingDetailsBySerial.set(updatedDetails.serialNumber, updatedDetails);
-          }
-          if (updatedDetails.ontIdRef) {
-            existingDetailsByRef.set(updatedDetails.ontIdRef, updatedDetails);
-          }
+        } else if (existingDetailByRef) {
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailByRef.id },
+            data: ontDetailsRecord
+          });
+        } else if (existingDetailBySerial) {
+          updatedDetails = await prisma.oNTDetails.update({
+            where: { id: existingDetailBySerial.id },
+            data: ontDetailsRecord
+          });
         } else {
-          const createdDetails = await prisma.oNTDetails.create({
+          updatedDetails = await prisma.oNTDetails.create({
             data: ontDetailsRecord
           });
+        }
 
-          updatedOntDetails.push(createdDetails);
+        updatedOntDetails.push(updatedDetails);
 
-          if (createdDetails.serialNumber) {
-            existingDetailsBySerial.set(createdDetails.serialNumber, createdDetails);
-          }
-          if (createdDetails.ontIdRef) {
-            existingDetailsByRef.set(createdDetails.ontIdRef, createdDetails);
-          }
+        if (updatedDetails.serialNumber) {
+          existingDetailsBySerial.set(updatedDetails.serialNumber, updatedDetails);
+        }
+        if (updatedDetails.ontIdRef) {
+          existingDetailsByRef.set(updatedDetails.ontIdRef, updatedDetails);
         }
       }
 
@@ -1962,9 +1965,6 @@ async function syncOntsFromOlt(req, res, next) {
   }
 }
 
-/**
- * Sync ONTs basic info from OLT via Driver (without details)
- */
 async function syncOntsBasicFromOlt(req, res, next) {
   try {
     const oltId = parseInt(req.params.id);

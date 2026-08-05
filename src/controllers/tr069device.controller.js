@@ -759,7 +759,19 @@ async function refreshOltPowerBySerial(req, res, next) {
       await driver.connect();
 
       console.log(`Live fetching optical info from OLT ${ont.olt.name} for ONT SN: ${ont.serialNumber}`);
-      const detailedInfo = await driver.getOntInfoBySN(ont.serialNumber);
+
+      let detailedInfo = null;
+      const snVariations = getSnVariations(ont.serialNumber || serial);
+      for (const snVar of snVariations) {
+        try {
+          detailedInfo = await driver.getOntInfoBySN(snVar);
+          if (detailedInfo && detailedInfo.fsp && detailedInfo.fsp !== "N/A") {
+            break;
+          }
+        } catch (e) {
+          console.warn(`getOntInfoBySN failed for variation ${snVar}:`, e.message);
+        }
+      }
 
       if (driver && driver.ssh) {
         driver.ssh.close();
@@ -768,18 +780,45 @@ async function refreshOltPowerBySerial(req, res, next) {
       if (detailedInfo) {
         const diagnostics = detailedInfo.optical_diagnostics || {};
 
+        let targetOntId = ont.id;
+        if (!targetOntId || targetOntId === 0) {
+          const existingOnt = await req.prisma.oNT.findFirst({
+            where: {
+              oltId: ont.olt.id,
+              serialNumber: ont.serialNumber || serial,
+              isDeleted: false
+            }
+          });
+          if (existingOnt) {
+            targetOntId = existingOnt.id;
+          } else {
+            const createdOnt = await req.prisma.oNT.create({
+              data: {
+                oltId: ont.olt.id,
+                ontId: detailedInfo.ont_id?.toString() || "0",
+                servicePort: detailedInfo.fsp || "0/0/0",
+                serialNumber: ont.serialNumber || serial,
+                status: "online",
+                serviceState: detailedInfo.control_flag || "active",
+                lastSync: new Date()
+              }
+            });
+            targetOntId = createdOnt.id;
+          }
+        }
+
         // Upsert ONTDetails record in DB
         await req.prisma.oNTDetails.upsert({
-          where: { ontIdRef: ont.id },
+          where: { ontIdRef: targetOntId },
           update: {
             opticalDiagnostics: JSON.parse(JSON.stringify(diagnostics)),
             lastSync: new Date()
           },
           create: {
-            ontIdRef: ont.id,
-            ontId: ont.ontId || "0",
-            fsp: ont.servicePort || "0/0/0",
-            serialNumber: ont.serialNumber,
+            ontIdRef: targetOntId,
+            ontId: detailedInfo.ont_id?.toString() || ont.ontId || "0",
+            fsp: detailedInfo.fsp || ont.servicePort || "0/0/0",
+            serialNumber: ont.serialNumber || serial,
             controlFlag: "active",
             runState: ont.status || "online",
             configState: "normal",
@@ -792,9 +831,9 @@ async function refreshOltPowerBySerial(req, res, next) {
         // Also update ONT table rxPower if available
         if (diagnostics.rx_power) {
           const cleaned = parseFloat(diagnostics.rx_power.replace(/[^0-9.-]/g, ''));
-          if (!isNaN(cleaned)) {
+          if (!isNaN(cleaned) && targetOntId > 0) {
             await req.prisma.oNT.update({
-              where: { id: ont.id },
+              where: { id: targetOntId },
               data: { rxPower: cleaned }
             }).catch(e => console.error("Error updating ONT rxPower:", e.message));
           }
@@ -980,8 +1019,9 @@ async function findOntForSerial(prisma, serialNumber) {
   if (!serialNumber) return null;
   const initialVariations = getSnVariations(serialNumber);
 
-  // Check if assigned to CustomerDevice to get extra serial/ponSerial/mac
+  // Check if assigned to CustomerDevice to get extra serial/ponSerial/mac and customer OLT
   let extraVariations = [];
+  let customerOlt = null;
   try {
     const customerDevices = await prisma.customerDevice.findMany({
       where: {
@@ -990,12 +1030,45 @@ async function findOntForSerial(prisma, serialNumber) {
           { ponSerial: { in: initialVariations } },
           { macAddress: { in: initialVariations } }
         ]
+      },
+      include: {
+        customer: {
+          include: {
+            serviceDetails: {
+              include: {
+                olt: {
+                  select: {
+                    id: true,
+                    name: true,
+                    ipAddress: true,
+                    vendor: true,
+                    sshHost: true,
+                    sshPort: true,
+                    sshUsername: true,
+                    sshPassword: true,
+                    sshEnablePassword: true,
+                    defaultTransport: true,
+                    telnetPort: true
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     });
+
     for (const cd of customerDevices) {
       if (cd.serialNumber) extraVariations.push(...getSnVariations(cd.serialNumber));
       if (cd.ponSerial) extraVariations.push(...getSnVariations(cd.ponSerial));
       if (cd.macAddress) extraVariations.push(cd.macAddress);
+
+      if (!customerOlt && cd.customer?.serviceDetails?.length) {
+        const sd = cd.customer.serviceDetails.find(s => s.olt);
+        if (sd && sd.olt) {
+          customerOlt = sd.olt;
+        }
+      }
     }
   } catch (e) {
     console.error('Error checking CustomerDevice in findOntForSerial:', e.message);
@@ -1063,6 +1136,21 @@ async function findOntForSerial(prisma, serialNumber) {
         }
       });
     }
+  }
+
+  if (ont && !ont.olt && customerOlt) {
+    ont.olt = customerOlt;
+  }
+
+  if (!ont && customerOlt) {
+    ont = {
+      id: 0,
+      serialNumber: serialNumber,
+      ontId: "0",
+      servicePort: "0/0/0",
+      status: "online",
+      olt: customerOlt
+    };
   }
 
   return ont;

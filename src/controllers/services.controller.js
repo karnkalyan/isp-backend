@@ -2941,22 +2941,25 @@ class ServiceController {
     try {
       const ispId = req.ispId;
       const { serialNumber } = req.params;
+      const shouldSync = req.query.sync === 'true' || req.query.force === 'true';
 
-      const cached = getCachedGenieACSResponse(ispId, serialNumber, 'waninfo');
-      if (cached) {
-        res.set('X-GenieACS-Cache', 'HIT');
-        return res.json(cached);
+      if (!shouldSync) {
+        const cached = getCachedGenieACSResponse(ispId, serialNumber, 'waninfo');
+        if (cached) {
+          res.set('X-GenieACS-Cache', 'HIT');
+          return res.json(cached);
+        }
       }
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
 
-      // Ask the CPE for current WAN and device data before reading GenieACS.
-      // A device may be offline, so refresh failures do not hide the last known
-      // information from the installer.
-      await Promise.allSettled([
-        client.refreshObject(serialNumber, 'InternetGatewayDevice.WANDevice'),
-        client.refreshObject(serialNumber, 'InternetGatewayDevice.DeviceInfo')
-      ]);
+      // Only refresh CPE live if explicit sync parameter was requested
+      if (shouldSync) {
+        await Promise.allSettled([
+          client.refreshObject(serialNumber, 'InternetGatewayDevice.WANDevice'),
+          client.refreshObject(serialNumber, 'InternetGatewayDevice.DeviceInfo')
+        ]);
+      }
 
       // ----- 3. Fetch device with comprehensive projection -----
       const projection = `
