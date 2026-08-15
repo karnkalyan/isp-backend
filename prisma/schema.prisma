@@ -2295,6 +2295,28 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+model SystemLog {
+  id         Int      @id @default(autoincrement())
+  ispId      Int?
+  userId     Int?
+  level      String   @db.VarChar(16)
+  operation  String   @db.VarChar(120)
+  message    String   @db.Text
+  method     String?  @db.VarChar(10)
+  path       String?  @db.VarChar(500)
+  statusCode Int?
+  ip         String?  @db.VarChar(191)
+  userAgent  String?  @db.VarChar(500)
+  durationMs Int?
+  details    Json?
+  timestamp  DateTime @default(now())
+
+  @@index([ispId, timestamp])
+  @@index([level, timestamp])
+  @@index([operation, timestamp])
+  @@map("system_logs")
+}
+
 // ==================== ASTERISK MODELS ====================
 model AsteriskExtension {
   id              Int       @id @default(autoincrement())

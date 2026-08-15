@@ -1,6 +1,7 @@
 // src/controllers/customerController.js
 const { getBranchFilter, getAllSubBranchIds } = require('../utils/branchHelper');
 const { logAudit } = require('../utils/auditLogger');
+const { logSystem } = require('../utils/systemLogger');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -1618,6 +1619,39 @@ async function upsertRadiusPassword(ispId, username, password) {
     op: ':=',
     value: password
   });
+}
+
+async function renameRadiusUsername(ispId, oldUsername, newUsername) {
+  const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+  const [radcheck, radreply, radusergroup, destinationRadcheck] = await Promise.all([
+    client.getRadcheckByUsername(oldUsername),
+    client.getRadreply().then((entries) => Array.isArray(entries) ? entries.filter((entry) => entry.username === oldUsername) : []),
+    client.getRadusergroupByUsername(oldUsername),
+    client.getRadcheckByUsername(newUsername),
+  ]);
+  const updated = [];
+  const operations = [
+    ...(Array.isArray(radcheck) ? radcheck : []).map((entry) => ({ method: 'updateRadcheck', id: entry.id })),
+    ...(Array.isArray(radreply) ? radreply : []).map((entry) => ({ method: 'updateRadreply', id: entry.id })),
+    ...(Array.isArray(radusergroup) ? radusergroup : []).map((entry) => ({ method: 'updateRadusergroup', id: entry.id })),
+  ];
+
+  if (operations.length === 0) throw new Error(`Radius user '${oldUsername}' was not found`);
+  if (Array.isArray(destinationRadcheck) && destinationRadcheck.length > 0) {
+    throw new Error(`Radius username '${newUsername}' already exists`);
+  }
+
+  try {
+    for (const operation of operations) {
+      await client[operation.method](operation.id, { username: newUsername });
+      updated.push(operation);
+    }
+  } catch (error) {
+    await Promise.allSettled(updated.map((operation) => client[operation.method](operation.id, { username: oldUsername })));
+    throw error;
+  }
+
+  return { radcheck: radcheck.length, radreply: radreply.length, radusergroup: radusergroup.length };
 }
 
 async function getRealtimeNetworkStatus(prisma, customer) {
@@ -3336,7 +3370,8 @@ async function changeUsername(req, res, next) {
     const customerId = Number(req.params.id);
     if (isNaN(customerId)) return res.status(400).json({ error: "Invalid customer ID" });
 
-    const { connectionUserId, newUsername } = req.body;
+    const connectionUserId = Number(req.body.connectionUserId);
+    const newUsername = String(req.body.newUsername || '').trim();
     if (!connectionUserId || !newUsername) {
       return res.status(400).json({ error: "connectionUserId and newUsername are required" });
     }
@@ -3348,24 +3383,58 @@ async function changeUsername(req, res, next) {
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
     const connectionUser = await req.prisma.connectionUser.findFirst({
-      where: { id: Number(connectionUserId), customerId, isDeleted: false }
+      where: { id: connectionUserId, customerId, isDeleted: false, ispId: req.ispId }
     });
     if (!connectionUser) return res.status(404).json({ error: "Connection user not found" });
 
     const existing = await req.prisma.connectionUser.findFirst({
-      where: { username: newUsername, isDeleted: false, ispId: req.ispId, id: { not: Number(connectionUserId) } }
+      where: { username: newUsername, isDeleted: false, ispId: req.ispId, id: { not: connectionUserId } }
     });
     if (existing) return res.status(409).json({ error: "Username already exists" });
 
-    const updated = await req.prisma.connectionUser.update({
-      where: { id: Number(connectionUserId) },
-      data: { username: newUsername }
+    if (connectionUser.username === newUsername) {
+      return res.json({ success: true, message: "Radius username is already up to date" });
+    }
+
+    let radiusResult;
+    try {
+      radiusResult = await renameRadiusUsername(req.ispId, connectionUser.username, newUsername);
+    } catch (radiusError) {
+      await logSystem(req.prisma, {
+        ispId: req.ispId,
+        userId: req.user?.id,
+        level: 'ERROR',
+        operation: 'RADIUS_CREDENTIAL_USERNAME_CHANGE',
+        message: 'Radius username update failed',
+        details: { customerId, connectionUserId, oldUsername: connectionUser.username, newUsername, error: radiusError.message },
+      });
+      return res.status(502).json({ error: "Unable to update Radius username" });
+    }
+
+    let updated;
+    try {
+      updated = await req.prisma.connectionUser.update({
+        where: { id: connectionUserId },
+        data: { username: newUsername }
+      });
+    } catch (databaseError) {
+      await renameRadiusUsername(req.ispId, newUsername, connectionUser.username).catch(() => null);
+      throw databaseError;
+    }
+
+    await logSystem(req.prisma, {
+      ispId: req.ispId,
+      userId: req.user?.id,
+      level: 'INFO',
+      operation: 'RADIUS_CREDENTIAL_USERNAME_CHANGE',
+      message: 'Connection and Radius username updated successfully',
+      details: { customerId, connectionUserId, oldUsername: connectionUser.username, newUsername, radiusResult },
     });
 
     return res.json({
       success: true,
-      message: "Username updated successfully (database only)",
-      data: { oldUsername: connectionUser.username, newUsername: updated.username }
+      message: "Connection and Radius username updated successfully",
+      data: { oldUsername: connectionUser.username, newUsername: updated.username, radiusUpdated: true }
     });
   } catch (err) {
     console.error("changeUsername error:", err);
@@ -3523,30 +3592,47 @@ async function changeConnectionUserPassword(req, res, next) {
     if (!connectionUser) return res.status(404).json({ error: "Connection user not found" });
 
     const password = String(newPassword).trim();
-    const updated = await req.prisma.connectionUser.update({
-      where: { id: connectionUser.id },
-      data: { password }
-    });
-
-    let radiusUpdated = false;
-    let radiusMessage = null;
     try {
       await upsertRadiusPassword(req.ispId, connectionUser.username, password);
-      radiusUpdated = true;
     } catch (radiusErr) {
-      radiusMessage = radiusErr.message || "Radius password update failed";
+      await logSystem(req.prisma, {
+        ispId: req.ispId,
+        userId: req.user?.id,
+        level: 'ERROR',
+        operation: 'RADIUS_CREDENTIAL_PASSWORD_CHANGE',
+        message: 'Radius password update failed',
+        details: { customerId, connectionUserId, username: connectionUser.username, error: radiusErr.message },
+      });
+      return res.status(502).json({ error: "Unable to update Radius password" });
     }
+
+    let updated;
+    try {
+      updated = await req.prisma.connectionUser.update({
+        where: { id: connectionUser.id },
+        data: { password }
+      });
+    } catch (databaseError) {
+      await upsertRadiusPassword(req.ispId, connectionUser.username, connectionUser.password).catch(() => null);
+      throw databaseError;
+    }
+
+    await logSystem(req.prisma, {
+      ispId: req.ispId,
+      userId: req.user?.id,
+      level: 'INFO',
+      operation: 'RADIUS_CREDENTIAL_PASSWORD_CHANGE',
+      message: 'Connection and Radius password updated successfully',
+      details: { customerId, connectionUserId, username: connectionUser.username },
+    });
 
     return res.json({
       success: true,
-      message: radiusUpdated
-        ? "Connection and Radius password updated successfully"
-        : "Connection password updated locally. Radius update failed.",
+      message: "Connection and Radius password updated successfully",
       data: {
         id: updated.id,
         username: updated.username,
-        radiusUpdated,
-        radiusMessage
+        radiusUpdated: true
       }
     });
   } catch (err) {

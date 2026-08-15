@@ -57,7 +57,12 @@ const taskRouter = require('./routes/task.routes');
 const mcpRouter = require('./routes/mcp.routes');
 const taskLogger = require('./middlewares/taskLogger');
 const createRateLimit = require('./middlewares/rateLimit');
+const systemLogger = require('./middlewares/systemLogger');
+const { installConsoleSystemLogger } = require('./utils/systemLogger');
 
+installConsoleSystemLogger(prisma);
+
+app.use(systemLogger(prisma));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -223,14 +228,17 @@ app.use('/api/customer-types', require('./routes/customertype.routes')(prisma));
 app.use('/api/bulk-inventory', require('./routes/bulkinventory.routes')(prisma));
 app.use('/api/drums', require('./routes/drum.routes')(prisma));
 app.use('/api/audit-logs', require('./routes/audit.routes')(prisma));
+app.use('/api/system-logs', require('./routes/systemLog.routes')(prisma));
+app.use('/api/system_logs', require('./routes/systemLog.routes')(prisma));
 app.use('/api/reports', require('./routes/report.routes')(prisma));
 
 
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(err.status || 500).json({
-        error: err.message || 'Internal Server Error',
+    const status = err.status || 500;
+    res.status(status).json({
+        error: status >= 500 ? 'Internal Server Error' : (err.message || 'Request failed'),
         details: process.env.NODE_ENV === 'development' ? err : {},
     });
 });
