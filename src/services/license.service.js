@@ -118,20 +118,22 @@ async function getHardwareFingerprint(prisma, ispId) {
 }
 
 async function getStoredToken(prisma, ispId) {
-  if (ispId) {
-    const targetIspId = Number(ispId);
-    const ispSetting = await prisma.iSPSettings.findFirst({
-      where: {
-        OR: [
-          { key: `appLicenseToken_${targetIspId}` },
-          { key: LICENSE_TOKEN_KEY, ispId: targetIspId }
-        ]
-      }
+  const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  const ispSetting = await prisma.iSPSettings.findUnique({
+    where: { key: `appLicenseToken_${targetIspId}` }
+  });
+  if (ispSetting?.value) return ispSetting.value;
+
+  // The unscoped key predates tenant licensing. It is only a compatibility
+  // alias for the configured default ISP and must never leak into another ISP.
+  if (targetIspId === Number(process.env.DEFAULT_ISP_ID || 1)) {
+    const legacySetting = await prisma.iSPSettings.findUnique({
+      where: { key: LICENSE_TOKEN_KEY }
     });
-    if (ispSetting?.value) return ispSetting.value;
+    if (legacySetting?.ispId === targetIspId) return legacySetting.value || null;
   }
-  const setting = await prisma.iSPSettings.findUnique({ where: { key: LICENSE_TOKEN_KEY } });
-  return setting?.value || null;
+
+  return null;
 }
 
 function hashToken(token) {
@@ -199,13 +201,21 @@ async function saveToken(prisma, ispId, token) {
     throw error;
   }
 
+  const tokenHash = hashToken(token);
+  const license = await prisma.generatedLicense.findUnique({ where: { tokenHash } });
+  if (license?.installedIspId && license.installedIspId !== targetIspId) {
+    const error = new Error('License key is already bound to a different ISP tenant.');
+    error.status = 402;
+    throw error;
+  }
+
   await prisma.generatedLicense.update({
-    where: { tokenHash: hashToken(token) },
+    where: { tokenHash },
     data: {
       installedAt: new Date(),
       installedIspId: targetIspId
     }
-  }).catch(() => {});
+  });
 
   const ispKey = `appLicenseToken_${targetIspId}`;
 
@@ -244,8 +254,31 @@ async function saveToken(prisma, ispId, token) {
   return status;
 }
 
-async function deleteToken(prisma, ispId) {
+async function deleteToken(prisma, ispId, user) {
   const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
+  const token = await getStoredToken(prisma, targetIspId);
+
+  if (token) {
+    const existingLicense = await prisma.generatedLicense.findUnique({
+      where: { tokenHash: hashToken(token) }
+    });
+    const tenantHwid = await getHardwareFingerprint(prisma, targetIspId);
+    const belongsToTenant = existingLicense?.hwid === tenantHwid &&
+      (!existingLicense.installedIspId || existingLicense.installedIspId === targetIspId);
+    if (belongsToTenant && normalizeLicenseStatus(existingLicense.status) === ACTIVE_STATUS) {
+      await prisma.generatedLicense.update({
+        where: { id: existingLicense.id },
+        data: {
+          status: 'DEACTIVATED',
+          revokedAt: new Date(),
+          revokedByUserId: user?.id || null,
+          revokedByEmail: user?.email || null,
+          revokeReason: 'License removed from its ISP tenant'
+        }
+      });
+    }
+  }
+
   await prisma.iSPSettings.deleteMany({
     where: {
       OR: [
@@ -259,13 +292,12 @@ async function deleteToken(prisma, ispId) {
 async function verifyToken(prisma, token, ispId) {
   const targetIspId = Number(ispId || process.env.DEFAULT_ISP_ID || 1);
   const tenantHwid = await getHardwareFingerprint(prisma, targetIspId);
-  const baseHwid = process.env.LICENSE_HARDWARE_ID || getRuntimeHardwareFingerprint();
 
   const decoded = jwt.verify(token, LICENSE_SECRET, {
     issuer: ISSUER
   });
 
-  if (decoded.aud !== tenantHwid && decoded.aud !== baseHwid) {
+  if (decoded.aud !== tenantHwid) {
     const expectedShort = tenantHwid ? `${tenantHwid.substring(0, 12)}...` : 'Unknown';
     const actualShort = decoded.aud ? `${String(decoded.aud).substring(0, 12)}...` : 'Unknown';
     const error = new Error(`License key hardware mismatch: token was generated for HWID (${actualShort}), but target ISP Tenant HWID is (${expectedShort}). Please generate a license key matching this HWID.`);
@@ -290,6 +322,12 @@ async function verifyToken(prisma, token, ispId) {
 
   if (storedLicense.hwid !== decoded.aud) {
     const error = new Error('License key hardware ID mismatch.');
+    error.status = 402;
+    throw error;
+  }
+
+  if (storedLicense.installedIspId && storedLicense.installedIspId !== targetIspId) {
+    const error = new Error('License key is bound to a different ISP tenant.');
     error.status = 402;
     throw error;
   }
@@ -407,6 +445,22 @@ async function listGeneratedLicenses(prisma) {
 
 async function updateGeneratedLicenseStatus(prisma, id, { status, reason }, user) {
   const nextStatus = normalizeLicenseStatus(status);
+  const existing = await prisma.generatedLicense.findUnique({
+    where: { id: Number(id) }
+  });
+
+  if (!existing) {
+    const error = new Error('Generated license not found');
+    error.status = 404;
+    throw error;
+  }
+
+  const currentStatus = normalizeLicenseStatus(existing.status);
+  if (nextStatus === ACTIVE_STATUS && currentStatus !== ACTIVE_STATUS) {
+    const error = new Error('A deactivated, stolen, or revoked license cannot be reactivated. Generate a new license key.');
+    error.status = 409;
+    throw error;
+  }
   const revokeData = nextStatus === ACTIVE_STATUS
     ? {
         revokedAt: null,
@@ -443,6 +497,13 @@ async function getGeneratedLicenseToken(prisma, id) {
     throw error;
   }
 
+  const status = normalizeLicenseStatus(record.status);
+  if (status !== ACTIVE_STATUS || BLOCKED_STATUSES.has(status)) {
+    const error = new Error(`License key is ${status.toLowerCase()} and cannot be retrieved.`);
+    error.status = 409;
+    throw error;
+  }
+
   const token = decryptToken(record.tokenEncrypted);
   if (!token) {
     const error = new Error('License key was generated before encrypted token storage was enabled. Generate a new key for this HWID.');
@@ -470,20 +531,16 @@ function isLicenseRoute(pathname) {
 function extractIspIdFromReq(req) {
   if (req.ispId) return Number(req.ispId);
 
-  const headerIsp = req.headers['x-isp-id'] || req.headers['x-selected-isp-id'];
-  if (headerIsp) return Number(headerIsp);
-
-  if (req.query?.ispId) return Number(req.query.ispId);
-
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  const token = req.cookies?.access_token || (authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7).trim()
+    : null);
+  if (token && process.env.ACCESS_SECRET) {
     try {
-      const token = authHeader.split(' ')[1];
-      const decoded = jwt.decode(token);
+      const decoded = jwt.verify(token, process.env.ACCESS_SECRET);
       if (decoded?.ispId) return Number(decoded.ispId);
-      if (decoded?.user?.ispId) return Number(decoded.user.ispId);
     } catch {
-      // Ignore token decode failure
+      // Authentication middleware will reject an invalid token later.
     }
   }
 
