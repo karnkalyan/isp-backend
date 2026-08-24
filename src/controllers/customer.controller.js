@@ -1914,12 +1914,20 @@ async function provisionCustomer(req, res, next) {
           let result = {};
           
           const isTrial = testSubscription?.isTrial === true;
-          
           if (!isTrial || pushTrialEnabled) {
             const isAccountService = service === SERVICE_CODES.TSHUL || service === SERVICE_CODES.NEPURIX;
             let client = null;
             if (!isAccountService) {
-              client = await ServiceFactory.getClient(service, req.ispId);
+              try {
+                client = await ServiceFactory.getClient(service, req.ispId);
+              } catch (clientErr) {
+                console.warn(`[CUSTOMER ONBOARDING] Service client initialization failed for ${service}:`, clientErr.message);
+                client = null;
+              }
+              if (!client) {
+                console.log(`[CUSTOMER ONBOARDING] Skipping provisioning for ${service} because service is not configured/enabled`);
+                continue;
+              }
             }
 
             switch (service) {
@@ -1931,8 +1939,8 @@ async function provisionCustomer(req, res, next) {
                 // duplicate accounting customers.
                 let clientsToProvision = activeBillingClients.filter(item => item.code === service);
                 if (clientsToProvision.length === 0) {
-                  client = await ServiceFactory.getClient(service, req.ispId);
-                  clientsToProvision = [{ code: service, client }];
+                  console.log(`[CUSTOMER ONBOARDING] Skipping accounting provisioning for ${service} because service is not configured/enabled for ISP ${req.ispId}`);
+                  break;
                 }
 
                 const results = [];

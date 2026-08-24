@@ -312,6 +312,37 @@ class ServiceFactory {
     }
 
     /**
+     * Check if a specific service is enabled and configured for an ISP
+     * @param {string} serviceCode
+     * @param {number} ispId
+     * @param {Object} prismaClient
+     * @returns {Promise<boolean>}
+     */
+    static async isServiceEnabled(serviceCode, ispId, prismaClient = prisma) {
+        if (!ispId || !serviceCode) return false;
+        try {
+            const ispService = await prismaClient.iSPService.findFirst({
+                where: {
+                    ispId: Number(ispId),
+                    service: { code: serviceCode, isActive: true, isDeleted: false },
+                    isActive: true,
+                    isEnabled: true,
+                    isDeleted: false
+                },
+                include: {
+                    credentials: {
+                        where: { isActive: true, isDeleted: false }
+                    }
+                }
+            });
+            return Boolean(ispService && ispService.baseUrl && ispService.credentials && ispService.credentials.length > 0);
+        } catch (error) {
+            console.error(`[ServiceFactory] Error checking if service ${serviceCode} is enabled:`, error.message);
+            return false;
+        }
+    }
+
+    /**
      * Get active or default billing service clients
      * @returns {Promise<Array<{code: string, client: Object}>>} array of active clients
      */
@@ -322,8 +353,10 @@ class ServiceFactory {
 
         const billingServices = await prismaClient.iSPService.findMany({
             where: {
-                ispId: ispId,
-                service: { code: { in: [SERVICE_CODES.TSHUL, SERVICE_CODES.NEPURIX] } },
+                ispId: Number(ispId),
+                service: { code: { in: [SERVICE_CODES.TSHUL, SERVICE_CODES.NEPURIX] }, isActive: true, isDeleted: false },
+                isActive: true,
+                isEnabled: true,
                 isDeleted: false
             },
             include: {
@@ -334,7 +367,9 @@ class ServiceFactory {
             }
         });
 
-        const activeServices = billingServices.filter(s => s.isActive && s.isEnabled);
+        const activeServices = billingServices.filter(
+            s => s.isActive && s.isEnabled && s.baseUrl && Array.isArray(s.credentials) && s.credentials.length > 0
+        );
         const clients = [];
 
         if (activeServices.length > 0) {
@@ -360,7 +395,7 @@ class ServiceFactory {
             }
             for (const service of [selectedService]) {
                 try {
-                    const client = await this.getClient(service.service.code, ispId, prismaClient);
+                    const client = await this.getClient(service.service.code, Number(ispId), prismaClient);
                     clients.push({ code: service.service.code, client });
                 } catch (err) {
                     console.error(`[ServiceFactory] Failed to initialize active client for ${service.service.code}:`, err.message);
