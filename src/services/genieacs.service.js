@@ -282,23 +282,46 @@ class GenieACSClient {
             VirtualParameters
         `;
 
-            const query = {
-                "_deviceId._SerialNumber": serialNumber
-            };
+            const cleanProj = (projection || defaultProjection).replace(/\s+/g, '');
+            const rawSerial = String(serialNumber || '').trim();
+            const upperSerial = rawSerial.toUpperCase();
+            const lowerSerial = rawSerial.toLowerCase();
+            const escaped = rawSerial.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            const response = await this.client.get('/devices', {
-                params: {
-                    query: JSON.stringify(query),
-                    limit: 1,
-                    projection: projection || defaultProjection.replace(/\s+/g, '') // Remove whitespace
+            // Candidates to try in priority order: exact, uppercase, lowercase, case-insensitive regex
+            const candidates = [
+                { "_deviceId._SerialNumber": rawSerial },
+                ...(upperSerial !== rawSerial ? [{ "_deviceId._SerialNumber": upperSerial }] : []),
+                ...(lowerSerial !== rawSerial ? [{ "_deviceId._SerialNumber": lowerSerial }] : []),
+                { "_deviceId._SerialNumber": { "$regex": `^${escaped}$`, "$options": "i" } },
+                { "_id": rawSerial },
+                ...(upperSerial !== rawSerial ? [{ "_id": upperSerial }] : []),
+                ...(lowerSerial !== rawSerial ? [{ "_id": lowerSerial }] : []),
+                { "_id": { "$regex": `^.*${escaped}.*$`, "$options": "i" } }
+            ];
+
+            let device = null;
+            for (const query of candidates) {
+                try {
+                    const response = await this.client.get('/devices', {
+                        params: {
+                            query: JSON.stringify(query),
+                            limit: 1,
+                            projection: cleanProj
+                        }
+                    });
+                    if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+                        device = response.data[0];
+                        break;
+                    }
+                } catch (err) {
+                    // Try next candidate
                 }
-            });
-
-            if (!response.data || response.data.length === 0) {
-                throw new Error(`Device with serial ${serialNumber} not found`);
             }
 
-            const device = response.data[0];
+            if (!device) {
+                throw new Error(`Device with serial ${serialNumber} not found`);
+            }
 
             // If this is a simple request (no projection parameter or specific flag), return essential info
             if (!projection) {

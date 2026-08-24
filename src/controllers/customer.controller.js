@@ -481,7 +481,9 @@ async function assertCustomerOwnsSerial(req, res, next) {
     }
 
     const { serials } = await getCustomerOwnedDeviceSerials(req.prisma, customer);
-    if (!serials.includes(serialNumber)) {
+    const targetSerial = String(serialNumber || '').trim().toLowerCase();
+    const ownsSerial = (serials || []).some(s => String(s || '').trim().toLowerCase() === targetSerial);
+    if (!ownsSerial) {
       return res.status(403).json({ success: false, error: 'You do not have access to this device.' });
     }
 

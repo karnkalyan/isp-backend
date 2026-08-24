@@ -378,6 +378,102 @@ async function addAdjustmentItem(req, res, next) {
     }
 }
 
+/**
+ * Apply Discount to Invoice (Flat or Percentage)
+ */
+async function applyDiscount(req, res, next) {
+    const prisma = req.prisma;
+    const { orderId, discountType, discountValue, reason, applyToItemId } = req.body;
+
+    try {
+        const order = await prisma.customerOrderManagement.findUnique({
+            where: { id: Number(orderId) },
+            include: { items: true }
+        });
+
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+        if (order.isPaid) return res.status(400).json({ error: 'Cannot apply discount to a paid invoice.' });
+
+        const val = parseFloat(discountValue);
+        if (isNaN(val) || val <= 0) {
+            return res.status(400).json({ error: 'Discount value must be a positive number' });
+        }
+
+        let baseAmount = order.totalAmount;
+        let targetItemName = '';
+
+        if (applyToItemId) {
+            const targetItem = order.items.find(i => i.id === Number(applyToItemId));
+            if (targetItem) {
+                baseAmount = Math.max(0, targetItem.itemPrice);
+                targetItemName = ` (${targetItem.itemName})`;
+            }
+        } else {
+            const positiveSum = order.items
+                .filter(i => Number(i.itemPrice) > 0)
+                .reduce((sum, i) => sum + Number(i.itemPrice), 0);
+            if (positiveSum > 0) baseAmount = positiveSum;
+        }
+
+        let discountAmount = 0;
+        let discountLabel = '';
+
+        if (discountType === 'percentage') {
+            if (val > 100) {
+                return res.status(400).json({ error: 'Percentage discount cannot exceed 100%' });
+            }
+            discountAmount = Math.round((baseAmount * val) / 100 * 100) / 100;
+            discountLabel = reason?.trim() ? `${reason.trim()} (${val}%)` : `Discount (${val}%${targetItemName})`;
+        } else {
+            discountAmount = Math.round(val * 100) / 100;
+            discountLabel = reason?.trim() ? `${reason.trim()} (Flat NPR ${discountAmount})` : `Discount (Flat NPR ${discountAmount}${targetItemName})`;
+        }
+
+        if (discountAmount <= 0) {
+            return res.status(400).json({ error: 'Calculated discount must be greater than 0' });
+        }
+
+        const orderCustomer = await prisma.customer.findUnique({
+            where: { id: order.customerId },
+            include: { branch: true }
+        });
+        const branch = orderCustomer?.branch;
+        if (branch && branch.discountThresholdEnabled && discountAmount > branch.discountThresholdValue) {
+            return res.status(400).json({ 
+                error: `Discount exceeds branch limit of ${branch.discountThresholdValue} NPR. Please request admin approval.`,
+                exceedsLimit: true,
+                limitValue: branch.discountThresholdValue,
+                requestedValue: discountAmount
+            });
+        }
+
+        const updatedOrder = await prisma.$transaction(async (tx) => {
+            await tx.orderDetail.create({
+                data: {
+                    orderId: order.id,
+                    itemName: discountLabel,
+                    itemPrice: -discountAmount
+                }
+            });
+
+            const allItems = await tx.orderDetail.findMany({
+                where: { orderId: order.id }
+            });
+            const newTotal = Math.max(0, allItems.reduce((sum, i) => sum + Number(i.itemPrice), 0));
+
+            return await tx.customerOrderManagement.update({
+                where: { id: order.id },
+                data: { totalAmount: newTotal },
+                include: { items: true }
+            });
+        });
+
+        res.json(updatedOrder);
+    } catch (err) {
+        next(err);
+    }
+}
+
 async function removeAdjustmentItem(req, res, next) {
     const prisma = req.prisma;
     const { detailId } = req.body;
@@ -390,12 +486,15 @@ async function removeAdjustmentItem(req, res, next) {
 
         if (!detail) return res.status(404).json({ error: 'Item not found' });
 
-        if (detail.order.isPaid) return res.status(400).json({ error: 'Cannot remove adjustment from a paid invoice.' });
+        if (detail.order.isPaid) return res.status(400).json({ error: 'Cannot remove items from a paid invoice.' });
 
         const updatedOrder = await prisma.$transaction(async (tx) => {
             await tx.orderDetail.delete({ where: { id: detail.id } });
             
-            const totalAmount = detail.order.totalAmount - detail.itemPrice;
+            const allItems = await tx.orderDetail.findMany({
+                where: { orderId: detail.order.id }
+            });
+            const totalAmount = Math.max(0, allItems.reduce((sum, i) => sum + Number(i.itemPrice), 0));
 
             return await tx.customerOrderManagement.update({
                 where: { id: detail.order.id },
@@ -1490,6 +1589,7 @@ module.exports = {
     togglePause,
     addAdjustmentItem,
     removeAdjustmentItem,
+    applyDiscount,
     payOrder,
     renewSubscription,
     generateManualInvoice,
