@@ -1067,6 +1067,43 @@ class RadiusClient {
     return this.#apiRequest('post', `/api/disconnect/session/${sessionId}`);
   }
 
+  async disconnectUserSession(username) {
+    if (!username) return;
+    let disconnectedBySessionId = false;
+    try {
+      const sessionInfo = await this.getSessionInfo(username);
+      const sessions = Array.isArray(sessionInfo)
+        ? sessionInfo
+        : Array.isArray(sessionInfo?.sessions)
+          ? sessionInfo.sessions
+          : Array.isArray(sessionInfo?.data)
+            ? sessionInfo.data
+            : Array.isArray(sessionInfo?.data?.sessions)
+              ? sessionInfo.data.sessions
+              : [];
+      const activeSessions = sessions.filter(
+        session => !session.acctstoptime && !session.acctStopTime && !session.stop_time
+      );
+      for (const session of activeSessions) {
+        const sessionId = session.acctsessionid || session.acctSessionId || session.session_id || session.sessionId;
+        if (!sessionId) continue;
+        await this.disconnectBySessionId(sessionId);
+        disconnectedBySessionId = true;
+      }
+    } catch (error) {
+      console.warn(`[RADIUS] Session-ID disconnect attempt failed for ${username}:`, error.message);
+    }
+
+    if (!disconnectedBySessionId) {
+      try {
+        await this.disconnectAllSessions(username);
+      } catch (error) {
+        console.warn(`[RADIUS] Username-wide disconnect failed for ${username}:`, error.message);
+      }
+    }
+  }
+
+
 
 
 

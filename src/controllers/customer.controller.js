@@ -3336,9 +3336,13 @@ const subscribePackage = async (req, res, next) => {
       for (const user of users) {
         if (!user.username) continue;
         await radius.updateExpiration(user.username, expiryDateObj);
-        await radius.disconnectAllSessions(user.username).catch(error => {
-          console.warn(`[CUSTOMER RECHARGE] RADIUS disconnect failed for ${user.username}:`, error.message);
-        });
+        if (typeof radius.disconnectUserSession === 'function') {
+          await radius.disconnectUserSession(user.username);
+        } else {
+          await radius.disconnectAllSessions(user.username).catch(error => {
+            console.warn(`[CUSTOMER RECHARGE] RADIUS disconnect failed for ${user.username}:`, error.message);
+          });
+        }
       }
     } catch (radiusError) {
       console.error('[CUSTOMER RECHARGE] RADIUS synchronization failed:', radiusError.message);

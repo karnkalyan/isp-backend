@@ -40,49 +40,15 @@ async function syncRadiusExpirationAndDisconnect(ispId, connectionUsers, expirat
         });
         const radius = await RadiusClient.create(ispId);
         for (const user of users) {
+            if (!user.username) continue;
             await radius.updateExpiration(user.username, expiration);
             console.log('[BILLING RADIUS] Expiration synchronized', { context, username: user.username });
-            let sessionDisconnectAttempted = false;
-            let sessionDisconnectSucceeded = false;
-            try {
-                const sessionInfo = await radius.getSessionInfo(user.username);
-                const sessions = Array.isArray(sessionInfo)
-                    ? sessionInfo
-                    : Array.isArray(sessionInfo?.sessions)
-                        ? sessionInfo.sessions
-                        : Array.isArray(sessionInfo?.data)
-                            ? sessionInfo.data
-                            : Array.isArray(sessionInfo?.data?.sessions)
-                                ? sessionInfo.data.sessions
-                                : [];
-                const activeSessions = sessions.filter(session =>
-                    !session.acctstoptime && !session.acctStopTime && !session.stop_time
-                );
-                for (const session of activeSessions) {
-                    const sessionId = session.acctsessionid || session.acctSessionId || session.session_id || session.sessionId;
-                    if (!sessionId) continue;
-                    sessionDisconnectAttempted = true;
-                    await radius.disconnectBySessionId(sessionId);
-                    console.log('[BILLING RADIUS] Session disconnected by ID', {
-                        context,
-                        username: user.username,
-                        sessionId
-                    });
-                }
-                sessionDisconnectSucceeded = sessionDisconnectAttempted;
-            } catch (disconnectError) {
-                console.warn(`Session-ID disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
-            }
-            if (!sessionDisconnectSucceeded) {
-                try {
-                    await radius.disconnectAllSessions(user.username);
-                    console.log('[BILLING RADIUS] Username-wide disconnect completed', {
-                        context,
-                        username: user.username
-                    });
-                } catch (disconnectError) {
-                    console.warn(`Radius expiration updated but username disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
-                }
+            if (typeof radius.disconnectUserSession === 'function') {
+                await radius.disconnectUserSession(user.username);
+            } else {
+                await radius.disconnectAllSessions(user.username).catch((disconnectError) => {
+                    console.warn(`Radius expiration updated but disconnect failed during ${context} for ${user.username}:`, disconnectError.message);
+                });
             }
         }
         console.log('[BILLING RADIUS] Synchronization completed', { ispId, context });
