@@ -36,6 +36,23 @@ async function resolveOneTimeCharges(prisma, ispId, requestedCharges) {
   return [...new Set(finalIds)];
 }
 
+async function generateUniqueReferenceId(prisma, baseRefId, currentId = null) {
+  let candidate = baseRefId;
+  let attempt = 0;
+  while (true) {
+    const existing = await prisma.PackagePrice.findFirst({
+      where: {
+        referenceId: candidate,
+        ...(currentId ? { id: { not: Number(currentId) } } : {})
+      },
+      select: { id: true }
+    });
+    if (!existing) return candidate;
+    attempt++;
+    candidate = `${baseRefId}-${attempt}`;
+  }
+}
+
 async function createPackagePrice(req, res, next) {
   try {
     const {
@@ -66,17 +83,15 @@ async function createPackagePrice(req, res, next) {
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
     // === build a sanitized, short baseRefId ===
-    const cleanPlanCode = plan.planCode.replace(/[\s-]/g, '');       // remove spaces & hyphens
-    const cleanDuration = packageDuration.replace(/[\s-]/g, '');     // remove spaces & hyphens
+    const rawPlanCode = plan.planCode || plan.planName || String(planId);
+    const cleanPlanCode = String(rawPlanCode).replace(/[\s-]/g, '');       // remove spaces & hyphens
+    const cleanDuration = String(packageDuration).replace(/[\s-]/g, '');     // remove spaces & hyphens
     const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
-    const referenceId = `${baseRefId}`;
 
-    // (optional) ensure uniqueness
-    const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId } });
-    if (exists) return res.status(400).json({ error: 'Reference ID collision, try again' });
+    const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
+    const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
 
     const addonPrices = {};
-    const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
     if (Array.isArray(chargesToResolve)) {
       for (const charge of chargesToResolve) {
         if (charge && typeof charge === 'object' && charge.id && charge.amount !== undefined) {
@@ -104,33 +119,79 @@ async function createPackagePrice(req, res, next) {
     }
     const addonPricesJson = Object.keys(addonPrices).length > 0 ? JSON.stringify(addonPrices) : null;
 
-    // Create DB record
-    const record = await req.prisma.PackagePrice.create({
-      data: {
-        packageDuration: String(packageDuration),
-        planId: Number(planId),
-        price: parseFloat(price),
-        initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
-        renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
-        isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
-        packageName: packageName || `${plan.planName} - ${packageDuration}`,
-        isActive: isActive !== false,
-        isOnline: isOnline === true,
-        ispId: ispId,
-        referenceId,
-        isTrial: isTrial === true,
-        addonPricesJson,
-        updatedAt: new Date()
+    let existingRecord = await req.prisma.PackagePrice.findFirst({
+      where: {
+        OR: [
+          {
+            planId: Number(planId),
+            packageDuration: String(packageDuration),
+            ...(ispId ? { ispId } : {})
+          },
+          { referenceId: baseRefId }
+        ]
       }
     });
 
-    // Link addon charges (oneTimeCharges)
-    const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
-    if (resolvedChargeIds.length > 0) {
-      await req.prisma.packageonetimecharges.createMany({
-        data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
-        skipDuplicates: true
+    let record;
+    if (existingRecord) {
+      const finalRefId = await generateUniqueReferenceId(req.prisma, existingRecord.referenceId || baseRefId, existingRecord.id);
+
+      record = await req.prisma.PackagePrice.update({
+        where: { id: existingRecord.id },
+        data: {
+          packageDuration: String(packageDuration),
+          planId: Number(planId),
+          price: parseFloat(price),
+          initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+          renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+          isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
+          packageName: packageName || `${plan.planName} - ${packageDuration}`,
+          isActive: isActive !== false,
+          isOnline: isOnline === true,
+          isDeleted: false,
+          referenceId: finalRefId,
+          isTrial: isTrial === true,
+          addonPricesJson,
+          updatedAt: new Date()
+        }
       });
+
+      await req.prisma.packageonetimecharges.deleteMany({ where: { A: record.id } });
+      if (resolvedChargeIds.length > 0) {
+        await req.prisma.packageonetimecharges.createMany({
+          data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+          skipDuplicates: true
+        });
+      }
+    } else {
+      const finalRefId = await generateUniqueReferenceId(req.prisma, baseRefId);
+
+      record = await req.prisma.PackagePrice.create({
+        data: {
+          packageDuration: String(packageDuration),
+          planId: Number(planId),
+          price: parseFloat(price),
+          initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+          renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+          isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
+          packageName: packageName || `${plan.planName} - ${packageDuration}`,
+          isActive: isActive !== false,
+          isOnline: isOnline === true,
+          ispId: ispId,
+          referenceId: finalRefId,
+          isTrial: isTrial === true,
+          isDeleted: false,
+          addonPricesJson,
+          updatedAt: new Date()
+        }
+      });
+
+      if (resolvedChargeIds.length > 0) {
+        await req.prisma.packageonetimecharges.createMany({
+          data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+          skipDuplicates: true
+        });
+      }
     }
 
     // Sync package price creation to all active billing clients!
@@ -143,7 +204,7 @@ async function createPackagePrice(req, res, next) {
             Name: record.packageName,
             Code: `${cleanPlanCode}${cleanDuration}`,
             Unit: 'Mbps',
-            ReferenceId: referenceId,
+            ReferenceId: record.referenceId,
             ItemGroupReferenceId: 'TI-001',
             IsTaxable: true,
             IsExcisable: false,
@@ -459,10 +520,10 @@ async function createBulkPackagePrices(req, res, next) {
       } = p;
       if (price === undefined || !duration) continue;
 
-      const cleanPlanCode = plan.planCode.replace(/[\s-]/g, '');
-      const cleanDuration = duration.replace(/[\s-]/g, '');
+      const rawPlanCode = plan.planCode || plan.planName || String(planId);
+      const cleanPlanCode = String(rawPlanCode).replace(/[\s-]/g, '');
+      const cleanDuration = String(duration).replace(/[\s-]/g, '');
       const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
-      const referenceId = `${baseRefId}`;
 
       const chargesToResolve = oneTimeCharges.length > 0 ? oneTimeCharges : oneTimeChargeIds;
       const resolvedChargeIds = await resolveOneTimeCharges(req.prisma, ispId, chargesToResolve);
@@ -477,11 +538,28 @@ async function createBulkPackagePrices(req, res, next) {
       }
       const addonPricesJson = Object.keys(addonPrices).length > 0 ? JSON.stringify(addonPrices) : null;
 
-      const exists = await req.prisma.PackagePrice.findFirst({ where: { referenceId, isDeleted: false } });
-      if (exists) {
-        const record = await req.prisma.PackagePrice.update({
-          where: { id: exists.id },
+      let existingRecord = await req.prisma.PackagePrice.findFirst({
+        where: {
+          OR: [
+            {
+              planId: Number(planId),
+              packageDuration: String(duration),
+              ...(ispId ? { ispId } : {})
+            },
+            { referenceId: baseRefId }
+          ]
+        }
+      });
+
+      let record;
+      if (existingRecord) {
+        const finalRefId = await generateUniqueReferenceId(req.prisma, existingRecord.referenceId || baseRefId, existingRecord.id);
+
+        record = await req.prisma.PackagePrice.update({
+          where: { id: existingRecord.id },
           data: {
+            planId: Number(planId),
+            packageDuration: String(duration),
             price: parseFloat(price),
             initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
             renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
@@ -489,6 +567,8 @@ async function createBulkPackagePrices(req, res, next) {
             packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
             isActive: isActive !== false,
             isOnline: isOnline === true,
+            isDeleted: false,
+            referenceId: finalRefId,
             addonPricesJson,
             updatedAt: new Date()
           }
@@ -501,35 +581,35 @@ async function createBulkPackagePrices(req, res, next) {
             skipDuplicates: true
           });
         }
+      } else {
+        const finalRefId = await generateUniqueReferenceId(req.prisma, baseRefId);
 
-        results.push(record);
-        continue;
-      }
-
-      const record = await req.prisma.PackagePrice.create({
-        data: {
-          packageDuration: String(duration),
-          planId: Number(planId),
-          price: parseFloat(price),
-          initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
-          renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
-          isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
-          packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
-          isActive: isActive !== false,
-          isOnline: isOnline === true,
-          ispId: ispId,
-          referenceId,
-          isTrial: false,
-          addonPricesJson,
-          updatedAt: new Date()
-        }
-      });
-
-      if (resolvedChargeIds.length > 0) {
-        await req.prisma.packageonetimecharges.createMany({
-          data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
-          skipDuplicates: true
+        record = await req.prisma.PackagePrice.create({
+          data: {
+            packageDuration: String(duration),
+            planId: Number(planId),
+            price: parseFloat(price),
+            initialTotalWithTax: initialTotalWithTax !== undefined && initialTotalWithTax !== null ? parseFloat(initialTotalWithTax) : null,
+            renewAmountWithTax: renewAmountWithTax !== undefined && renewAmountWithTax !== null ? parseFloat(renewAmountWithTax) : null,
+            isTscApplicable: isTscApplicable !== undefined ? Boolean(isTscApplicable) : false,
+            packageName: `${String(packageName || plan.planName).trim()} - ${duration}`,
+            isActive: isActive !== false,
+            isOnline: isOnline === true,
+            ispId: ispId,
+            referenceId: finalRefId,
+            isTrial: false,
+            isDeleted: false,
+            addonPricesJson,
+            updatedAt: new Date()
+          }
         });
+
+        if (resolvedChargeIds.length > 0) {
+          await req.prisma.packageonetimecharges.createMany({
+            data: resolvedChargeIds.map(cid => ({ A: record.id, B: Number(cid) })),
+            skipDuplicates: true
+          });
+        }
       }
 
       results.push(record);
@@ -541,7 +621,7 @@ async function createBulkPackagePrices(req, res, next) {
             Name: record.packageName,
             Code: `${cleanPlanCode}${cleanDuration}`,
             Unit: 'Mbps',
-            ReferenceId: referenceId,
+            ReferenceId: record.referenceId,
             ItemGroupReferenceId: 'TI-001',
             IsTaxable: true,
             IsSalesItem: true,
