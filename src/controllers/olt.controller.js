@@ -1906,6 +1906,20 @@ async function syncOntsFromOlt(req, res, next) {
 
         let updatedDetails;
 
+        const safeUpdateOrCreate = async (targetId, data) => {
+          if (targetId) {
+            try {
+              return await prisma.oNTDetails.update({
+                where: { id: targetId },
+                data
+              });
+            } catch (err) {
+              if (err.code !== 'P2025') throw err;
+            }
+          }
+          return await prisma.oNTDetails.create({ data });
+        };
+
         if (
           existingDetailByRef &&
           existingDetailBySerial &&
@@ -1922,20 +1936,11 @@ async function syncOntsFromOlt(req, res, next) {
             existingDetailsBySerial.delete(ontDetailsRecord.serialNumber);
           }
 
-          updatedDetails = await prisma.oNTDetails.update({
-            where: { id: existingDetailByRef.id },
-            data: ontDetailsRecord
-          });
+          updatedDetails = await safeUpdateOrCreate(existingDetailByRef.id, ontDetailsRecord);
         } else if (existingDetailByRef) {
-          updatedDetails = await prisma.oNTDetails.update({
-            where: { id: existingDetailByRef.id },
-            data: ontDetailsRecord
-          });
+          updatedDetails = await safeUpdateOrCreate(existingDetailByRef.id, ontDetailsRecord);
         } else if (existingDetailBySerial) {
-          updatedDetails = await prisma.oNTDetails.update({
-            where: { id: existingDetailBySerial.id },
-            data: ontDetailsRecord
-          });
+          updatedDetails = await safeUpdateOrCreate(existingDetailBySerial.id, ontDetailsRecord);
         } else {
           updatedDetails = await prisma.oNTDetails.create({
             data: ontDetailsRecord

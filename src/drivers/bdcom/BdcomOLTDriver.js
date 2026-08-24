@@ -135,9 +135,10 @@ class BdcomOLTDriver {
                 const onuCtcOptical = (onuCtcOpticalMap[intf] || {})[key] || {};
 
                 let run_state = 'unknown';
-                if ((onu.status || '').toLowerCase() === 'auto-configured') {
+                const lowerStatus = (onu.status || '').toLowerCase();
+                if (['auto-configured', 'authenticated', 'registered', 'online', 'active', 'binding', 'ready'].includes(lowerStatus) || active) {
                     run_state = 'online';
-                } else if (['deregistered', 'lost'].includes((onu.status || '').toLowerCase())) {
+                } else if (['deregistered', 'lost', 'power-off', 'wire-down'].includes(lowerStatus)) {
                     run_state = 'offline';
                 }
 
@@ -198,7 +199,8 @@ class BdcomOLTDriver {
                 throw new Error('This parser currently supports BDCOM EPON only');
             }
 
-            const normalizedSerial = String(serial || '').trim().toLowerCase();
+            const formattedMac = this._formatMac(serial).toLowerCase();
+            const rawSerial = String(serial || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
 
             const rawInfo = await send(`show ${serviceBoardType} onu-information detail`);
             const rawActive = await send(`show ${serviceBoardType} active-onu`);
@@ -208,10 +210,11 @@ class BdcomOLTDriver {
             const activeMap = this.parseActiveOnu(rawActive);
             const inactiveMap = this.parseInactiveOnu(rawInactive);
 
-            const onu = onuList.find(item =>
-                (item.sn || '').toLowerCase() === normalizedSerial ||
-                (item.mac_address || '').toLowerCase() === normalizedSerial
-            );
+            const onu = onuList.find(item => {
+                const itemMac = (item.mac_address || item.sn || '').toLowerCase();
+                const itemRaw = itemMac.replace(/[^0-9a-fA-F]/g, '');
+                return itemMac === formattedMac || itemRaw === rawSerial;
+            });
 
             if (!onu) return null;
 
@@ -329,14 +332,17 @@ class BdcomOLTDriver {
     async registerONT(data) {
         const { slot, port, serial } = data;
 
-        const serviceBoardType = await this.serviceBoardType();
+        const serviceBoardType = await this.serviceBoardType(slot);
         const registerParam = serviceBoardType === 'epon' ? 'mac' : 'sn';
+        const formattedSerial = (serviceBoardType === 'epon' || registerParam === 'mac')
+            ? this._formatMac(serial)
+            : serial;
 
         return this.runSession(async (send) => {
             const results = { ont_registration: {} };
 
             await send(`interface ${serviceBoardType} ${slot}/${port}`);
-            const ontCommand = `${serviceBoardType} bind-onu ${registerParam} ${serial}`;
+            const ontCommand = `${serviceBoardType} bind-onu ${registerParam} ${formattedSerial}`;
 
             console.log("Registation Param CLI", ontCommand);
             results.ont_registration.result = (await send(ontCommand)).trim();
@@ -351,10 +357,13 @@ class BdcomOLTDriver {
 
         return this.runSession(async (send) => {
             const processLogs = { ont_deletion: "" };
-            const serviceBoardType = await this.serviceBoardType();
+            const serviceBoardType = await this.serviceBoardType(slot);
+            const formattedSerial = (serviceBoardType === 'epon')
+                ? this._formatMac(serial)
+                : serial;
 
             await send(`interface ${serviceBoardType} ${slot}/${port}`);
-            const deleteOutput = await send(`no ${serviceBoardType} bind-onu mac ${serial}`);
+            const deleteOutput = await send(`no ${serviceBoardType} bind-onu mac ${formattedSerial}`);
             processLogs.ont_deletion = deleteOutput.trim();
 
             await send('quit');
@@ -371,6 +380,15 @@ class BdcomOLTDriver {
     }
 
     // --- HELPERS ---
+
+    _formatMac(mac) {
+        if (!mac) return mac;
+        const clean = String(mac).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        if (clean.length === 12) {
+            return `${clean.slice(0, 4)}.${clean.slice(4, 8)}.${clean.slice(8, 12)}`;
+        }
+        return String(mac).trim().toLowerCase();
+    }
 
     _normalizeOutput(text) {
         return String(text || '')
@@ -468,7 +486,7 @@ class BdcomOLTDriver {
             if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
 
             const match = line.match(
-                /^(EPON\d+\/\d+:\d+)\s+(\S+)\s+(\S+)\s+([0-9a-fA-F.]+)\s+(\S+)\s+(.+?)\s+(static\(\w+\)|dynamic\(\w+\)|static|dynamic)\s+(auto-configured|deregistered|lost)\s+(\S+.*)$/i
+                /^(EPON\d+\/\d+:\d+)\s+(\S+)\s+(\S+)\s+([0-9a-fA-F.]+)\s+(\S+)\s+(.+?)\s+(static\(\w+\)|dynamic\(\w+\)|static|dynamic|\S+)\s+(\S+)\s+(\S+.*)$/i
             );
 
             if (!match) {
@@ -528,7 +546,7 @@ class BdcomOLTDriver {
             if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
 
             const match = line.match(
-                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(auto-configured|deregistered|lost)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
+                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
             );
 
             if (!match) {
@@ -571,7 +589,7 @@ class BdcomOLTDriver {
             if (!/^EPON\d+\/\d+:\d+/i.test(line)) continue;
 
             const match = line.match(
-                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(deregistered|lost)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
+                /^(EPON\d+\/\d+:\d+)\s+([0-9a-fA-F.]+)\s+(\S+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+)$/i
             );
 
             if (!match) {
@@ -703,8 +721,13 @@ class BdcomOLTDriver {
 
     parseOntInfoByMAC(text, macAddress) {
         const all = this.parseOntTable(text);
-        const normalized = String(macAddress || '').toLowerCase();
-        return all.find(item => (item.mac_address || '').toLowerCase() === normalized) || null;
+        const formattedMac = this._formatMac(macAddress).toLowerCase();
+        const rawMac = String(macAddress || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        return all.find(item => {
+            const itemMac = (item.mac_address || '').toLowerCase();
+            const itemRaw = itemMac.replace(/[^0-9a-fA-F]/g, '');
+            return itemMac === formattedMac || itemRaw === rawMac;
+        }) || null;
     }
 
     parseBindType(bindType) {

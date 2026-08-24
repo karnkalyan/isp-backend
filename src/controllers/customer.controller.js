@@ -1279,9 +1279,9 @@ async function createCustomer(req, res, next) {
         if (expiryDate) attributes.Expiration = expiryDate;
 
         let selectedNasName = null;
-        if (newCustomer.nasId || req.body.nasId) {
+        if (createdCustomer.nasId || req.body.nasId) {
           const nasRecord = await prisma.nas.findFirst({
-            where: { id: Number(newCustomer.nasId || req.body.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
+            where: { id: Number(createdCustomer.nasId || req.body.nasId), ispId: req.ispId, isActive: true, isDeleted: false }
           });
           if (nasRecord) selectedNasName = nasRecord.nasname;
         }
