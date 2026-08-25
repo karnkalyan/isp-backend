@@ -54,6 +54,7 @@ const messageRouter = require('./routes/message.routes');
 const mailRouter = require('./routes/mail.routes');
 const templateRouter = require('./routes/template.routes');
 const taskRouter = require('./routes/task.routes');
+const importRouter = require('./routes/import.routes');
 const mcpRouter = require('./routes/mcp.routes');
 const taskLogger = require('./middlewares/taskLogger');
 const createRateLimit = require('./middlewares/rateLimit');
@@ -231,6 +232,7 @@ app.use('/api/audit-logs', require('./routes/audit.routes')(prisma));
 app.use('/api/system-logs', require('./routes/systemLog.routes')(prisma));
 app.use('/api/system_logs', require('./routes/systemLog.routes')(prisma));
 app.use('/api/reports', require('./routes/report.routes')(prisma));
+app.use('/api/import', importRouter(prisma));
 
 
 // Error handling middleware

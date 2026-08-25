@@ -51,7 +51,8 @@
     "qrcode": "^1.5.4",
     "telnet-client": "^2.2.9",
     "uuid": "^11.1.0",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
