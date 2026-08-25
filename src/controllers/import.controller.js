@@ -257,56 +257,109 @@ function parseVendorProfiles(input) {
 }
 
 /**
- * Parse Custom Radius Attributes from JSON or String
- * e.g. [{"attribute":"ERX-IPv6-Delegated-Pool-Name","op":":=","value":"v6-default-pd"}]
- * or "ERX-IPv6-Delegated-Pool-Name := v6-default-pd \n Framed-IPv6-Pool := v6-ndra"
+ * Parse Custom Radius Attributes from JSON, multi-line string, or comma/semicolon delimited string
+ * e.g. "ERX-IPv6-Delegated-Pool-Name := v6-default-pd \n Framed-IPv6-Pool := v6-ndra"
+ * or [{"attribute":"ERX-IPv6-Delegated-Pool-Name","op":":=","value":"v6-default-pd"}]
  */
 function parseCustomRadiusAttributes(input) {
     if (!input) return [];
-    if (Array.isArray(input)) return input;
-    if (typeof input === 'object') return [input];
+    if (Array.isArray(input)) {
+        return input.map(item => {
+            if (typeof item === 'string') {
+                const sub = parseCustomRadiusAttributes(item);
+                return sub[0] || null;
+            }
+            if (item && item.attribute && (item.op || item.value !== undefined)) {
+                return {
+                    attribute: String(item.attribute).trim(),
+                    op: String(item.op || ':=').trim(),
+                    value: String(item.value !== undefined ? item.value : '').trim().replace(/^["']|["']$/g, '')
+                };
+            }
+            return null;
+        }).filter(Boolean);
+    }
+    if (typeof input === 'object') {
+        if (input.attribute) {
+            return [{
+                attribute: String(input.attribute).trim(),
+                op: String(input.op || ':=').trim(),
+                value: String(input.value !== undefined ? input.value : '').trim().replace(/^["']|["']$/g, '')
+            }];
+        }
+        return [];
+    }
 
-    const str = String(input).trim();
+    let str = String(input).trim();
+    if (!str) return [];
+
+    // JSON string parsing
     if (str.startsWith('[') || str.startsWith('{')) {
         try {
             const parsed = JSON.parse(str);
-            return Array.isArray(parsed) ? parsed : [parsed];
+            return parseCustomRadiusAttributes(parsed);
         } catch (e) {}
     }
 
-    const lines = str.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    // Replace literal escaped newlines '\n' with actual newlines
+    str = str.replace(/\\n/g, '\n').replace(/\\r/g, '');
+
+    // Split lines by newline first
+    const rawLines = str.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const attrs = [];
-    for (const line of lines) {
-        const match = line.match(/^([A-Za-z0-9_-]+)\s*(:=|=|\+=|==|!=)\s*(.+)$/);
-        if (match) {
-            attrs.push({
-                attribute: match[1].trim(),
-                op: match[2].trim(),
-                value: match[3].trim().replace(/^["']|["']$/g, '')
-            });
+
+    for (const rawLine of rawLines) {
+        // Line can contain multiple attributes separated by semicolon or comma when followed by an attribute expression
+        const segments = rawLine.split(/;|\s*,\s*(?=[A-Za-z0-9_.-]+\s*(?:[:=|+==!]=|=))/).map(s => s.trim()).filter(Boolean);
+
+        for (const seg of segments) {
+            const match = seg.match(/^([A-Za-z0-9_.-]+)\s*(:=|=|\+=|==|!=)\s*(.+)$/);
+            if (match) {
+                attrs.push({
+                    attribute: match[1].trim(),
+                    op: match[2].trim(),
+                    value: match[3].trim().replace(/^["']|["']$/g, '')
+                });
+            } else if (seg.includes('=')) {
+                const eqIdx = seg.indexOf('=');
+                const attrName = seg.substring(0, eqIdx).trim();
+                const val = seg.substring(eqIdx + 1).trim();
+                if (attrName && val) {
+                    attrs.push({
+                        attribute: attrName,
+                        op: '=',
+                        value: val.replace(/^["']|["']$/g, '')
+                    });
+                }
+            }
         }
     }
     return attrs;
 }
 
 /**
- * Resolve Branch IDs from Organization / Branch input string or array
+ * Resolve Branch IDs from Organization and/or Branches input (supports plain names, codes, or combined)
+ * e.g. "Arrownet Pvt Ltd", "Yatkha, Bahrabise, Charikot", "Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD)", "All Branches"
  */
 async function resolveBranchIds(prisma, ispId, rawInput, branchLookupCache = null) {
     if (!rawInput) return [];
     if (Array.isArray(rawInput)) {
         const ids = [];
         for (const item of rawInput) {
-            const sub = await resolveBranchIds(prisma, ispId, item, branchLookupCache);
-            ids.push(...sub);
+            if (item) {
+                const sub = await resolveBranchIds(prisma, ispId, item, branchLookupCache);
+                ids.push(...sub);
+            }
         }
         return [...new Set(ids)];
     }
 
-    const inputStr = String(rawInput).trim();
+    let inputStr = String(rawInput).trim();
     if (!inputStr) return [];
 
-    if (/^all$/i.test(inputStr) || /^all\s+branches$/i.test(inputStr)) {
+    inputStr = inputStr.replace(/\\n/g, '\n');
+
+    if (/^all$/i.test(inputStr) || /^all\s+branches$/i.test(inputStr) || /^all\s+organizations?$/i.test(inputStr) || /^global$/i.test(inputStr)) {
         const allBranches = await prisma.Branch.findMany({
             where: {
                 ...(ispId ? { ispId: Number(ispId) } : {}),
@@ -317,11 +370,35 @@ async function resolveBranchIds(prisma, ispId, rawInput, branchLookupCache = nul
         return allBranches.map(b => b.id);
     }
 
-    // Split on commas or newlines (protecting parentheses)
-    const tokens = inputStr.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    // Split on commas, semicolons, or newlines
+    const tokens = inputStr.split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
     const resolvedIds = [];
 
     for (const token of tokens) {
+        if (/^all$/i.test(token) || /^all\s+branches$/i.test(token)) {
+            const allBranches = await prisma.Branch.findMany({
+                where: {
+                    ...(ispId ? { ispId: Number(ispId) } : {}),
+                    isDeleted: false
+                },
+                select: { id: true }
+            });
+            resolvedIds.push(...allBranches.map(b => b.id));
+            continue;
+        }
+
+        // Direct Numeric ID check
+        if (/^\d+$/.test(token)) {
+            const branchById = await prisma.Branch.findFirst({
+                where: { id: Number(token), isDeleted: false, ...(ispId ? { ispId: Number(ispId) } : {}) },
+                select: { id: true }
+            });
+            if (branchById) {
+                resolvedIds.push(branchById.id);
+                continue;
+            }
+        }
+
         // Check if token contains a branch code in parentheses, e.g. "Yatkha (SB-YATKHA)" or "Arrownet (BR-ARROWNET)"
         const codeMatch = token.match(/\(([A-Z0-9_-]+)\)/i);
         const candidateCode = codeMatch ? codeMatch[1].trim() : null;
@@ -340,17 +417,36 @@ async function resolveBranchIds(prisma, ispId, rawInput, branchLookupCache = nul
         }
 
         if (!branch && cleanName) {
+            // 1. Exact name match (case insensitive in MySQL/Prisma)
             branch = await prisma.Branch.findFirst({
                 where: {
-                    OR: [
-                        { name: cleanName },
-                        { code: cleanName },
-                        { name: { contains: cleanName } }
-                    ],
+                    name: cleanName,
                     ...(ispId ? { ispId: Number(ispId) } : {}),
                     isDeleted: false
                 }
             });
+
+            // 2. Exact code match with cleanName
+            if (!branch) {
+                branch = await prisma.Branch.findFirst({
+                    where: {
+                        code: cleanName.toUpperCase(),
+                        ...(ispId ? { ispId: Number(ispId) } : {}),
+                        isDeleted: false
+                    }
+                });
+            }
+
+            // 3. Partial contains match
+            if (!branch) {
+                branch = await prisma.Branch.findFirst({
+                    where: {
+                        name: { contains: cleanName },
+                        ...(ispId ? { ispId: Number(ispId) } : {}),
+                        isDeleted: false
+                    }
+                });
+            }
         }
 
         if (branch) {
@@ -797,9 +893,13 @@ async function importPlans(req, res, next) {
                 });
             }
 
-            // 7. Organization / Branch Linking (PackagePlanBranch)
-            const rawOrganization = row.organization || row.Organization || row.branches || row.branch || row['Organization'] || row['Branch Name'] || row.subBranch || '';
-            const resolvedBranchIds = await resolveBranchIds(prisma, ispId, rawOrganization);
+            // 7. Organization & Branch Linking (PackagePlanBranch)
+            // Supports separate 'Organization' (Head Branch) and 'Branches' (Sub-Branches) columns, as well as combined formats
+            const rawOrganization = row.organization || row.Organization || row['Organization Name'] || row['Head Branch'] || row.org || '';
+            const rawBranches = row.branches || row.Branches || row.branch || row.Branch || row['Branch Name'] || row['Sub-Branches'] || row['Sub Branches'] || row['Sub-Branch'] || row.subBranch || '';
+
+            const branchInputs = [rawOrganization, rawBranches].filter(Boolean);
+            const resolvedBranchIds = await resolveBranchIds(prisma, targetIspId, branchInputs);
 
             if (resolvedBranchIds.length > 0) {
                 await prisma.PackagePlanBranch.deleteMany({ where: { packagePlanId: plan.id } });
@@ -855,19 +955,27 @@ async function importPlans(req, res, next) {
                         );
                     }
 
+                    // Cisco
+                    if (nasList.includes('cisco') || vendorProfiles.some(vp => (vp.vendor || '').toLowerCase() === 'cisco')) {
+                        const cProfile = vendorProfiles.find(vp => (vp.vendor || '').toLowerCase() === 'cisco')?.profile || 'cisco-default';
+                        replyAttributes.push(
+                            { attribute: 'Cisco-AVPair', op: '+=', value: `ip:sub-profile-name=${cProfile}` }
+                        );
+                    }
+
                     // Framed-Pool
                     if (applyFramedPool && framedPoolValue) {
                         replyAttributes.push({ attribute: 'Framed-Pool', op: ':=', value: framedPoolValue });
                     }
 
-                    // Custom Radius Attributes
+                    // Custom Radius Attributes (e.g. ERX-IPv6-Delegated-Pool-Name := v6-default-pd, Framed-IPv6-Pool := v6-ndra)
                     if (Array.isArray(customRadiusAttributes)) {
                         for (const customAttr of customRadiusAttributes) {
-                            if (customAttr.attribute && customAttr.op && customAttr.value) {
+                            if (customAttr && customAttr.attribute && customAttr.value !== undefined) {
                                 replyAttributes.push({
-                                    attribute: customAttr.attribute,
-                                    op: customAttr.op,
-                                    value: String(customAttr.value)
+                                    attribute: customAttr.attribute.trim(),
+                                    op: customAttr.op ? customAttr.op.trim() : ':=',
+                                    value: String(customAttr.value).trim()
                                 });
                             }
                         }
@@ -2149,7 +2257,8 @@ async function getSampleTemplate(req, res, next) {
                     'FIR Download': 155,
                     'Local Upload': 155,
                     'Local Download': 155,
-                    'Organization': 'Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD), Yatkha (SB-YATKHA), Bahrabise (SB-BAHRABISE), Charikot (BR-CHARIKOT)',
+                    'Organization': 'Arrownet Pvt Ltd',
+                    'Branches': 'Yatkha, Bahrabise, Charikot',
                     'Allow Rename': 'FALSE',
                     'FUP Apply': 'TRUE',
                     'Is FUP Package': 'FALSE',
@@ -2182,6 +2291,7 @@ async function getSampleTemplate(req, res, next) {
                     'Local Upload': 100,
                     'Local Download': 100,
                     'Organization': 'All Branches',
+                    'Branches': 'All Branches',
                     'Allow Rename': 'FALSE',
                     'FUP Apply': 'TRUE',
                     'Is FUP Package': 'FALSE',
@@ -2213,7 +2323,8 @@ async function getSampleTemplate(req, res, next) {
                     'FIR Download': 50,
                     'Local Upload': 50,
                     'Local Download': 50,
-                    'Organization': 'Charikot (BR-CHARIKOT), Melung Arrownet (SB-MELUNG-ARROWNET)',
+                    'Organization': 'Charikot',
+                    'Branches': 'Melung Arrownet, Bhimeshwor',
                     'Allow Rename': 'FALSE',
                     'FUP Apply': 'TRUE',
                     'Is FUP Package': 'FALSE',
