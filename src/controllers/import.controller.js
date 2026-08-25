@@ -1162,6 +1162,7 @@ async function importPlans(req, res, next) {
 
 // ==========================================
 // 3. IMPORT PACKAGES & TARIFF RATES (PRICES)
+// ==========================================
 /**
  * Helper to parse boolean string or value
  */
@@ -1175,6 +1176,55 @@ function parseBooleanValue(val, defaultVal = false) {
 }
 
 /**
+ * Universal Item Matcher for Package Addon Charges (OneTimeCharge)
+ * Matches by ID, Code, ReferenceId, Exact Name, Normalized Name, or Substring
+ */
+function findMatchingAddon(rawKey, addonList) {
+    if (!rawKey || !Array.isArray(addonList) || addonList.length === 0) return null;
+    const clean = String(rawKey).trim();
+    if (!clean) return null;
+
+    // 1. Direct numeric ID match
+    if (/^\d+$/.test(clean)) {
+        const byId = addonList.find(a => a.id === Number(clean));
+        if (byId) return byId;
+    }
+
+    const lower = clean.toLowerCase();
+
+    // 2. Direct match by code, name, or referenceId
+    let match = addonList.find(a => 
+        (a.code && a.code.toLowerCase() === lower) || 
+        (a.name && a.name.toLowerCase() === lower) || 
+        (a.referenceId && a.referenceId.toLowerCase() === lower)
+    );
+    if (match) return match;
+
+    // 3. Normalized alphanumeric match (stripping spaces, symbols, and words like 'charge', 'fee')
+    const normalize = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normKey = normalize(clean);
+    if (!normKey) return null;
+
+    match = addonList.find(a => 
+        (a.code && normalize(a.code) === normKey) || 
+        (a.name && normalize(a.name) === normKey) || 
+        (a.referenceId && normalize(a.referenceId) === normKey)
+    );
+    if (match) return match;
+
+    // 4. Substring / containment match
+    match = addonList.find(a => {
+        const nName = normalize(a.name);
+        const nCode = normalize(a.code);
+        return (nName && (normKey.includes(nName) || nName.includes(normKey))) ||
+               (nCode && (normKey === nCode || normKey.includes(nCode)));
+    });
+    if (match) return match;
+
+    return null;
+}
+
+/**
  * Ensure standard master OneTimeCharge items exist for Package Creation
  */
 async function ensureMasterPackageCharges(prisma, ispId) {
@@ -1182,7 +1232,7 @@ async function ensureMasterPackageCharges(prisma, ispId) {
         { name: 'INTERNET', code: 'INT', isTaxable: true, isTscApplicable: true, isRenewal: true, forPackageCreation: true },
         { name: 'Support and Maintenance', code: 'SM', isTaxable: true, isTscApplicable: false, isRenewal: true, forPackageCreation: true },
         { name: 'Drop Wire', code: 'DW', isTaxable: true, isTscApplicable: false, isRenewal: false, forPackageCreation: true },
-        { name: 'Douplex Router', code: 'ROUTER', isTaxable: true, isTscApplicable: false, isRenewal: false, forPackageCreation: true }
+        { name: 'Douplex Router', code: 'DR', isTaxable: true, isTscApplicable: false, isRenewal: false, forPackageCreation: true }
     ];
 
     const results = [];
@@ -1248,7 +1298,7 @@ async function ensureMasterPackageCharges(prisma, ispId) {
 }
 
 // ==========================================
-// 3. IMPORT PACKAGES & TARIFFS (PackagePrice with 1M, 3M, 6M, 12M rate sheets)
+// 3. IMPORT PACKAGES & TARIFFS (PackagePrice with dynamic duration tiers and DB items)
 // ==========================================
 async function importPackages(req, res, next) {
     const prisma = req.prisma;
@@ -1288,12 +1338,16 @@ async function importPackages(req, res, next) {
         });
     }
 
-    // Ensure Master Package Creation Items (Internet, Support, Drop Wire, Router)
-    const masterAddons = await ensureMasterPackageCharges(prisma, ispId);
-    const internetMaster = masterAddons.find(a => a.code === 'INT' || a.name.toUpperCase().includes('INTERNET'));
-    const supportMaster = masterAddons.find(a => a.code === 'SM' || a.name.toUpperCase().includes('SUPPORT'));
-    const dropWireMaster = masterAddons.find(a => a.code === 'DW' || a.name.toUpperCase().includes('WIRE'));
-    const routerMaster = masterAddons.find(a => a.code === 'ROUTER' || a.name.toUpperCase().includes('ROUTER'));
+    // Ensure default master charges exist if DB is fresh
+    await ensureMasterPackageCharges(prisma, ispId);
+
+    // Fetch ALL active OneTimeCharges (Inventory Items for Package Addon Charges)
+    const allAddonCharges = await prisma.OneTimeCharge.findMany({
+        where: {
+            isDeleted: false,
+            ...(ispId ? { ispId: Number(ispId) } : {})
+        }
+    });
 
     // Fetch dynamic TSC percentage from ISP Settings (default: 10%)
     let tscPercentage = 10;
@@ -1318,6 +1372,13 @@ async function importPackages(req, res, next) {
             where: { id: Number(targetPlanId) }
         });
     }
+
+    const DURATIONS_CONFIG = [
+        { duration: '1 Month', prefixes: ['1m', '1 month', '1_month', '1month', '1_m'] },
+        { duration: '3 Months', prefixes: ['3m', '3 months', '3_months', '3months', '3 month', '3_m'] },
+        { duration: '6 Months', prefixes: ['6m', '6 months', '6_months', '6months', '6 month', '6_m'] },
+        { duration: '12 Months', prefixes: ['12m', '12 months', '12_months', '12months', '1 year', '1_year', '1year', '12 month', '12_m'] }
+    ];
 
     const logs = [];
     let successCount = 0;
@@ -1437,71 +1498,111 @@ async function importPackages(req, res, next) {
                 }
             }
 
-            // Duration Tiers definition (1 Month, 3 Months, 6 Months, 12 Months)
-            const durationTiers = [
-                {
-                    duration: '1 Month',
-                    prefix: '1m',
-                    enabled: row['1M Enabled'] ?? row['1mEnabled'] ?? row['1M Active'] ?? row['1mActive'] ?? row['1m_enabled'] ?? row['1m_active'],
-                    online: row['1M Online'] ?? row['1mOnline'] ?? row['1m_online'],
-                    internet: row['1M Internet'] ?? row['1mInternet'] ?? row['1m_internet'] ?? row['1M Internet Charge'] ?? row['1 Month Internet'],
-                    support: row['1M Support'] ?? row['1mSupport'] ?? row['1m_support'] ?? row['1M Support and Maintenance'] ?? row['1M Support & Maintenance'] ?? row['1M Support Charge'] ?? row['1 Month Support'],
-                    dropWire: row['1M Drop Wire'] ?? row['1mDropWire'] ?? row['1m_drop_wire'] ?? row['1M Drop Wire Charge'] ?? row['1 Month Drop Wire'],
-                    router: row['1M Douplex Router'] ?? row['1M Duplex Router'] ?? row['1M Router'] ?? row['1mRouter'] ?? row['1m_router'] ?? row['1M Router Charge'] ?? row['1 Month Router'],
-                    total: row['1M Total'] ?? row['1mTotal'] ?? row['1m_total'] ?? row['1mPrice'] ?? row['price1m']
-                },
-                {
-                    duration: '3 Months',
-                    prefix: '3m',
-                    enabled: row['3M Enabled'] ?? row['3mEnabled'] ?? row['3M Active'] ?? row['3mActive'] ?? row['3m_enabled'] ?? row['3m_active'],
-                    online: row['3M Online'] ?? row['3mOnline'] ?? row['3m_online'],
-                    internet: row['3M Internet'] ?? row['3mInternet'] ?? row['3m_internet'] ?? row['3M Internet Charge'] ?? row['3 Month Internet'],
-                    support: row['3M Support'] ?? row['3mSupport'] ?? row['3m_support'] ?? row['3M Support and Maintenance'] ?? row['3M Support & Maintenance'] ?? row['3M Support Charge'] ?? row['3 Month Support'],
-                    dropWire: row['3M Drop Wire'] ?? row['3mDropWire'] ?? row['3m_drop_wire'] ?? row['3M Drop Wire Charge'] ?? row['3 Month Drop Wire'],
-                    router: row['3M Douplex Router'] ?? row['3M Duplex Router'] ?? row['3M Router'] ?? row['3mRouter'] ?? row['3m_router'] ?? row['3M Router Charge'] ?? row['3 Month Router'],
-                    total: row['3M Total'] ?? row['3mTotal'] ?? row['3m_total'] ?? row['3mPrice'] ?? row['price3m']
-                },
-                {
-                    duration: '6 Months',
-                    prefix: '6m',
-                    enabled: row['6M Enabled'] ?? row['6mEnabled'] ?? row['6M Active'] ?? row['6mActive'] ?? row['6m_enabled'] ?? row['6m_active'],
-                    online: row['6M Online'] ?? row['6mOnline'] ?? row['6m_online'],
-                    internet: row['6M Internet'] ?? row['6mInternet'] ?? row['6m_internet'] ?? row['6M Internet Charge'] ?? row['6 Month Internet'],
-                    support: row['6M Support'] ?? row['6mSupport'] ?? row['6m_support'] ?? row['6M Support and Maintenance'] ?? row['6M Support & Maintenance'] ?? row['6M Support Charge'] ?? row['6 Month Support'],
-                    dropWire: row['6M Drop Wire'] ?? row['6mDropWire'] ?? row['6m_drop_wire'] ?? row['6M Drop Wire Charge'] ?? row['6 Month Drop Wire'],
-                    router: row['6M Douplex Router'] ?? row['6M Duplex Router'] ?? row['6M Router'] ?? row['6mRouter'] ?? row['6m_router'] ?? row['6M Router Charge'] ?? row['6 Month Router'],
-                    total: row['6M Total'] ?? row['6mTotal'] ?? row['6m_total'] ?? row['6mPrice'] ?? row['price6m']
-                },
-                {
-                    duration: '12 Months',
-                    prefix: '12m',
-                    enabled: row['12M Enabled'] ?? row['12mEnabled'] ?? row['12M Active'] ?? row['12mActive'] ?? row['12m_enabled'] ?? row['12m_active'],
-                    online: row['12M Online'] ?? row['12mOnline'] ?? row['12m_online'],
-                    internet: row['12M Internet'] ?? row['12mInternet'] ?? row['12m_internet'] ?? row['12M Internet Charge'] ?? row['12 Month Internet'] ?? row['1 Year Internet Charge'],
-                    support: row['12M Support'] ?? row['12mSupport'] ?? row['12m_support'] ?? row['12M Support and Maintenance'] ?? row['12M Support & Maintenance'] ?? row['12M Support Charge'] ?? row['12 Month Support'],
-                    dropWire: row['12M Drop Wire'] ?? row['12mDropWire'] ?? row['12m_drop_wire'] ?? row['12M Drop Wire Charge'] ?? row['12 Month Drop Wire'],
-                    router: row['12M Douplex Router'] ?? row['12M Duplex Router'] ?? row['12M Router'] ?? row['12mRouter'] ?? row['12m_router'] ?? row['12M Router Charge'] ?? row['12 Month Router'],
-                    total: row['12M Total'] ?? row['12mTotal'] ?? row['12m_total'] ?? row['12mPrice'] ?? row['price12m'] ?? row['1 Year Total']
+            // Dynamically parse duration tiers from row keys
+            const parsedDurationTiers = [];
+
+            for (const durConf of DURATIONS_CONFIG) {
+                let tierActive = true;
+                let tierOnline = false;
+                let tierHasExplicitData = false;
+                let fallbackTotal = null;
+                const tierItems = [];
+
+                for (const [rawColKey, rawVal] of Object.entries(row)) {
+                    if (rawVal === undefined || rawVal === null || rawVal === '') continue;
+                    const colKey = rawColKey.trim();
+                    const colKeyLower = colKey.toLowerCase();
+
+                    // Find if colKey starts with any prefix for this duration
+                    let matchedPrefix = null;
+                    for (const p of durConf.prefixes) {
+                        if (colKeyLower.startsWith(p)) {
+                            const rem = colKey.slice(p.length);
+                            if (!rem || /^[\s_:-]/.test(rem)) {
+                                matchedPrefix = p;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!matchedPrefix) continue;
+
+                    const suffix = colKey.slice(matchedPrefix.length).replace(/^[\s_:-]+/, '').trim();
+                    const normSuffix = suffix.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                    // Enabled / Active flag
+                    if (['enabled', 'active', 'isactive', 'isenabled', 'status'].includes(normSuffix)) {
+                        tierActive = parseBooleanValue(rawVal, true);
+                        tierHasExplicitData = true;
+                        continue;
+                    }
+
+                    // Online flag
+                    if (['online', 'isonline', 'live', 'portal'].includes(normSuffix)) {
+                        tierOnline = parseBooleanValue(rawVal, false);
+                        tierHasExplicitData = true;
+                        continue;
+                    }
+
+                    // Fallback Total column
+                    if (['total', 'price', 'totalamount', 'amountwithtax'].includes(normSuffix)) {
+                        fallbackTotal = parseFloat(rawVal) || 0;
+                        tierHasExplicitData = true;
+                        continue;
+                    }
+
+                    // Items list string (e.g. "INT: 500; SM: 500; DW: 0") or JSON
+                    if (['items', 'addons', 'charges', 'itemlist'].includes(normSuffix)) {
+                        tierHasExplicitData = true;
+                        try {
+                            if (typeof rawVal === 'object') {
+                                for (const [k, v] of Object.entries(rawVal)) {
+                                    const matched = findMatchingAddon(k, allAddonCharges);
+                                    if (matched) {
+                                        tierItems.push({ addon: matched, amount: parseFloat(v) || 0 });
+                                    }
+                                }
+                            } else if (typeof rawVal === 'string') {
+                                const parts = rawVal.split(/[;,|]+/);
+                                for (const part of parts) {
+                                    const [k, v] = part.split(/[:=]+/);
+                                    if (k && v !== undefined) {
+                                        const matched = findMatchingAddon(k.trim(), allAddonCharges);
+                                        if (matched) {
+                                            tierItems.push({ addon: matched, amount: parseFloat(v.trim()) || 0 });
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                        continue;
+                    }
+
+                    // Match suffix against any active OneTimeCharge item in the database
+                    const matchedAddon = findMatchingAddon(suffix, allAddonCharges);
+                    if (matchedAddon) {
+                        const amt = parseFloat(rawVal) || 0;
+                        tierItems.push({ addon: matchedAddon, amount: amt });
+                        tierHasExplicitData = true;
+                    }
+                    // If no match, it is cleanly discarded / ignored
                 }
-            ];
+
+                if (tierHasExplicitData || tierItems.length > 0 || fallbackTotal !== null) {
+                    parsedDurationTiers.push({
+                        duration: durConf.duration,
+                        active: tierActive,
+                        online: tierOnline,
+                        items: tierItems,
+                        fallbackTotal
+                    });
+                }
+            }
 
             const createdPrices = [];
-            const hasMultiTier = durationTiers.some(d => d.internet !== undefined || d.support !== undefined || d.dropWire !== undefined || d.router !== undefined || d.total !== undefined);
 
-            if (hasMultiTier) {
-                for (const tier of durationTiers) {
-                    const hasData = tier.internet !== undefined || tier.support !== undefined || tier.dropWire !== undefined || tier.router !== undefined || tier.total !== undefined;
-                    if (!hasData) continue;
-
-                    const internetVal = tier.internet !== undefined && tier.internet !== '' ? parseFloat(tier.internet) : (tier.total ? parseFloat(tier.total) / 2 : 0);
-                    const supportVal = tier.support !== undefined && tier.support !== '' ? parseFloat(tier.support) : (tier.total ? parseFloat(tier.total) / 2 : 0);
-                    const dropWireVal = tier.dropWire !== undefined && tier.dropWire !== '' ? parseFloat(tier.dropWire) : 0;
-                    const routerVal = tier.router !== undefined && tier.router !== '' ? parseFloat(tier.router) : 0;
-
-                    const isTierActive = tier.enabled !== undefined ? parseBooleanValue(tier.enabled, true) : (row['Is Active'] !== undefined ? parseBooleanValue(row['Is Active'], true) : true);
-                    const isTierOnline = tier.online !== undefined ? parseBooleanValue(tier.online, false) : (row['Is Online'] !== undefined ? parseBooleanValue(row['Is Online'], false) : false);
-
-                    // Build linked addon charges and calculate exact TSC and VAT
+            if (parsedDurationTiers.length > 0) {
+                for (const tier of parsedDurationTiers) {
                     const addonPricesMap = {};
                     const selectedAddonIds = [];
                     let initialTaxableSum = 0;
@@ -1511,38 +1612,60 @@ async function importPackages(req, res, next) {
                     let recurringBasePrice = 0;
                     let hasTsc = false;
 
-                    const processItemCharge = (masterCharge, amount) => {
-                        if (!masterCharge || amount === undefined || amount === null || isNaN(amount)) return;
-                        const amt = Number(amount);
-                        addonPricesMap[String(masterCharge.id)] = amt;
-                        selectedAddonIds.push(masterCharge.id);
+                    // Deduplicate items by addon ID
+                    const uniqueItems = new Map();
+                    for (const item of tier.items) {
+                        uniqueItems.set(item.addon.id, item);
+                    }
 
-                        const tscAmt = masterCharge.isTscApplicable ? (amt * tscPercentage) / 100 : 0;
+                    for (const [addonId, { addon, amount }] of uniqueItems.entries()) {
+                        addonPricesMap[String(addonId)] = amount;
+                        selectedAddonIds.push(addon.id);
+
+                        // Use actual database properties of the addon charge
+                        const tscAmt = addon.isTscApplicable ? (amount * tscPercentage) / 100 : 0;
                         if (tscAmt > 0) hasTsc = true;
 
-                        const taxableAmt = masterCharge.isTaxable ? (amt + tscAmt) : 0;
-                        const nonTaxableAmt = !masterCharge.isTaxable ? (amt + tscAmt) : 0;
+                        const taxableAmt = addon.isTaxable ? (amount + tscAmt) : 0;
+                        const nonTaxableAmt = !addon.isTaxable ? (amount + tscAmt) : 0;
 
                         initialTaxableSum += taxableAmt;
                         initialNonTaxableSum += nonTaxableAmt;
 
-                        if (masterCharge.isRenewal) {
-                            recurringBasePrice += amt;
+                        if (addon.isRenewal) {
+                            recurringBasePrice += amount;
                             renewTaxableSum += taxableAmt;
                             renewNonTaxableSum += nonTaxableAmt;
                         }
-                    };
+                    }
 
-                    if (internetMaster) processItemCharge(internetMaster, internetVal);
-                    if (supportMaster) processItemCharge(supportMaster, supportVal);
-                    if (dropWireMaster) processItemCharge(dropWireMaster, dropWireVal);
-                    if (routerMaster) processItemCharge(routerMaster, routerVal);
+                    // If fallback total provided with no specific item breakdown
+                    if (uniqueItems.size === 0 && tier.fallbackTotal !== null && tier.fallbackTotal > 0) {
+                        const defaultInt = allAddonCharges.find(a => a.code === 'INT' || a.name.toUpperCase().includes('INTERNET'));
+                        const defaultSm = allAddonCharges.find(a => a.code === 'SM' || a.name.toUpperCase().includes('SUPPORT'));
+                        const halfVal = tier.fallbackTotal / 2;
+
+                        if (defaultInt) {
+                            addonPricesMap[String(defaultInt.id)] = halfVal;
+                            selectedAddonIds.push(defaultInt.id);
+                        }
+                        if (defaultSm) {
+                            addonPricesMap[String(defaultSm.id)] = halfVal;
+                            selectedAddonIds.push(defaultSm.id);
+                        }
+
+                        recurringBasePrice = tier.fallbackTotal;
+                        const tscAmt = (halfVal * tscPercentage) / 100;
+                        hasTsc = true;
+                        initialTaxableSum = tier.fallbackTotal + tscAmt;
+                        renewTaxableSum = tier.fallbackTotal + tscAmt;
+                    }
 
                     const initialTotalWithTax = Math.round((initialTaxableSum * 1.13 + initialNonTaxableSum) * 100) / 100;
                     const renewAmountWithTax = Math.round((renewTaxableSum * 1.13 + renewNonTaxableSum) * 100) / 100;
-                    const basePrice = recurringBasePrice > 0 ? recurringBasePrice : (internetVal + supportVal);
+                    const basePrice = recurringBasePrice > 0 ? recurringBasePrice : Array.from(uniqueItems.values()).reduce((s, i) => s + i.amount, 0);
 
-                    if (basePrice > 0 || initialTotalWithTax > 0) {
+                    if (basePrice > 0 || initialTotalWithTax > 0 || selectedAddonIds.length > 0) {
                         const cleanPlanCode = String(plan.planCode).replace(/[\s-]/g, '');
                         const cleanDuration = String(tier.duration).replace(/[\s-]/g, '');
                         const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
@@ -1571,8 +1694,8 @@ async function importPackages(req, res, next) {
                                     renewAmountWithTax: renewAmountWithTax || initialTotalWithTax || basePrice,
                                     isTscApplicable: hasTsc,
                                     packageName: cleanPackageName,
-                                    isActive: isTierActive,
-                                    isOnline: isTierOnline,
+                                    isActive: tier.active,
+                                    isOnline: tier.online,
                                     isDeleted: false,
                                     referenceId: finalRefId,
                                     addonPricesJson,
@@ -1591,8 +1714,8 @@ async function importPackages(req, res, next) {
                                     packageName: cleanPackageName,
                                     referenceId: finalRefId,
                                     isTscApplicable: hasTsc,
-                                    isActive: isTierActive,
-                                    isOnline: isTierOnline,
+                                    isActive: tier.active,
+                                    isOnline: tier.online,
                                     isDeleted: false,
                                     addonPricesJson,
                                     ispId: ispId || 1,
@@ -1610,7 +1733,7 @@ async function importPackages(req, res, next) {
                             }).catch(() => {});
                         }
 
-                        createdPrices.push(`${tier.duration}: Base Rs. ${basePrice} | Renew Rs. ${renewAmountWithTax} | Initial Rs. ${initialTotalWithTax}`);
+                        createdPrices.push(`${tier.duration}: Base Rs. ${basePrice} | Renew Rs. ${renewAmountWithTax} | Initial Rs. ${initialTotalWithTax} (${selectedAddonIds.length} items linked)`);
                     }
                 }
             } else if (row.price !== undefined || row.amount !== undefined || row.total !== undefined) {
@@ -1626,13 +1749,16 @@ async function importPackages(req, res, next) {
 
                 const addonPricesMap = {};
                 const selectedAddonIds = [];
-                if (internetMaster) {
-                    addonPricesMap[String(internetMaster.id)] = flatPrice / 2;
-                    selectedAddonIds.push(internetMaster.id);
+                const defaultInt = allAddonCharges.find(a => a.code === 'INT' || a.name.toUpperCase().includes('INTERNET'));
+                const defaultSm = allAddonCharges.find(a => a.code === 'SM' || a.name.toUpperCase().includes('SUPPORT'));
+
+                if (defaultInt) {
+                    addonPricesMap[String(defaultInt.id)] = flatPrice / 2;
+                    selectedAddonIds.push(defaultInt.id);
                 }
-                if (supportMaster) {
-                    addonPricesMap[String(supportMaster.id)] = flatPrice / 2;
-                    selectedAddonIds.push(supportMaster.id);
+                if (defaultSm) {
+                    addonPricesMap[String(defaultSm.id)] = flatPrice / 2;
+                    selectedAddonIds.push(defaultSm.id);
                 }
 
                 const tscAmt = (flatPrice / 2) * (tscPercentage / 100);
@@ -1701,7 +1827,7 @@ async function importPackages(req, res, next) {
                     }).catch(() => {});
                 }
 
-                createdPrices.push(`${duration}: Base Rs. ${flatPrice} | Total Rs. ${totalWithTax}`);
+                createdPrices.push(`${duration}: Rs. ${flatPrice} (Total with Tax: Rs. ${totalWithTax})`);
             }
 
             const priceSummary = createdPrices.length > 0 ? `Durations configured: [${createdPrices.join('; ')}]` : 'No durations attached';
@@ -2713,101 +2839,76 @@ async function getSampleTemplate(req, res, next) {
             ];
         } else if (type === 'packages') {
             filename = 'sample_packages_tariffs';
-            sampleRows = [
-                {
-                    'Plan Name': '100 Mbps',
-                    'Package Reference Name': 'Premium Fiber 100M',
-                    'Speed (Mbps)': 100,
-                    'NAS Type': 'mikrotik',
-                    'Connection Type': 'Fiber',
-                    '1M Enabled': 'TRUE',
-                    '1M Online': 'FALSE',
-                    '1M Internet': 500,
-                    '1M Support': 500,
-                    '1M Drop Wire': 0,
-                    '1M Douplex Router': 0,
-                    '3M Enabled': 'TRUE',
-                    '3M Online': 'FALSE',
-                    '3M Internet': 1400,
-                    '3M Support': 1400,
-                    '3M Drop Wire': 0,
-                    '3M Douplex Router': 0,
-                    '6M Enabled': 'TRUE',
-                    '6M Online': 'FALSE',
-                    '6M Internet': 2700,
-                    '6M Support': 2700,
-                    '6M Drop Wire': 0,
-                    '6M Douplex Router': 0,
-                    '12M Enabled': 'TRUE',
-                    '12M Online': 'TRUE',
-                    '12M Internet': 5200,
-                    '12M Support': 5200,
-                    '12M Drop Wire': 0,
-                    '12M Douplex Router': 0
-                },
-                {
-                    'Plan Name': '50 Mbps',
-                    'Package Reference Name': 'Standard Fiber 50M',
-                    'Speed (Mbps)': 50,
-                    'NAS Type': 'mikrotik',
-                    'Connection Type': 'Fiber',
-                    '1M Enabled': 'TRUE',
-                    '1M Online': 'FALSE',
-                    '1M Internet': 420,
-                    '1M Support': 420,
-                    '1M Drop Wire': 0,
-                    '1M Douplex Router': 0,
-                    '3M Enabled': 'TRUE',
-                    '3M Online': 'FALSE',
-                    '3M Internet': 1200,
-                    '3M Support': 1200,
-                    '3M Drop Wire': 0,
-                    '3M Douplex Router': 0,
-                    '6M Enabled': 'TRUE',
-                    '6M Online': 'FALSE',
-                    '6M Internet': 2300,
-                    '6M Support': 2300,
-                    '6M Drop Wire': 0,
-                    '6M Douplex Router': 0,
-                    '12M Enabled': 'TRUE',
-                    '12M Online': 'FALSE',
-                    '12M Internet': 4400,
-                    '12M Support': 4400,
-                    '12M Drop Wire': 0,
-                    '12M Douplex Router': 0
-                },
-                {
-                    'Plan Name': '25 Mbps',
-                    'Package Reference Name': 'Starter Fiber 25M',
-                    'Speed (Mbps)': 25,
-                    'NAS Type': 'mikrotik',
-                    'Connection Type': 'Fiber',
-                    '1M Enabled': 'TRUE',
-                    '1M Online': 'FALSE',
-                    '1M Internet': 350,
-                    '1M Support': 350,
-                    '1M Drop Wire': 0,
-                    '1M Douplex Router': 0,
-                    '3M Enabled': 'TRUE',
-                    '3M Online': 'FALSE',
-                    '3M Internet': 1000,
-                    '3M Support': 1000,
-                    '3M Drop Wire': 0,
-                    '3M Douplex Router': 0,
-                    '6M Enabled': 'TRUE',
-                    '6M Online': 'FALSE',
-                    '6M Internet': 1900,
-                    '6M Support': 1900,
-                    '6M Drop Wire': 0,
-                    '6M Douplex Router': 0,
-                    '12M Enabled': 'TRUE',
-                    '12M Online': 'FALSE',
-                    '12M Internet': 3600,
-                    '12M Support': 3600,
-                    '12M Drop Wire': 0,
-                    '12M Douplex Router': 0
+            const prisma = req.prisma;
+            const ispId = req.ispId ? Number(req.ispId) : null;
+
+            // Fetch active OneTimeCharges (Inventory Items for Package Addon Charges)
+            let masterCharges = [];
+            if (prisma) {
+                try {
+                    masterCharges = await prisma.OneTimeCharge.findMany({
+                        where: {
+                            isDeleted: false,
+                            ...(ispId ? { ispId: Number(ispId) } : {})
+                        },
+                        orderBy: { id: 'asc' }
+                    });
+                } catch (e) {
+                    console.warn('[getSampleTemplate] Failed to fetch OneTimeCharges:', e.message);
                 }
+            }
+
+            // Filter for package creation items or fallback to all active charges
+            let activeItems = masterCharges.filter(c => c.forPackageCreation);
+            if (activeItems.length === 0) {
+                activeItems = masterCharges.length > 0 ? masterCharges : [
+                    { name: 'Internet', code: 'INT', isRenewal: true, isTaxable: true, isTscApplicable: true },
+                    { name: 'Support and Maintenance', code: 'SM', isRenewal: true, isTaxable: true, isTscApplicable: false },
+                    { name: 'Drop Wire', code: 'DW', isRenewal: false, isTaxable: true, isTscApplicable: false },
+                    { name: 'Douplex Router', code: 'DR', isRenewal: false, isTaxable: true, isTscApplicable: false }
+                ];
+            }
+
+            const durations = [
+                { prefix: '1M', label: '1M', mult: 1 },
+                { prefix: '3M', label: '3M', mult: 2.8 },
+                { prefix: '6M', label: '6M', mult: 5.4 },
+                { prefix: '12M', label: '12M', mult: 10.4 }
             ];
+
+            const samplePlans = [
+                { planName: '100 Mbps', refName: 'Premium Fiber 100M', speed: 100, baseInternet: 500, baseSupport: 500 },
+                { planName: '50 Mbps', refName: 'Standard Fiber 50M', speed: 50, baseInternet: 420, baseSupport: 420 },
+                { planName: '25 Mbps', refName: 'Starter Fiber 25M', speed: 25, baseInternet: 350, baseSupport: 350 }
+            ];
+
+            sampleRows = samplePlans.map((plan, pIdx) => {
+                const row = {
+                    'Plan Name': plan.planName,
+                    'Package Reference Name': plan.refName,
+                    'Speed (Mbps)': plan.speed,
+                    'NAS Type': 'mikrotik',
+                    'Connection Type': 'Fiber'
+                };
+
+                durations.forEach((dur, dIdx) => {
+                    row[`${dur.prefix} Enabled`] = 'TRUE';
+                    row[`${dur.prefix} Online`] = (dIdx === 3 && pIdx === 0) ? 'TRUE' : 'FALSE';
+
+                    activeItems.forEach(item => {
+                        const colKey = `${dur.prefix} ${item.name || item.code}`;
+                        if (item.isRenewal) {
+                            const isInt = (item.code === 'INT' || String(item.name).toUpperCase().includes('INTERNET'));
+                            const unitPrice = isInt ? plan.baseInternet : plan.baseSupport;
+                            row[colKey] = Math.round(unitPrice * dur.mult);
+                        } else {
+                            row[colKey] = item.amount || 0;
+                        }
+                    });
+                });
+
+                return row;
+            });
         } else if (type === 'leads') {
             filename = 'sample_leads';
             sampleRows = [
