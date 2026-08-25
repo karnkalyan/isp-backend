@@ -33,6 +33,14 @@ function formatMikrotikRateLimit(plan, upMbps, downMbps) {
   ].join(' ');
 }
 
+function extractPoolValue(val) {
+  if (!val) return null;
+  const str = String(val).trim();
+  if (!str || str.toLowerCase() === 'none' || str.toLowerCase() === 'null') return null;
+  const match = str.match(/^(?:.*?)\(([^)]+)\)$/);
+  return match ? match[1].trim() : str;
+}
+
 function normalizeVendorProfiles(plan) {
   const selectedNas = (plan.nasType || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   const profiles = Array.isArray(plan.vendorProfiles) ? [...plan.vendorProfiles] : [];
@@ -216,8 +224,8 @@ async function createPackagePlan(req, res, next) {
       fupPenaltyPlanId: fupPenaltyPlanId !== undefined && fupPenaltyPlanId !== null && fupPenaltyPlanId !== '' ? Number(fupPenaltyPlanId) : null,
       isFupPackage: Boolean(isFupPackage),
       onlyRenewal: Boolean(onlyRenewal),
-      applyFramedPool: Boolean(applyFramedPool),
-      framedPoolValue: framedPoolValue || null,
+      applyFramedPool: applyFramedPool !== undefined ? Boolean(applyFramedPool) : Boolean(extractPoolValue(framedPoolValue)),
+      framedPoolValue: extractPoolValue(framedPoolValue),
       customRadiusAttributes: customRadiusAttributes || null,
       maxDiscountPercentage: maxDiscountPercentage !== undefined ? Number(maxDiscountPercentage) : 100,
       maxDiscountCount: maxDiscountCount !== undefined ? Number(maxDiscountCount) : 0,
@@ -315,6 +323,13 @@ async function updatePackagePlan(req, res, next) {
         }
       }
     });
+
+    if (data.framedPoolValue !== undefined) {
+      data.framedPoolValue = extractPoolValue(data.framedPoolValue);
+      if (data.applyFramedPool === undefined && data.framedPoolValue) {
+        data.applyFramedPool = true;
+      }
+    }
 
     if (req.body.connectionType !== undefined) {
       if (!req.body.connectionType) return res.status(400).json({ error: 'connectionType is required' });

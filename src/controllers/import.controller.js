@@ -337,6 +337,118 @@ function parseCustomRadiusAttributes(input) {
     return attrs;
 }
 
+const RADIUS_POOLS_SETTING_KEY = (ispId) => `isp:${ispId}:radiusPools`;
+
+function normalizeRadiusPool(input) {
+    const value = String(input?.value || input?.name || '').trim();
+    if (!value) return null;
+    return {
+        id: value,
+        name: String(input?.name || value).trim(),
+        value,
+        description: String(input?.description || '').trim(),
+        type: String(input?.type || 'ipv4').trim().toLowerCase(),
+        isActive: input?.isActive === undefined ? true : Boolean(input.isActive),
+    };
+}
+
+async function getISPRadiusPools(prisma, ispId) {
+    if (!prisma || !ispId) return [];
+    try {
+        const setting = await prisma.ISPSettings.findUnique({ where: { key: RADIUS_POOLS_SETTING_KEY(ispId) } });
+        if (!setting?.value) return [];
+        const parsed = JSON.parse(setting.value);
+        return Array.isArray(parsed) ? parsed.map(normalizeRadiusPool).filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
+async function saveISPRadiusPools(prisma, ispId, pools) {
+    if (!prisma || !ispId) return;
+    try {
+        const value = JSON.stringify(pools.map(normalizeRadiusPool).filter(Boolean));
+        await prisma.ISPSettings.upsert({
+            where: { key: RADIUS_POOLS_SETTING_KEY(ispId) },
+            update: { value, description: 'RADIUS framed pool values', updatedAt: new Date() },
+            create: { key: RADIUS_POOLS_SETTING_KEY(ispId), value, description: 'RADIUS framed pool values', ispId, updatedAt: new Date() }
+        });
+    } catch (e) {
+        console.warn('[saveISPRadiusPools] Error saving radius pools:', e.message);
+    }
+}
+
+/**
+ * Resolves Framed Pool Value from various spreadsheet formats:
+ * e.g. "Pool 2 (pool2)" -> value: "pool2", name: "Pool 2"
+ * e.g. "Pool 1 (pool1)" -> value: "pool1", name: "Pool 1"
+ * e.g. "pool2"          -> value: "pool2", name: "pool2"
+ * e.g. "Pool 2"         -> matches existing pool named "Pool 2" to get its value "pool2", or "Pool 2"
+ * Also auto-registers the pool in ISPSettings if not yet present so it works everywhere in UI and RADIUS!
+ */
+async function resolveFramedPool(prisma, ispId, rawInput, poolsCache = null) {
+    if (!rawInput) return { value: null, name: null, apply: false };
+    let str = String(rawInput).trim();
+    if (!str || str.toLowerCase() === 'none' || str.toLowerCase() === 'null' || str === '-') {
+        return { value: null, name: null, apply: false };
+    }
+
+    let pools = poolsCache;
+    if (!pools && prisma && ispId) {
+        pools = await getISPRadiusPools(prisma, ispId);
+    }
+    pools = pools || [];
+
+    let extractedName = str;
+    let extractedValue = str;
+
+    // Check pattern: "Name (value)" or "Pool 2 (pool2)" or "Pool-Name (pool_code)"
+    const parenMatch = str.match(/^(.*?)\s*\(([^)]+)\)$/);
+    if (parenMatch) {
+        extractedName = parenMatch[1].trim() || parenMatch[2].trim();
+        extractedValue = parenMatch[2].trim();
+    }
+
+    // 1. Check if matches existing pool by value
+    let matched = pools.find(p => p.value.toLowerCase() === extractedValue.toLowerCase());
+
+    // 2. Check if matches existing pool by name
+    if (!matched) {
+        matched = pools.find(p => p.name.toLowerCase() === extractedName.toLowerCase() || p.name.toLowerCase() === str.toLowerCase());
+    }
+
+    // 3. Check if matches inside parentheses
+    if (!matched && parenMatch) {
+        matched = pools.find(p => p.value.toLowerCase() === parenMatch[2].trim().toLowerCase() || p.name.toLowerCase() === parenMatch[1].trim().toLowerCase());
+    }
+
+    if (matched) {
+        return { value: matched.value, name: matched.name, apply: true };
+    }
+
+    // Auto-register in ISPSettings so the pool exists across the ISP system
+    if (prisma && ispId && extractedValue) {
+        try {
+            const newPool = {
+                id: extractedValue,
+                name: extractedName || extractedValue,
+                value: extractedValue,
+                description: `Imported Framed Pool ${extractedName}`,
+                type: 'ipv4',
+                isActive: true
+            };
+            const nextPools = pools.filter(p => p.value.toLowerCase() !== extractedValue.toLowerCase());
+            nextPools.push(newPool);
+            await saveISPRadiusPools(prisma, ispId, nextPools);
+            pools.push(newPool);
+        } catch (regErr) {
+            console.warn('[resolveFramedPool] Auto-register warning:', regErr.message);
+        }
+    }
+
+    return { value: extractedValue, name: extractedName, apply: true };
+}
+
 /**
  * Resolve Branch IDs from Organization and/or Branches input (supports plain names, codes, or combined)
  * e.g. "Arrownet Pvt Ltd", "Yatkha, Bahrabise, Charikot", "Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD)", "All Branches"
@@ -706,6 +818,7 @@ async function importPlans(req, res, next) {
     }
 
     const connectionTypeCache = new Map();
+    const existingRadiusPools = await getISPRadiusPools(prisma, targetIspId);
     const logs = [];
     let successCount = 0;
     let skippedCount = 0;
@@ -780,7 +893,7 @@ async function importPlans(req, res, next) {
             const localDownload = row.localDownload !== undefined && row.localDownload !== '' ? Number(row.localDownload || row['Local Download']) : downSpeed;
             const dataLimit = row.dataLimit !== undefined && row.dataLimit !== '' ? Number(row.dataLimit || row['Data Limit']) : 0;
 
-            // 3. Technical Parameters
+            // 3. Technical Parameters & Framed Pool Resolution
             const nasType = (row.nasType || row['NAS Type'] || 'mikrotik').toString().toLowerCase();
             const service = (row.service || row['Service'] || 'Internet').toString().trim();
             const priority = (row.priority || row['Priority'] || '1').toString().trim();
@@ -793,8 +906,17 @@ async function importPlans(req, res, next) {
             const onlyRenewal = Boolean(row.onlyRenewal || row['Only Renewal']);
             const isPopular = Boolean(row.isPopular || row['Popular']);
             const highPriority = Boolean(row.highPriority || row['High Priority']);
-            const applyFramedPool = Boolean(row.applyFramedPool || row['Apply Framed Pool']);
-            const framedPoolValue = (row.framedPoolValue || row['Framed Pool Value'] || '').toString().trim() || null;
+
+            // Resolve Framed Pool (e.g. 'Pool 2 (pool2)', 'pool2', 'Pool 2')
+            const rawApplyPool = row.applyFramedPool !== undefined ? row.applyFramedPool : (row['Apply Framed Pool'] !== undefined ? row['Apply Framed Pool'] : row.apply_framed_pool);
+            const rawPoolInput = row.framedPoolValue || row['Framed Pool Value'] || row.framedPool || row['Framed Pool'] || row.pool || row['Pool'] || row.framed_pool_value || '';
+
+            const resolvedPool = await resolveFramedPool(prisma, targetIspId, rawPoolInput, existingRadiusPools);
+            const framedPoolValue = resolvedPool.value;
+            const applyFramedPool = rawApplyPool !== undefined && rawApplyPool !== ''
+                ? (String(rawApplyPool).toLowerCase() === 'true' || String(rawApplyPool) === '1' || String(rawApplyPool).toLowerCase() === 'yes')
+                : Boolean(framedPoolValue);
+
             const maxDiscountPercentage = row.maxDiscountPercentage !== undefined && row.maxDiscountPercentage !== '' ? Number(row.maxDiscountPercentage || row['Max Discount Percentage (%)']) : 100;
             const maxDiscountCount = row.maxDiscountCount !== undefined && row.maxDiscountCount !== '' ? Number(row.maxDiscountCount || row['Max Discount Count Per Month']) : 0;
 
@@ -1006,12 +1128,13 @@ async function importPlans(req, res, next) {
             }
 
             const branchInfo = resolvedBranchIds.length > 0 ? `Linked ${resolvedBranchIds.length} branches` : 'All Branches (Global)';
+            const poolInfo = framedPoolValue ? `Framed Pool: ${framedPoolValue}` : 'No Pool';
 
             logs.push({
                 rowNumber,
                 name: rawPlanName,
                 status: 'success',
-                message: `✓ Internet Plan '${rawPlanName}' (${plan.planCode}) ensured | Speed: ${downSpeed}M/${upSpeed}M | Type: ${packageType} | ${branchInfo} | ✓ ${radiusSyncMessage}`
+                message: `✓ Internet Plan '${rawPlanName}' (${plan.planCode}) ensured | Speed: ${downSpeed}M/${upSpeed}M | ${poolInfo} | Type: ${packageType} | ${branchInfo} | ✓ ${radiusSyncMessage}`
             });
             successCount++;
 
