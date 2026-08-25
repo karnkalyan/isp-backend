@@ -1162,11 +1162,98 @@ async function importPlans(req, res, next) {
 
 // ==========================================
 // 3. IMPORT PACKAGES & TARIFF RATES (PRICES)
+/**
+ * Helper to parse boolean string or value
+ */
+function parseBooleanValue(val, defaultVal = false) {
+    if (val === undefined || val === null || val === '') return defaultVal;
+    if (typeof val === 'boolean') return val;
+    const str = String(val).trim().toLowerCase();
+    if (['true', '1', 'yes', 'enabled', 'active', 'y'].includes(str)) return true;
+    if (['false', '0', 'no', 'disabled', 'inactive', 'n'].includes(str)) return false;
+    return defaultVal;
+}
+
+/**
+ * Ensure standard master OneTimeCharge items exist for Package Creation
+ */
+async function ensureMasterPackageCharges(prisma, ispId) {
+    const defaultCharges = [
+        { name: 'INTERNET', code: 'INT', isTaxable: true, isTscApplicable: true, isRenewal: true, forPackageCreation: true },
+        { name: 'Support and Maintenance', code: 'SM', isTaxable: true, isTscApplicable: false, isRenewal: true, forPackageCreation: true },
+        { name: 'Drop Wire', code: 'DW', isTaxable: true, isTscApplicable: false, isRenewal: false, forPackageCreation: true },
+        { name: 'Douplex Router', code: 'ROUTER', isTaxable: true, isTscApplicable: false, isRenewal: false, forPackageCreation: true }
+    ];
+
+    const results = [];
+    for (const def of defaultCharges) {
+        let charge = await prisma.OneTimeCharge.findFirst({
+            where: {
+                OR: [
+                    { code: def.code },
+                    { name: { contains: def.name } },
+                    { referenceId: `INT-${def.code}` }
+                ],
+                forPackageCreation: true,
+                ...(ispId ? { ispId: Number(ispId) } : {}),
+                isDeleted: false
+            }
+        });
+
+        if (!charge) {
+            // Check if exists as catalog without forPackageCreation flag
+            charge = await prisma.OneTimeCharge.findFirst({
+                where: {
+                    OR: [
+                        { code: def.code },
+                        { name: { contains: def.name } },
+                        { referenceId: `INT-${def.code}` }
+                    ],
+                    ...(ispId ? { ispId: Number(ispId) } : {}),
+                    isDeleted: false
+                }
+            });
+
+            if (charge) {
+                charge = await prisma.OneTimeCharge.update({
+                    where: { id: charge.id },
+                    data: {
+                        forPackageCreation: true,
+                        isRenewal: def.isRenewal,
+                        isTaxable: def.isTaxable,
+                        isTscApplicable: def.isTscApplicable
+                    }
+                });
+            } else {
+                charge = await prisma.OneTimeCharge.create({
+                    data: {
+                        name: def.name,
+                        code: def.code,
+                        referenceId: `INT-${def.code}`,
+                        amount: 0,
+                        isTaxable: def.isTaxable,
+                        isTscApplicable: def.isTscApplicable,
+                        forPackageCreation: true,
+                        isRenewal: def.isRenewal,
+                        isActive: true,
+                        isDeleted: false,
+                        ispId: ispId || 1
+                    }
+                });
+            }
+        }
+        results.push(charge);
+    }
+    return results;
+}
+
+// ==========================================
+// 3. IMPORT PACKAGES & TARIFFS (PackagePrice with 1M, 3M, 6M, 12M rate sheets)
 // ==========================================
 async function importPackages(req, res, next) {
     const prisma = req.prisma;
     const ispId = req.ispId ? Number(req.ispId) : null;
-    const { items = [], syncRadius = true } = req.body;
+    const { items = [], syncRadius = true, targetPlanId } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'No package items provided for import' });
@@ -1181,6 +1268,7 @@ async function importPackages(req, res, next) {
         }
     }
 
+    // Ensure default Connection Type
     let defaultConnectionType = await prisma.ConnectionType.findFirst({
         where: {
             isDeleted: false,
@@ -1200,6 +1288,37 @@ async function importPackages(req, res, next) {
         });
     }
 
+    // Ensure Master Package Creation Items (Internet, Support, Drop Wire, Router)
+    const masterAddons = await ensureMasterPackageCharges(prisma, ispId);
+    const internetMaster = masterAddons.find(a => a.code === 'INT' || a.name.toUpperCase().includes('INTERNET'));
+    const supportMaster = masterAddons.find(a => a.code === 'SM' || a.name.toUpperCase().includes('SUPPORT'));
+    const dropWireMaster = masterAddons.find(a => a.code === 'DW' || a.name.toUpperCase().includes('WIRE'));
+    const routerMaster = masterAddons.find(a => a.code === 'ROUTER' || a.name.toUpperCase().includes('ROUTER'));
+
+    // Fetch dynamic TSC percentage from ISP Settings (default: 10%)
+    let tscPercentage = 10;
+    try {
+        const tscSetting = await prisma.iSPSettings.findFirst({
+            where: {
+                ...(ispId ? { ispId: Number(ispId) } : {}),
+                key: 'tscPercentage'
+            }
+        });
+        if (tscSetting && tscSetting.value) {
+            tscPercentage = parseFloat(tscSetting.value) || 10;
+        }
+    } catch (e) {
+        tscPercentage = 10;
+    }
+
+    // Optional target plan if specified in request body
+    let targetPlan = null;
+    if (targetPlanId) {
+        targetPlan = await prisma.PackagePlan.findUnique({
+            where: { id: Number(targetPlanId) }
+        });
+    }
+
     const logs = [];
     let successCount = 0;
     let skippedCount = 0;
@@ -1209,67 +1328,72 @@ async function importPackages(req, res, next) {
         const rowNumber = i + 1;
         const row = items[i] || {};
 
-        const rawPlanName = (row.packageName || row.planName || row.name || row.package || row['Package Name'] || row['Plan Name'] || '').toString().trim();
-        if (!rawPlanName) {
+        const rawPlanName = (row.planName || row['Plan Name'] || row['Internet Speed Plan'] || row.packageName || row['Package Name'] || row.name || row.package || (targetPlan ? targetPlan.planName : '') || '').toString().trim();
+        const packageReferenceName = (row.packageReferenceName || row['Package Reference Name'] || row.packageName || row['Package Name'] || rawPlanName || (targetPlan ? targetPlan.planName : '')).toString().trim();
+
+        if (!rawPlanName && !targetPlan) {
             logs.push({
                 rowNumber,
                 name: 'Empty Plan Name',
                 status: 'skipped',
-                message: 'Row skipped: Package Name is required.'
+                message: 'Row skipped: Plan Name or Package Reference Name is required.'
             });
             skippedCount++;
             continue;
         }
 
         try {
+            let plan = targetPlan;
             const speedInput = row.speed || row.bandwidth || row.downSpeed || row.speedMbps || row['Speed (Mbps)'] || row.Speed || rawPlanName;
             const speedMbps = extractSpeedMbps(speedInput);
             const downSpeed = row.downSpeed ? Number(row.downSpeed) : speedMbps;
             const upSpeed = row.upSpeed ? Number(row.upSpeed) : speedMbps;
 
-            const rawPlanCode = (row.planCode || row.code || row['Plan Code'] || '').toString().trim();
-            const planCode = rawPlanCode ? slugify(rawPlanCode) : await generateUniquePlanCode(prisma, ispId, rawPlanName);
-
-            let plan = await prisma.PackagePlan.findFirst({
-                where: {
-                    OR: [
-                        { planCode },
-                        { planName: rawPlanName }
-                    ],
-                    ...(ispId ? { ispId } : {}),
-                    isDeleted: false
-                }
-            });
-
             if (!plan) {
-                plan = await prisma.PackagePlan.create({
-                    data: {
-                        planName: rawPlanName,
-                        planCode,
-                        connectionType: defaultConnectionType.id,
-                        downSpeed,
-                        upSpeed,
-                        dataLimit: row.dataLimit ? Number(row.dataLimit) : 0,
-                        deviceLimit: row.deviceLimit ? Number(row.deviceLimit) : 1,
-                        nasType: (row.nasType || row['NAS Type'] || 'mikrotik').toLowerCase(),
-                        isPopular: Boolean(row.isPopular),
-                        description: row.description || `${rawPlanName} - High Speed ${speedMbps} Mbps Internet`,
-                        fupApply: row.fupApply !== undefined ? Boolean(row.fupApply) : true,
-                        fupLimitGb: row.fupLimitGb ? Number(row.fupLimitGb) : null,
-                        isActive: true,
-                        isDeleted: false,
-                        ispId: ispId || 1
+                const rawPlanCode = (row.planCode || row.code || row['Plan Code'] || '').toString().trim();
+                const planCode = rawPlanCode ? slugify(rawPlanCode) : await generateUniquePlanCode(prisma, ispId, rawPlanName);
+
+                plan = await prisma.PackagePlan.findFirst({
+                    where: {
+                        OR: [
+                            { planCode },
+                            { planName: rawPlanName }
+                        ],
+                        ...(ispId ? { ispId } : {}),
+                        isDeleted: false
                     }
                 });
-            } else {
-                plan = await prisma.PackagePlan.update({
-                    where: { id: plan.id },
-                    data: {
-                        downSpeed,
-                        upSpeed,
-                        updatedAt: new Date()
-                    }
-                });
+
+                if (!plan) {
+                    plan = await prisma.PackagePlan.create({
+                        data: {
+                            planName: rawPlanName,
+                            planCode,
+                            connectionType: defaultConnectionType.id,
+                            downSpeed,
+                            upSpeed,
+                            dataLimit: row.dataLimit ? Number(row.dataLimit) : 0,
+                            deviceLimit: row.deviceLimit ? Number(row.deviceLimit) : 1,
+                            nasType: (row.nasType || row['NAS Type'] || 'mikrotik').toLowerCase(),
+                            isPopular: Boolean(row.isPopular),
+                            description: row.description || `${rawPlanName} - High Speed ${speedMbps} Mbps Internet`,
+                            fupApply: row.fupApply !== undefined ? Boolean(row.fupApply) : true,
+                            fupLimitGb: row.fupLimitGb ? Number(row.fupLimitGb) : null,
+                            isActive: true,
+                            isDeleted: false,
+                            ispId: ispId || 1
+                        }
+                    });
+                } else {
+                    plan = await prisma.PackagePlan.update({
+                        where: { id: plan.id },
+                        data: {
+                            downSpeed,
+                            upSpeed,
+                            updatedAt: new Date()
+                        }
+                    });
+                }
             }
 
             let radiusSyncMessage = 'FreeRADIUS not configured';
@@ -1313,110 +1437,212 @@ async function importPackages(req, res, next) {
                 }
             }
 
-            const durationConfigs = [
+            // Duration Tiers definition (1 Month, 3 Months, 6 Months, 12 Months)
+            const durationTiers = [
                 {
-                    key: '1m',
                     duration: '1 Month',
-                    internet: row['1mInternet'] || row['1m_internet'] || row['1M Internet'] || row['1 Month Internet Charge'],
-                    support: row['1mSupport'] || row['1m_support'] || row['1M Support'] || row['1 Month Support Charge'],
-                    total: row['1mTotal'] || row['1m_total'] || row['1M Total'] || row['1 Month Total'] || row['1mPrice'] || row['price1m']
+                    prefix: '1m',
+                    enabled: row['1M Enabled'] ?? row['1mEnabled'] ?? row['1M Active'] ?? row['1mActive'] ?? row['1m_enabled'] ?? row['1m_active'],
+                    online: row['1M Online'] ?? row['1mOnline'] ?? row['1m_online'],
+                    internet: row['1M Internet'] ?? row['1mInternet'] ?? row['1m_internet'] ?? row['1M Internet Charge'] ?? row['1 Month Internet'],
+                    support: row['1M Support'] ?? row['1mSupport'] ?? row['1m_support'] ?? row['1M Support and Maintenance'] ?? row['1M Support & Maintenance'] ?? row['1M Support Charge'] ?? row['1 Month Support'],
+                    dropWire: row['1M Drop Wire'] ?? row['1mDropWire'] ?? row['1m_drop_wire'] ?? row['1M Drop Wire Charge'] ?? row['1 Month Drop Wire'],
+                    router: row['1M Douplex Router'] ?? row['1M Duplex Router'] ?? row['1M Router'] ?? row['1mRouter'] ?? row['1m_router'] ?? row['1M Router Charge'] ?? row['1 Month Router'],
+                    total: row['1M Total'] ?? row['1mTotal'] ?? row['1m_total'] ?? row['1mPrice'] ?? row['price1m']
                 },
                 {
-                    key: '3m',
                     duration: '3 Months',
-                    internet: row['3mInternet'] || row['3m_internet'] || row['3M Internet'] || row['3 Month Internet Charge'],
-                    support: row['3mSupport'] || row['3m_support'] || row['3M Support'] || row['3 Month Support Charge'],
-                    total: row['3mTotal'] || row['3m_total'] || row['3M Total'] || row['3 Month Total'] || row['3mPrice'] || row['price3m']
+                    prefix: '3m',
+                    enabled: row['3M Enabled'] ?? row['3mEnabled'] ?? row['3M Active'] ?? row['3mActive'] ?? row['3m_enabled'] ?? row['3m_active'],
+                    online: row['3M Online'] ?? row['3mOnline'] ?? row['3m_online'],
+                    internet: row['3M Internet'] ?? row['3mInternet'] ?? row['3m_internet'] ?? row['3M Internet Charge'] ?? row['3 Month Internet'],
+                    support: row['3M Support'] ?? row['3mSupport'] ?? row['3m_support'] ?? row['3M Support and Maintenance'] ?? row['3M Support & Maintenance'] ?? row['3M Support Charge'] ?? row['3 Month Support'],
+                    dropWire: row['3M Drop Wire'] ?? row['3mDropWire'] ?? row['3m_drop_wire'] ?? row['3M Drop Wire Charge'] ?? row['3 Month Drop Wire'],
+                    router: row['3M Douplex Router'] ?? row['3M Duplex Router'] ?? row['3M Router'] ?? row['3mRouter'] ?? row['3m_router'] ?? row['3M Router Charge'] ?? row['3 Month Router'],
+                    total: row['3M Total'] ?? row['3mTotal'] ?? row['3m_total'] ?? row['3mPrice'] ?? row['price3m']
                 },
                 {
-                    key: '6m',
                     duration: '6 Months',
-                    internet: row['6mInternet'] || row['6m_internet'] || row['6M Internet'] || row['6 Month Internet Charge'],
-                    support: row['6mSupport'] || row['6m_support'] || row['6M Support'] || row['6 Month Support Charge'],
-                    total: row['6mTotal'] || row['6m_total'] || row['6M Total'] || row['6 Month Total'] || row['6mPrice'] || row['price6m']
+                    prefix: '6m',
+                    enabled: row['6M Enabled'] ?? row['6mEnabled'] ?? row['6M Active'] ?? row['6mActive'] ?? row['6m_enabled'] ?? row['6m_active'],
+                    online: row['6M Online'] ?? row['6mOnline'] ?? row['6m_online'],
+                    internet: row['6M Internet'] ?? row['6mInternet'] ?? row['6m_internet'] ?? row['6M Internet Charge'] ?? row['6 Month Internet'],
+                    support: row['6M Support'] ?? row['6mSupport'] ?? row['6m_support'] ?? row['6M Support and Maintenance'] ?? row['6M Support & Maintenance'] ?? row['6M Support Charge'] ?? row['6 Month Support'],
+                    dropWire: row['6M Drop Wire'] ?? row['6mDropWire'] ?? row['6m_drop_wire'] ?? row['6M Drop Wire Charge'] ?? row['6 Month Drop Wire'],
+                    router: row['6M Douplex Router'] ?? row['6M Duplex Router'] ?? row['6M Router'] ?? row['6mRouter'] ?? row['6m_router'] ?? row['6M Router Charge'] ?? row['6 Month Router'],
+                    total: row['6M Total'] ?? row['6mTotal'] ?? row['6m_total'] ?? row['6mPrice'] ?? row['price6m']
                 },
                 {
-                    key: '12m',
                     duration: '12 Months',
-                    internet: row['12mInternet'] || row['12m_internet'] || row['12M Internet'] || row['12 Month Internet Charge'] || row['1 Year Internet Charge'],
-                    support: row['12mSupport'] || row['12m_support'] || row['12M Support'] || row['12 Month Support Charge'] || row['1 Year Support Charge'],
-                    total: row['12mTotal'] || row['12m_total'] || row['12M Total'] || row['12 Month Total'] || row['12mPrice'] || row['price12m'] || row['1 Year Total']
+                    prefix: '12m',
+                    enabled: row['12M Enabled'] ?? row['12mEnabled'] ?? row['12M Active'] ?? row['12mActive'] ?? row['12m_enabled'] ?? row['12m_active'],
+                    online: row['12M Online'] ?? row['12mOnline'] ?? row['12m_online'],
+                    internet: row['12M Internet'] ?? row['12mInternet'] ?? row['12m_internet'] ?? row['12M Internet Charge'] ?? row['12 Month Internet'] ?? row['1 Year Internet Charge'],
+                    support: row['12M Support'] ?? row['12mSupport'] ?? row['12m_support'] ?? row['12M Support and Maintenance'] ?? row['12M Support & Maintenance'] ?? row['12M Support Charge'] ?? row['12 Month Support'],
+                    dropWire: row['12M Drop Wire'] ?? row['12mDropWire'] ?? row['12m_drop_wire'] ?? row['12M Drop Wire Charge'] ?? row['12 Month Drop Wire'],
+                    router: row['12M Douplex Router'] ?? row['12M Duplex Router'] ?? row['12M Router'] ?? row['12mRouter'] ?? row['12m_router'] ?? row['12M Router Charge'] ?? row['12 Month Router'],
+                    total: row['12M Total'] ?? row['12mTotal'] ?? row['12m_total'] ?? row['12mPrice'] ?? row['price12m'] ?? row['1 Year Total']
                 }
             ];
 
             const createdPrices = [];
-            const hasMultiDuration = durationConfigs.some(d => d.internet !== undefined || d.total !== undefined);
+            const hasMultiTier = durationTiers.some(d => d.internet !== undefined || d.support !== undefined || d.dropWire !== undefined || d.router !== undefined || d.total !== undefined);
 
-            if (hasMultiDuration) {
-                for (const d of durationConfigs) {
-                    if (d.internet !== undefined || d.total !== undefined) {
-                        const internetVal = parseFloat(d.internet) || 0;
-                        const supportVal = parseFloat(d.support) || 0;
-                        const basePrice = internetVal + supportVal;
-                        let totalAmountWithTax = parseFloat(d.total) || 0;
+            if (hasMultiTier) {
+                for (const tier of durationTiers) {
+                    const hasData = tier.internet !== undefined || tier.support !== undefined || tier.dropWire !== undefined || tier.router !== undefined || tier.total !== undefined;
+                    if (!hasData) continue;
 
-                        if (totalAmountWithTax <= 0 && basePrice > 0) {
-                            const tsc = internetVal * 0.10;
-                            const taxable = basePrice + tsc;
-                            const vat = taxable * 0.13;
-                            totalAmountWithTax = Math.round((taxable + vat) * 100) / 100;
+                    const internetVal = tier.internet !== undefined && tier.internet !== '' ? parseFloat(tier.internet) : (tier.total ? parseFloat(tier.total) / 2 : 0);
+                    const supportVal = tier.support !== undefined && tier.support !== '' ? parseFloat(tier.support) : (tier.total ? parseFloat(tier.total) / 2 : 0);
+                    const dropWireVal = tier.dropWire !== undefined && tier.dropWire !== '' ? parseFloat(tier.dropWire) : 0;
+                    const routerVal = tier.router !== undefined && tier.router !== '' ? parseFloat(tier.router) : 0;
+
+                    const isTierActive = tier.enabled !== undefined ? parseBooleanValue(tier.enabled, true) : (row['Is Active'] !== undefined ? parseBooleanValue(row['Is Active'], true) : true);
+                    const isTierOnline = tier.online !== undefined ? parseBooleanValue(tier.online, false) : (row['Is Online'] !== undefined ? parseBooleanValue(row['Is Online'], false) : false);
+
+                    // Build linked addon charges and calculate exact TSC and VAT
+                    const addonPricesMap = {};
+                    const selectedAddonIds = [];
+                    let initialTaxableSum = 0;
+                    let initialNonTaxableSum = 0;
+                    let renewTaxableSum = 0;
+                    let renewNonTaxableSum = 0;
+                    let recurringBasePrice = 0;
+                    let hasTsc = false;
+
+                    const processItemCharge = (masterCharge, amount) => {
+                        if (!masterCharge || amount === undefined || amount === null || isNaN(amount)) return;
+                        const amt = Number(amount);
+                        addonPricesMap[String(masterCharge.id)] = amt;
+                        selectedAddonIds.push(masterCharge.id);
+
+                        const tscAmt = masterCharge.isTscApplicable ? (amt * tscPercentage) / 100 : 0;
+                        if (tscAmt > 0) hasTsc = true;
+
+                        const taxableAmt = masterCharge.isTaxable ? (amt + tscAmt) : 0;
+                        const nonTaxableAmt = !masterCharge.isTaxable ? (amt + tscAmt) : 0;
+
+                        initialTaxableSum += taxableAmt;
+                        initialNonTaxableSum += nonTaxableAmt;
+
+                        if (masterCharge.isRenewal) {
+                            recurringBasePrice += amt;
+                            renewTaxableSum += taxableAmt;
+                            renewNonTaxableSum += nonTaxableAmt;
                         }
+                    };
 
-                        if (basePrice > 0 || totalAmountWithTax > 0) {
-                            const cleanPlanCode = String(plan.planCode).replace(/[\s-]/g, '');
-                            const cleanDuration = String(d.duration).replace(/[\s-]/g, '');
-                            const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
+                    if (internetMaster) processItemCharge(internetMaster, internetVal);
+                    if (supportMaster) processItemCharge(supportMaster, supportVal);
+                    if (dropWireMaster) processItemCharge(dropWireMaster, dropWireVal);
+                    if (routerMaster) processItemCharge(routerMaster, routerVal);
 
-                            let existingPrice = await prisma.PackagePrice.findFirst({
-                                where: {
-                                    planId: plan.id,
-                                    packageDuration: d.duration,
-                                    ...(ispId ? { ispId } : {})
+                    const initialTotalWithTax = Math.round((initialTaxableSum * 1.13 + initialNonTaxableSum) * 100) / 100;
+                    const renewAmountWithTax = Math.round((renewTaxableSum * 1.13 + renewNonTaxableSum) * 100) / 100;
+                    const basePrice = recurringBasePrice > 0 ? recurringBasePrice : (internetVal + supportVal);
+
+                    if (basePrice > 0 || initialTotalWithTax > 0) {
+                        const cleanPlanCode = String(plan.planCode).replace(/[\s-]/g, '');
+                        const cleanDuration = String(tier.duration).replace(/[\s-]/g, '');
+                        const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
+                        const addonPricesJson = Object.keys(addonPricesMap).length > 0 ? JSON.stringify(addonPricesMap) : null;
+
+                        let existingPrice = await prisma.PackagePrice.findFirst({
+                            where: {
+                                planId: plan.id,
+                                packageDuration: tier.duration,
+                                ...(ispId ? { ispId } : {})
+                            }
+                        });
+
+                        const cleanPackageName = packageReferenceName.endsWith(tier.duration)
+                            ? packageReferenceName
+                            : `${packageReferenceName} - ${tier.duration}`;
+
+                        let record;
+                        if (existingPrice) {
+                            const finalRefId = await generateUniqueReferenceId(prisma, existingPrice.referenceId || baseRefId, existingPrice.id);
+                            record = await prisma.PackagePrice.update({
+                                where: { id: existingPrice.id },
+                                data: {
+                                    price: basePrice,
+                                    initialTotalWithTax: initialTotalWithTax || basePrice,
+                                    renewAmountWithTax: renewAmountWithTax || initialTotalWithTax || basePrice,
+                                    isTscApplicable: hasTsc,
+                                    packageName: cleanPackageName,
+                                    isActive: isTierActive,
+                                    isOnline: isTierOnline,
+                                    isDeleted: false,
+                                    referenceId: finalRefId,
+                                    addonPricesJson,
+                                    updatedAt: new Date()
                                 }
                             });
-
-                            if (existingPrice) {
-                                await prisma.PackagePrice.update({
-                                    where: { id: existingPrice.id },
-                                    data: {
-                                        price: basePrice || totalAmountWithTax,
-                                        initialTotalWithTax: totalAmountWithTax || basePrice,
-                                        renewAmountWithTax: totalAmountWithTax || basePrice,
-                                        isTscApplicable: true,
-                                        isActive: true,
-                                        isDeleted: false
-                                    }
-                                });
-                            } else {
-                                const refId = await generateUniqueReferenceId(prisma, baseRefId);
-                                await prisma.PackagePrice.create({
-                                    data: {
-                                        planId: plan.id,
-                                        price: basePrice || totalAmountWithTax,
-                                        initialTotalWithTax: totalAmountWithTax || basePrice,
-                                        renewAmountWithTax: totalAmountWithTax || basePrice,
-                                        packageDuration: d.duration,
-                                        packageName: `${rawPlanName} (${d.duration})`,
-                                        referenceId: refId,
-                                        isTscApplicable: true,
-                                        isActive: true,
-                                        isDeleted: false,
-                                        ispId: ispId || 1
-                                    }
-                                });
-                            }
-                            createdPrices.push(`${d.duration}: NPR ${totalAmountWithTax || basePrice}`);
+                        } else {
+                            const finalRefId = await generateUniqueReferenceId(prisma, baseRefId);
+                            record = await prisma.PackagePrice.create({
+                                data: {
+                                    planId: plan.id,
+                                    price: basePrice,
+                                    initialTotalWithTax: initialTotalWithTax || basePrice,
+                                    renewAmountWithTax: renewAmountWithTax || initialTotalWithTax || basePrice,
+                                    packageDuration: tier.duration,
+                                    packageName: cleanPackageName,
+                                    referenceId: finalRefId,
+                                    isTscApplicable: hasTsc,
+                                    isActive: isTierActive,
+                                    isOnline: isTierOnline,
+                                    isDeleted: false,
+                                    addonPricesJson,
+                                    ispId: ispId || 1,
+                                    updatedAt: new Date()
+                                }
+                            });
                         }
+
+                        // Re-link packageonetimecharges join table
+                        await prisma.packageonetimecharges.deleteMany({ where: { A: record.id } }).catch(() => {});
+                        if (selectedAddonIds.length > 0) {
+                            await prisma.packageonetimecharges.createMany({
+                                data: selectedAddonIds.map(cid => ({ A: record.id, B: Number(cid) })),
+                                skipDuplicates: true
+                            }).catch(() => {});
+                        }
+
+                        createdPrices.push(`${tier.duration}: Base Rs. ${basePrice} | Renew Rs. ${renewAmountWithTax} | Initial Rs. ${initialTotalWithTax}`);
                     }
                 }
-            } else if (row.price !== undefined || row.amount !== undefined) {
-                const flatPrice = parseFloat(row.price || row.amount || 0);
+            } else if (row.price !== undefined || row.amount !== undefined || row.total !== undefined) {
+                // Flat Single Price Row Fallback
                 const duration = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
-                const totalWithTax = row.totalWithTax ? parseFloat(row.totalWithTax) : (row.initialTotalWithTax ? parseFloat(row.initialTotalWithTax) : flatPrice);
+                const flatPrice = parseFloat(row.price || row.amount || row.total || 0);
+                const isOnline = row['Is Online'] !== undefined ? parseBooleanValue(row['Is Online']) : parseBooleanValue(row.isOnline, false);
+                const isActive = row['Is Active'] !== undefined ? parseBooleanValue(row['Is Active']) : parseBooleanValue(row.isActive, true);
 
                 const cleanPlanCode = String(plan.planCode).replace(/[\s-]/g, '');
                 const cleanDuration = String(duration).replace(/[\s-]/g, '');
                 const baseRefId = `INT-${cleanPlanCode}${cleanDuration}`;
+
+                const addonPricesMap = {};
+                const selectedAddonIds = [];
+                if (internetMaster) {
+                    addonPricesMap[String(internetMaster.id)] = flatPrice / 2;
+                    selectedAddonIds.push(internetMaster.id);
+                }
+                if (supportMaster) {
+                    addonPricesMap[String(supportMaster.id)] = flatPrice / 2;
+                    selectedAddonIds.push(supportMaster.id);
+                }
+
+                const tscAmt = (flatPrice / 2) * (tscPercentage / 100);
+                const taxableBase = flatPrice + tscAmt;
+                const totalWithTax = Math.round((taxableBase * 1.13) * 100) / 100;
+                const addonPricesJson = Object.keys(addonPricesMap).length > 0 ? JSON.stringify(addonPricesMap) : null;
+
+                const cleanPackageName = packageReferenceName.endsWith(duration)
+                    ? packageReferenceName
+                    : `${packageReferenceName} - ${duration}`;
 
                 let existingPrice = await prisma.PackagePrice.findFirst({
                     where: {
@@ -1426,45 +1652,65 @@ async function importPackages(req, res, next) {
                     }
                 });
 
+                let record;
                 if (existingPrice) {
-                    await prisma.PackagePrice.update({
+                    const finalRefId = await generateUniqueReferenceId(prisma, existingPrice.referenceId || baseRefId, existingPrice.id);
+                    record = await prisma.PackagePrice.update({
                         where: { id: existingPrice.id },
                         data: {
                             price: flatPrice,
                             initialTotalWithTax: totalWithTax,
                             renewAmountWithTax: totalWithTax,
-                            isActive: true,
-                            isDeleted: false
+                            packageName: cleanPackageName,
+                            isTscApplicable: true,
+                            isActive,
+                            isOnline,
+                            isDeleted: false,
+                            referenceId: finalRefId,
+                            addonPricesJson,
+                            updatedAt: new Date()
                         }
                     });
                 } else {
                     const refId = await generateUniqueReferenceId(prisma, baseRefId);
-                    await prisma.PackagePrice.create({
+                    record = await prisma.PackagePrice.create({
                         data: {
                             planId: plan.id,
                             price: flatPrice,
                             initialTotalWithTax: totalWithTax,
                             renewAmountWithTax: totalWithTax,
                             packageDuration: duration,
-                            packageName: `${rawPlanName} (${duration})`,
+                            packageName: cleanPackageName,
                             referenceId: refId,
-                            isTscApplicable: Boolean(row.isTscApplicable),
-                            isActive: true,
+                            isTscApplicable: true,
+                            isActive,
+                            isOnline,
                             isDeleted: false,
-                            ispId: ispId || 1
+                            addonPricesJson,
+                            ispId: ispId || 1,
+                            updatedAt: new Date()
                         }
                     });
                 }
-                createdPrices.push(`${duration}: NPR ${totalWithTax}`);
+
+                await prisma.packageonetimecharges.deleteMany({ where: { A: record.id } }).catch(() => {});
+                if (selectedAddonIds.length > 0) {
+                    await prisma.packageonetimecharges.createMany({
+                        data: selectedAddonIds.map(cid => ({ A: record.id, B: Number(cid) })),
+                        skipDuplicates: true
+                    }).catch(() => {});
+                }
+
+                createdPrices.push(`${duration}: Base Rs. ${flatPrice} | Total Rs. ${totalWithTax}`);
             }
 
-            const priceSummary = createdPrices.length > 0 ? `Durations: [${createdPrices.join(', ')}]` : 'No durations attached';
+            const priceSummary = createdPrices.length > 0 ? `Durations configured: [${createdPrices.join('; ')}]` : 'No durations attached';
 
             logs.push({
                 rowNumber,
-                name: rawPlanName,
+                name: packageReferenceName || rawPlanName,
                 status: 'success',
-                message: `✓ CMS Plan ensured (ID: ${plan.id}, Speed: ${downSpeed}M/${upSpeed}M) | ✓ ${radiusSyncMessage} | ✓ ${priceSummary}`
+                message: `✓ CMS Plan: ${plan.planName} (ID: ${plan.id}) | ✓ ${radiusSyncMessage} | ✓ ${priceSummary}`
             });
             successCount++;
 
@@ -1472,7 +1718,7 @@ async function importPackages(req, res, next) {
             console.error(`Error importing package row ${rowNumber}:`, err);
             logs.push({
                 rowNumber,
-                name: rawPlanName,
+                name: packageReferenceName || rawPlanName,
                 status: 'failed',
                 message: `Failed: ${err.message}`
             });
@@ -2469,76 +2715,97 @@ async function getSampleTemplate(req, res, next) {
             filename = 'sample_packages_tariffs';
             sampleRows = [
                 {
-                    'Package Name': '100 Mbps',
+                    'Plan Name': '100 Mbps',
+                    'Package Reference Name': 'Premium Fiber 100M',
                     'Speed (Mbps)': 100,
+                    'NAS Type': 'mikrotik',
+                    'Connection Type': 'Fiber',
+                    '1M Enabled': 'TRUE',
+                    '1M Online': 'FALSE',
                     '1M Internet': 500,
                     '1M Support': 500,
-                    '1M Total': 1186.50,
+                    '1M Drop Wire': 0,
+                    '1M Douplex Router': 0,
+                    '3M Enabled': 'TRUE',
+                    '3M Online': 'FALSE',
                     '3M Internet': 1400,
                     '3M Support': 1400,
-                    '3M Total': 3322.20,
+                    '3M Drop Wire': 0,
+                    '3M Douplex Router': 0,
+                    '6M Enabled': 'TRUE',
+                    '6M Online': 'FALSE',
                     '6M Internet': 2700,
                     '6M Support': 2700,
-                    '6M Total': 6407.10,
+                    '6M Drop Wire': 0,
+                    '6M Douplex Router': 0,
+                    '12M Enabled': 'TRUE',
+                    '12M Online': 'TRUE',
                     '12M Internet': 5200,
                     '12M Support': 5200,
-                    '12M Total': 12339.60,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik'
+                    '12M Drop Wire': 0,
+                    '12M Douplex Router': 0
                 },
                 {
-                    'Package Name': '100 Mbps-A',
-                    'Speed (Mbps)': 100,
-                    '1M Internet': 475,
-                    '1M Support': 475,
-                    '1M Total': 1127.18,
-                    '3M Internet': 1350,
-                    '3M Support': 1350,
-                    '3M Total': 3203.55,
-                    '6M Internet': 2600,
-                    '6M Support': 2600,
-                    '6M Total': 6169.80,
-                    '12M Internet': 5000,
-                    '12M Support': 5000,
-                    '12M Total': 11865.00,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik'
-                },
-                {
-                    'Package Name': '50 Mbps',
+                    'Plan Name': '50 Mbps',
+                    'Package Reference Name': 'Standard Fiber 50M',
                     'Speed (Mbps)': 50,
+                    'NAS Type': 'mikrotik',
+                    'Connection Type': 'Fiber',
+                    '1M Enabled': 'TRUE',
+                    '1M Online': 'FALSE',
                     '1M Internet': 420,
                     '1M Support': 420,
-                    '1M Total': 996.66,
+                    '1M Drop Wire': 0,
+                    '1M Douplex Router': 0,
+                    '3M Enabled': 'TRUE',
+                    '3M Online': 'FALSE',
                     '3M Internet': 1200,
                     '3M Support': 1200,
-                    '3M Total': 2847.60,
+                    '3M Drop Wire': 0,
+                    '3M Douplex Router': 0,
+                    '6M Enabled': 'TRUE',
+                    '6M Online': 'FALSE',
                     '6M Internet': 2300,
                     '6M Support': 2300,
-                    '6M Total': 5457.90,
+                    '6M Drop Wire': 0,
+                    '6M Douplex Router': 0,
+                    '12M Enabled': 'TRUE',
+                    '12M Online': 'FALSE',
                     '12M Internet': 4400,
                     '12M Support': 4400,
-                    '12M Total': 10441.20,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik'
+                    '12M Drop Wire': 0,
+                    '12M Douplex Router': 0
                 },
                 {
-                    'Package Name': '25 Mbps_Offer',
+                    'Plan Name': '25 Mbps',
+                    'Package Reference Name': 'Starter Fiber 25M',
                     'Speed (Mbps)': 25,
+                    'NAS Type': 'mikrotik',
+                    'Connection Type': 'Fiber',
+                    '1M Enabled': 'TRUE',
+                    '1M Online': 'FALSE',
                     '1M Internet': 350,
                     '1M Support': 350,
-                    '1M Total': 830.55,
+                    '1M Drop Wire': 0,
+                    '1M Douplex Router': 0,
+                    '3M Enabled': 'TRUE',
+                    '3M Online': 'FALSE',
                     '3M Internet': 1000,
                     '3M Support': 1000,
-                    '3M Total': 2373.00,
+                    '3M Drop Wire': 0,
+                    '3M Douplex Router': 0,
+                    '6M Enabled': 'TRUE',
+                    '6M Online': 'FALSE',
                     '6M Internet': 1900,
                     '6M Support': 1900,
-                    '6M Total': 4508.70,
+                    '6M Drop Wire': 0,
+                    '6M Douplex Router': 0,
+                    '12M Enabled': 'TRUE',
+                    '12M Online': 'FALSE',
                     '12M Internet': 3600,
                     '12M Support': 3600,
-                    '12M Total': 8542.80,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik'
+                    '12M Drop Wire': 0,
+                    '12M Douplex Router': 0
                 }
             ];
         } else if (type === 'leads') {
