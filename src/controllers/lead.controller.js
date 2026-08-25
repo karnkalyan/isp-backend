@@ -916,48 +916,131 @@ async function importLeadsFromCSV(req, res, next) {
         .on('error', reject);
     });
 
+    const branchCache = new Map();
+
     for (let i = 0; i < results.length; i++) {
       const row = results[i];
       try {
-        const leadData = {
-          firstName: row.firstName || 'Unknown',
-          middleName: row.middleName || null,
-          lastName: row.lastName || 'Unknown',
-          email: row.email || `${Date.now()}_${i}@unknown.com`,
-          phoneNumber: row.phoneNumber || '0000000000',
-          secondaryContactNumber: row.secondaryContactNumber || null,
-          source: row.source || 'import',
-          status: row.status || 'new',
-          ispId: req.ispId ? Number(req.ispId) : null,
-          memberShipId: row.memberShipId ? Number(row.memberShipId) : null,
-          notes: row.notes || null,
-          assignedUserId: row.assignedUserId ? Number(row.assignedUserId) : null,
-          interestedPackageId: row.interestedPackageId ? Number(row.interestedPackageId) : null,
-          address: row.address || null,
-          street: row.street || null,
-          district: row.district || null,
-          province: row.province || null,
-          gender: row.gender || null,
-          metadata: {
-            age: row.age || null,
-            fullAddress: row.fullAddress || null
+        let firstName = (row.firstName || row.first_name || row['First Name'] || '').toString().trim();
+        let middleName = (row.middleName || row.middle_name || row['Middle Name'] || '').toString().trim() || null;
+        let lastName = (row.lastName || row.last_name || row['Last Name'] || '').toString().trim();
+        const fullName = (row.name || row.fullName || row['Full Name'] || row['Lead Name'] || '').toString().trim();
+
+        if (!firstName && !lastName && fullName) {
+          const parts = fullName.split(/\s+/).filter(Boolean);
+          if (parts.length === 1) {
+            firstName = parts[0];
+            lastName = 'Prospect';
+          } else if (parts.length === 2) {
+            firstName = parts[0];
+            lastName = parts[1];
+          } else if (parts.length > 2) {
+            firstName = parts[0];
+            middleName = parts.slice(1, parts.length - 1).join(' ');
+            lastName = parts[parts.length - 1];
           }
-        };
+        }
+
+        if (!firstName && !lastName) {
+          firstName = `Lead-${i + 1}`;
+          lastName = 'Prospect';
+        }
+
+        const phone = (row.phoneNumber || row.phone || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
+        const rawEmail = (row.email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
+        const cleanEmail = rawEmail || null;
+
+        if (!phone && !cleanEmail) {
+          failedCount++;
+          errors.push(`Row ${i + 2}: Skipped - missing both phone number and email.`);
+          continue;
+        }
+
+        const branchName = (row.branch || row.branchName || row['Branch Name'] || row.HeadBranch || '').toString().trim();
+        const subBranchName = (row.subBranch || row.subBranchName || row['Sub-Branch Name'] || '').toString().trim();
+        let branchId = row.branchId ? Number(row.branchId) : null;
+        let subBranchId = row.subBranchId ? Number(row.subBranchId) : null;
+
+        if (branchName && !branchId) {
+          const bKey = branchName.toLowerCase();
+          if (!branchCache.has(bKey)) {
+            const br = await req.prisma.branch.findFirst({
+              where: {
+                name: branchName,
+                parentId: null,
+                ...(req.ispId ? { ispId: Number(req.ispId) } : {}),
+                isDeleted: false
+              }
+            });
+            branchCache.set(bKey, br ? br.id : null);
+          }
+          branchId = branchCache.get(bKey);
+        }
+
+        if (subBranchName && !subBranchId) {
+          const sbKey = `${branchName}>${subBranchName}`.toLowerCase();
+          if (!branchCache.has(sbKey)) {
+            const sbr = await req.prisma.branch.findFirst({
+              where: {
+                name: subBranchName,
+                ...(branchId ? { parentId: branchId } : {}),
+                ...(req.ispId ? { ispId: Number(req.ispId) } : {}),
+                isDeleted: false
+              }
+            });
+            branchCache.set(sbKey, sbr ? sbr.id : null);
+          }
+          subBranchId = branchCache.get(sbKey);
+        }
 
         const existingLead = await req.prisma.lead.findFirst({
           where: {
-            OR: [leadData.email ? { email: leadData.email } : {}],
-            ispId: req.ispId ? Number(req.ispId) : null,
+            OR: [
+              ...(cleanEmail ? [{ email: cleanEmail }] : []),
+              ...(phone ? [{ phoneNumber: phone }] : [])
+            ],
+            ...(req.ispId ? { ispId: Number(req.ispId) } : {}),
             isDeleted: false
           }
         });
 
+        const validStatus = ['new', 'contacted', 'qualified', 'unqualified', 'converted'].includes(String(row.status || '').toLowerCase())
+          ? String(row.status).toLowerCase()
+          : 'new';
+
         if (!existingLead) {
-          await req.prisma.lead.create({ data: leadData });
+          await req.prisma.lead.create({
+            data: {
+              firstName,
+              middleName,
+              lastName,
+              email: cleanEmail,
+              phoneNumber: phone || null,
+              secondaryContactNumber: (row.secondaryContactNumber || row['Secondary Contact'] || row.altPhone || '').toString().trim() || null,
+              source: (row.source || row['Source'] || 'import').toString().trim(),
+              status: validStatus,
+              ispId: req.ispId ? Number(req.ispId) : null,
+              branchId: branchId || null,
+              subBranchId: subBranchId || null,
+              memberShipId: row.memberShipId ? Number(row.memberShipId) : null,
+              notes: (row.notes || row['Notes'] || '').toString().trim() || null,
+              assignedUserId: row.assignedUserId ? Number(row.assignedUserId) : null,
+              interestedPackageId: row.interestedPackageId ? Number(row.interestedPackageId) : null,
+              address: (row.address || row['Address'] || '').toString().trim() || null,
+              street: (row.street || row['Street'] || '').toString().trim() || null,
+              district: (row.district || row.city || row['District'] || row['City'] || '').toString().trim() || null,
+              province: (row.province || row.state || row['Province'] || row['State'] || '').toString().trim() || null,
+              gender: (row.gender || row['Gender'] || '').toString().trim() || null,
+              metadata: {
+                age: row.age || row['Age'] || null,
+                fullAddress: row.fullAddress || row['Full Address'] || null
+              }
+            }
+          });
           importedCount++;
         } else {
           failedCount++;
-          errors.push(`Row ${i + 2}: Lead already exists`);
+          errors.push(`Row ${i + 2}: Lead already exists (${cleanEmail || phone}) with ID #${existingLead.id}`);
         }
       } catch (error) {
         failedCount++;

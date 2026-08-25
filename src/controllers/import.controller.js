@@ -259,7 +259,7 @@ async function importBranches(req, res, next) {
         }
 
         const branchName = rawBranchName || rawSubBranchName;
-        const subBranchName = rawBranchName ? rawSubBranchName : '';
+        const subBranchName = rawSubBranchName;
 
         try {
             let parentBranch = parentBranchCache.get(branchName.toLowerCase());
@@ -276,7 +276,10 @@ async function importBranches(req, res, next) {
                 });
 
                 if (!parentBranch) {
-                    const branchCode = (row.code || row.branchCode || row['Branch Code']) ? slugify(row.code || row.branchCode || row['Branch Code']) : await generateUniqueBranchCode(prisma, ispId, branchName, false);
+                    const branchCode = (row.code || row.branchCode || row['Branch Code'])
+                        ? slugify(row.code || row.branchCode || row['Branch Code'])
+                        : await generateUniqueBranchCode(prisma, ispId, branchName, false);
+
                     parentBranch = await prisma.Branch.create({
                         data: {
                             name: branchName,
@@ -294,11 +297,27 @@ async function importBranches(req, res, next) {
                         }
                     });
                     isParentNewlyCreated = true;
+                } else if (!skipExisting) {
+                    // Update head branch details if new details are provided
+                    await prisma.Branch.update({
+                        where: { id: parentBranch.id },
+                        data: {
+                            phoneNumber: (row.phoneNumber || row.phone || row.contact || row['Phone Number'] || parentBranch.phoneNumber || '').toString().trim() || null,
+                            email: (row.email || row['Email'] || parentBranch.email || '').toString().trim() || null,
+                            address: (row.address || row['Address'] || parentBranch.address || '').toString().trim() || null,
+                            city: (row.city || row['City'] || parentBranch.city || '').toString().trim() || null,
+                            state: (row.state || row.province || row['State'] || row['Province'] || parentBranch.state || '').toString().trim() || null,
+                            contactPerson: (row.contactPerson || row.manager || row['Contact Person'] || parentBranch.contactPerson || '').toString().trim() || null,
+                            updatedAt: new Date()
+                        }
+                    });
                 }
                 parentBranchCache.set(branchName.toLowerCase(), parentBranch);
             }
 
-            if (subBranchName && subBranchName.toLowerCase() !== branchName.toLowerCase()) {
+            // If subBranchName is provided: create or verify the sub-branch under parentBranch
+            // NOTE: A Sub-Branch CAN have the exact same name as the Head Branch (e.g. Branch: Arrownet, Sub-Branch: Arrownet)
+            if (subBranchName) {
                 let subBranch = await prisma.Branch.findFirst({
                     where: {
                         name: subBranchName,
@@ -318,16 +337,32 @@ async function importBranches(req, res, next) {
                         });
                         skippedCount++;
                     } else {
+                        await prisma.Branch.update({
+                            where: { id: subBranch.id },
+                            data: {
+                                phoneNumber: (row.subPhoneNumber || row.phoneNumber || row.phone || row['Sub-Branch Phone'] || subBranch.phoneNumber || '').toString().trim() || null,
+                                email: (row.subEmail || row.email || row['Sub-Branch Email'] || subBranch.email || '').toString().trim() || null,
+                                address: (row.subAddress || row.address || row['Sub-Branch Address'] || subBranch.address || '').toString().trim() || null,
+                                city: (row.subCity || row.city || row['Sub-Branch City'] || subBranch.city || '').toString().trim() || null,
+                                state: (row.subState || row.state || row['Sub-Branch State'] || subBranch.state || '').toString().trim() || null,
+                                contactPerson: (row.subContactPerson || row.contactPerson || row['Sub-Branch Contact Person'] || subBranch.contactPerson || '').toString().trim() || null,
+                                updatedAt: new Date()
+                            }
+                        });
+
                         logs.push({
                             rowNumber,
                             name: `${branchName} > ${subBranchName}`,
                             status: 'success',
-                            message: `Sub-Branch '${subBranchName}' verified under '${branchName}' (ID: ${subBranch.id}, Code: ${subBranch.code}).`
+                            message: `✓ Sub-Branch '${subBranchName}' verified/updated under '${branchName}' (ID: ${subBranch.id}, Code: ${subBranch.code}).`
                         });
                         successCount++;
                     }
                 } else {
-                    const subCode = (row.subBranchCode || row.subCode || row['Sub-Branch Code']) ? slugify(row.subBranchCode || row.subCode || row['Sub-Branch Code']) : await generateUniqueBranchCode(prisma, ispId, subBranchName, true);
+                    const subCode = (row.subBranchCode || row.subCode || row['Sub-Branch Code'])
+                        ? slugify(row.subBranchCode || row.subCode || row['Sub-Branch Code'])
+                        : await generateUniqueBranchCode(prisma, ispId, subBranchName, true);
+
                     subBranch = await prisma.Branch.create({
                         data: {
                             name: subBranchName,
@@ -977,14 +1012,39 @@ async function importCustomers(req, res, next) {
     const branchCache = new Map();
     const packageCache = new Map();
     const customerTypeCache = new Map();
+    const oltCache = new Map();
+    const splitterCache = new Map();
 
     for (let i = 0; i < items.length; i++) {
         const rowNumber = i + 1;
         const row = items[i] || {};
 
-        let firstName = (row.firstName || row.first_name || row['First Name'] || '').toString().trim();
-        let middleName = (row.middleName || row.middle_name || row['Middle Name'] || '').toString().trim() || null;
-        let lastName = (row.lastName || row.last_name || row['Last Name'] || '').toString().trim();
+        // 1. Check if Lead ID is provided
+        const rawLeadId = row.leadId || row.lead_id || row['Lead ID'] || row['Lead'] || row.Lead || '';
+        const parsedLeadId = rawLeadId ? parseInt(String(rawLeadId).replace(/[^0-9]/g, ''), 10) : null;
+
+        let lead = null;
+        let leadLoadedFromDb = false;
+
+        if (parsedLeadId && !isNaN(parsedLeadId)) {
+            lead = await prisma.Lead.findFirst({
+                where: {
+                    id: parsedLeadId,
+                    ...(ispId ? { ispId } : {}),
+                    isDeleted: false
+                }
+            });
+            if (lead) {
+                leadLoadedFromDb = true;
+            } else {
+                console.warn(`[CUSTOMER IMPORT] Specified Lead ID #${parsedLeadId} not found in database.`);
+            }
+        }
+
+        // 2. Personal & Contact Details (from Lead if available, fallback to Row)
+        let firstName = (lead?.firstName || row.firstName || row.first_name || row['First Name'] || '').toString().trim();
+        let middleName = (lead?.middleName || row.middleName || row.middle_name || row['Middle Name'] || '').toString().trim() || null;
+        let lastName = (lead?.lastName || row.lastName || row.last_name || row['Last Name'] || '').toString().trim();
         const fullName = (row.name || row.fullName || row.customerName || row['Full Name'] || row['Customer Name'] || '').toString().trim();
 
         if (!firstName && !lastName && fullName) {
@@ -999,19 +1059,21 @@ async function importCustomers(req, res, next) {
             lastName = `${rowNumber}`;
         }
 
-        const phone = (row.phoneNumber || row.phone || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
-        const rawEmail = (row.email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
+        const phone = (lead?.phoneNumber || row.phoneNumber || row.phone || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
+        const rawEmail = (lead?.email || row.email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
         const cleanEmail = rawEmail || null;
-        const panNo = (row.panNo || row.pan || row['PAN No'] || row['PAN Number'] || '').toString().trim() || null;
-        const idNumber = (row.idNumber || row.citizenshipNo || row['Citizenship Number'] || row['ID Number'] || `ID-${phone || Date.now() + i}`).toString().trim();
+
+        const panNo = (row.panNo || row.pan || row['PAN No'] || row['PAN Number'] || row['PAN'] || '').toString().trim() || null;
+        const idNumber = (row.idNumber || row.citizenshipNo || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || `ID-${phone || Date.now() + i}`).toString().trim();
         const rawCustomerUniqueId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row.accountNo || row['Account No'] || '').toString().trim();
 
         try {
+            // 3. Branch & Sub-Branch Resolution
             const branchName = (row.branch || row.branchName || row['Branch Name'] || row.HeadBranch || '').toString().trim();
             const subBranchName = (row.subBranch || row.subBranchName || row['Sub-Branch Name'] || '').toString().trim();
 
-            let branchId = row.branchId ? Number(row.branchId) : null;
-            let subBranchId = row.subBranchId ? Number(row.subBranchId) : null;
+            let branchId = row.branchId ? Number(row.branchId) : (lead?.branchId || null);
+            let subBranchId = row.subBranchId ? Number(row.subBranchId) : (lead?.subBranchId || null);
 
             if (branchName && !branchId) {
                 const bKey = branchName.toLowerCase();
@@ -1070,6 +1132,7 @@ async function importCustomers(req, res, next) {
                 subBranchId = branchCache.get(sbKey);
             }
 
+            // 4. Customer Type Resolution
             const typeName = (row.customerType || row.type || row['Customer Type'] || 'Home').toString().trim();
             let customerTypeId = row.customerTypeId ? Number(row.customerTypeId) : null;
             if (typeName && !customerTypeId) {
@@ -1087,7 +1150,8 @@ async function importCustomers(req, res, next) {
                 customerTypeId = customerTypeCache.get(tKey);
             }
 
-            const pkgName = (row.packageName || row.package || row.plan || row.planName || row['Package Name'] || row['Plan Name'] || row.planCode || '').toString().trim();
+            // 5. Package / Internet Plan Resolution
+            const pkgName = (row.packageName || row.package || row.plan || row.planName || row['Package Name'] || row['Plan Name'] || row['Internet Plan'] || row.planCode || '').toString().trim();
             let packagePrice = null;
 
             if (pkgName) {
@@ -1114,6 +1178,13 @@ async function importCustomers(req, res, next) {
                 }
             }
 
+            if (!packagePrice && lead?.interestedPackageId) {
+                packagePrice = await prisma.PackagePrice.findUnique({
+                    where: { id: lead.interestedPackageId },
+                    include: { packagePlanDetails: true }
+                });
+            }
+
             if (!packagePrice) {
                 packagePrice = await prisma.PackagePrice.findFirst({
                     where: {
@@ -1127,6 +1198,7 @@ async function importCustomers(req, res, next) {
                 });
             }
 
+            // 6. Check for Existing Customer Record
             const rawUsername = (row.username || row.radiusUsername || row.pppoeUsername || row['PPPoE Username'] || row['Radius Username'] || row['Username'] || '').toString().trim();
             const rawPassword = (row.password || row.radiusPassword || row.pppoePassword || row['PPPoE Password'] || row['Radius Password'] || row['Password'] || '').toString().trim();
 
@@ -1167,15 +1239,34 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            let leadId = row.leadId ? Number(row.leadId) : null;
-            let lead = null;
+            // 7. Ensure Lead is linked (or created if not exists)
+            if (lead) {
+                // If this lead is already attached to another customer (and not current existingCustomer), check if we can reuse
+                const otherCustomer = await prisma.Customer.findUnique({ where: { leadId: lead.id } });
+                if (otherCustomer && (!existingCustomer || otherCustomer.id !== existingCustomer.id)) {
+                    // Lead is already used by a different customer, create a dedicated lead record
+                    lead = null;
+                }
+            }
 
-            if (leadId) {
-                lead = await prisma.Lead.findUnique({ where: { id: leadId } });
-                if (lead) {
-                    const otherCustomer = await prisma.Customer.findUnique({ where: { leadId: lead.id } });
-                    if (otherCustomer && (!existingCustomer || otherCustomer.id !== existingCustomer.id)) {
-                        lead = null;
+            if (!lead) {
+                // Try finding an unlinked candidate lead by email or phone
+                if (cleanEmail || phone) {
+                    const candidate = await prisma.Lead.findFirst({
+                        where: {
+                            OR: [
+                                ...(cleanEmail ? [{ email: cleanEmail }] : []),
+                                ...(phone ? [{ phoneNumber: phone }] : [])
+                            ],
+                            ...(ispId ? { ispId } : {}),
+                            isDeleted: false
+                        }
+                    });
+                    if (candidate) {
+                        const existingOtherCustomer = await prisma.Customer.findUnique({ where: { leadId: candidate.id } });
+                        if (!existingOtherCustomer || (existingCustomer && existingOtherCustomer.id === existingCustomer.id)) {
+                            lead = candidate;
+                        }
                     }
                 }
             }
@@ -1210,11 +1301,12 @@ async function importCustomers(req, res, next) {
                     data: {
                         status: 'converted',
                         convertedToCustomer: true,
-                        convertedAt: new Date()
+                        convertedAt: lead.convertedAt || new Date()
                     }
                 });
             }
 
+            // 8. Create or Update Customer
             let customer = existingCustomer;
 
             if (!customer) {
@@ -1264,6 +1356,7 @@ async function importCustomers(req, res, next) {
                 });
             }
 
+            // 9. PPPoE / RADIUS Credentials (ConnectionUser)
             const finalUsername = rawUsername || String(customer.customerUniqueId).toLowerCase().replace(/[^a-z0-9_.-]/g, '');
             const finalPassword = rawPassword || generateSecurePassword(10);
 
@@ -1295,6 +1388,7 @@ async function importCustomers(req, res, next) {
                 });
             }
 
+            // 10. Subscription & Expiry Calculation
             const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
             const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'];
             const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'];
@@ -1337,6 +1431,7 @@ async function importCustomers(req, res, next) {
                 }
             }
 
+            // 11. FreeRADIUS Database Synchronization
             let radiusSyncMsg = 'Radius sync skipped';
             if (radiusClient && finalUsername && finalPassword) {
                 try {
@@ -1363,37 +1458,132 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || '').toString().trim();
-            const macAddress = (row.macAddress || row['MAC Address'] || '').toString().trim();
+            // 12. OLT, Splitter, Port, VLAN & Network Connection
+            const rawOlt = (row.olt || row.oltName || row.oltId || row['OLT Name'] || row['OLT'] || '').toString().trim();
+            let resolvedOltId = row.oltId && !isNaN(row.oltId) ? Number(row.oltId) : null;
+            if (rawOlt && !resolvedOltId) {
+                const oltKey = rawOlt.toLowerCase();
+                if (oltCache.has(oltKey)) {
+                    resolvedOltId = oltCache.get(oltKey);
+                } else {
+                    const oltRec = await prisma.OLT.findFirst({
+                        where: {
+                            OR: [
+                                { name: { contains: rawOlt } },
+                                { ipAddress: { contains: rawOlt } }
+                            ],
+                            ...(ispId ? { ispId } : {}),
+                            isDeleted: false
+                        }
+                    });
+                    resolvedOltId = oltRec ? oltRec.id : null;
+                    oltCache.set(oltKey, resolvedOltId);
+                }
+            }
+
+            const rawSplitter = (row.splitter || row.splitterName || row.splitterId || row['Splitter Name'] || row['Splitter'] || '').toString().trim();
+            let resolvedSplitterId = row.splitterId && !isNaN(row.splitterId) ? Number(row.splitterId) : null;
+            if (rawSplitter && !resolvedSplitterId) {
+                const splitKey = rawSplitter.toLowerCase();
+                if (splitterCache.has(splitKey)) {
+                    resolvedSplitterId = splitterCache.get(splitKey);
+                } else {
+                    const splitRec = await prisma.Splitter.findFirst({
+                        where: {
+                            OR: [
+                                { name: { contains: rawSplitter } },
+                                { splitterId: { contains: rawSplitter } }
+                            ],
+                            ...(ispId ? { ispId } : {})
+                        }
+                    });
+                    resolvedSplitterId = splitRec ? splitRec.id : null;
+                    splitterCache.set(splitKey, resolvedSplitterId);
+                }
+            }
+
+            const vlanId = (row.vlanId || row.vlan || row['VLAN ID'] || row['Vlan'] || '').toString().trim();
+            const oltPort = (row.oltPort || row['OLT Port'] || row.port || '').toString().trim();
+            const splitterPort = (row.splitterPort || row['Splitter Port'] || '').toString().trim();
+
+            if (resolvedOltId || resolvedSplitterId || vlanId || oltPort || splitterPort) {
+                try {
+                    const existingConn = await prisma.CustomerServiceConnection.findFirst({
+                        where: { customerId: customer.id }
+                    });
+                    if (existingConn) {
+                        await prisma.CustomerServiceConnection.update({
+                            where: { id: existingConn.id },
+                            data: {
+                                oltId: resolvedOltId || existingConn.oltId,
+                                splitterId: resolvedSplitterId || existingConn.splitterId,
+                                oltPort: oltPort || existingConn.oltPort,
+                                splitterPort: splitterPort || existingConn.splitterPort,
+                                vlanId: vlanId || existingConn.vlanId
+                            }
+                        });
+                    } else {
+                        await prisma.CustomerServiceConnection.create({
+                            data: {
+                                customerId: customer.id,
+                                oltId: resolvedOltId || null,
+                                splitterId: resolvedSplitterId || null,
+                                oltPort: oltPort || null,
+                                splitterPort: splitterPort || null,
+                                vlanId: vlanId || null
+                            }
+                        });
+                    }
+
+                    // Also assign to customer model directly
+                    if (resolvedOltId || resolvedSplitterId) {
+                        await prisma.Customer.update({
+                            where: { id: customer.id },
+                            data: {
+                                oltId: resolvedOltId || customer.oltId,
+                                splitterId: resolvedSplitterId || customer.splitterId
+                            }
+                        });
+                    }
+                } catch (connErr) {}
+            }
+
+            // 13. Hardware / ONT Device Record
+            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || row['PON Serial'] || row['Serial Number'] || '').toString().trim();
+            const macAddress = (row.macAddress || row['MAC Address'] || row.mac || '').toString().trim();
+            const brand = (row.brand || row.deviceBrand || row['Brand'] || '').toString().trim() || null;
+            const model = (row.model || row.deviceModel || row['Model'] || '').toString().trim() || null;
 
             if (serialNumber || macAddress) {
                 try {
-                    await prisma.CustomerDevice.create({
-                        data: {
-                            customerId: customer.id,
-                            deviceType: 'ont',
-                            serialNumber: serialNumber || null,
-                            macAddress: macAddress || null,
-                            provisioningStatus: 'active'
-                        }
+                    const existingDev = await prisma.CustomerDevice.findFirst({
+                        where: { customerId: customer.id }
                     });
+                    if (existingDev) {
+                        await prisma.CustomerDevice.update({
+                            where: { id: existingDev.id },
+                            data: {
+                                serialNumber: serialNumber || existingDev.serialNumber,
+                                macAddress: macAddress || existingDev.macAddress,
+                                brand: brand || existingDev.brand,
+                                model: model || existingDev.model,
+                                provisioningStatus: 'active'
+                            }
+                        });
+                    } else {
+                        await prisma.CustomerDevice.create({
+                            data: {
+                                customerId: customer.id,
+                                deviceType: 'ont',
+                                serialNumber: serialNumber || null,
+                                macAddress: macAddress || null,
+                                brand,
+                                model,
+                                provisioningStatus: 'active'
+                            }
+                        });
+                    }
                 } catch (devErr) {}
-            }
-
-            const vlanId = (row.vlanId || row.vlan || row['VLAN ID'] || '').toString().trim();
-            const oltPort = (row.oltPort || row['OLT Port'] || '').toString().trim();
-
-            if (vlanId || oltPort) {
-                try {
-                    await prisma.CustomerServiceConnection.create({
-                        data: {
-                            customerId: customer.id,
-                            vlanId: vlanId || null,
-                            oltPort: oltPort || null,
-                            status: 'active'
-                        }
-                    });
-                } catch (connErr) {}
             }
 
             const expDateFormatted = planEnd.toISOString().split('T')[0];
@@ -1401,7 +1591,7 @@ async function importCustomers(req, res, next) {
                 rowNumber,
                 name: `${customer.customerUniqueId} (${firstName} ${lastName})`,
                 status: 'success',
-                message: `✓ Customer ensured | Lead #${lead.id} | PPPoE: ${finalUsername} | Plan: ${packagePrice ? packagePrice.packageName : 'Standard'} (Exp: ${expDateFormatted}) | ${radiusSyncMsg}`
+                message: `✓ Customer ensured | Lead #${lead.id}${leadLoadedFromDb ? ' (Loaded from Lead)' : ''} | PPPoE: ${finalUsername} | Plan: ${packagePrice ? packagePrice.packageName : 'Standard'} (Exp: ${expDateFormatted}) | ${radiusSyncMsg}`
             });
             successCount++;
 
@@ -1441,12 +1631,12 @@ async function getSampleTemplate(req, res, next) {
         if (type === 'branches') {
             filename = 'sample_branches_subbranches';
             sampleRows = [
-                { 'Branch Name': 'ARROWNET Pvt. Ltd.', 'Sub-Branch Name': 'Arrownet Akar Complex', 'Phone Number': '9802022600', 'Email': 'sushila@arrownet.com.np', 'Address': 'Akar Complex, Kathmandu', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
-                { 'Branch Name': 'ARROWNET Pvt. Ltd.', 'Sub-Branch Name': 'Head Office', 'Phone Number': '9802022600', 'Email': 'info@arrownet.com.np', 'Address': 'Head Office', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
-                { 'Branch Name': 'ARROWNET Pvt. Ltd.', 'Sub-Branch Name': 'Arrownet RTC', 'Phone Number': '9801191323', 'Email': 'pashupati@arrownet.com.np', 'Address': 'RTC Center', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Bhimeshwor', 'Phone Number': '9801191323', 'Email': 'pashupati@arrownet.com.np', 'Address': 'Bhimeshwor Ward 3', 'City': 'Charikot', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
+                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet', 'Phone Number': '9802022600', 'Email': 'info@arrownet.com.np', 'Address': 'Head Office, Kathmandu', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
+                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet Akar Complex', 'Phone Number': '9802022600', 'Email': 'sushila@arrownet.com.np', 'Address': 'Akar Complex, Kathmandu', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
+                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet RTC', 'Phone Number': '9801191323', 'Email': 'pashupati@arrownet.com.np', 'Address': 'RTC Center', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
+                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Charikot', 'Phone Number': '9801191323', 'Email': 'charikot@arrownet.com.np', 'Address': 'Main Bazar', 'City': 'Charikot', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
+                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Bhimeshwor', 'Phone Number': '9801191323', 'Email': 'bhimeshwor@arrownet.com.np', 'Address': 'Bhimeshwor Ward 3', 'City': 'Charikot', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
                 { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Melung Arrownet', 'Phone Number': '9801191323', 'Email': 'melung@arrownet.com.np', 'Address': 'Melung Rural', 'City': 'Dolakha', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Sailung Arrownet', 'Phone Number': '9801191323', 'Email': 'sailung@arrownet.com.np', 'Address': 'Sailung Bazar', 'City': 'Dolakha', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
                 { 'Branch Name': 'Chautara Link', 'Sub-Branch Name': 'Indrawati Chautara', 'Phone Number': '9801191323', 'Email': 'indrawati@arrownet.com.np', 'Address': 'Indrawati 4', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' },
                 { 'Branch Name': 'Khadichaur', 'Sub-Branch Name': 'Barhabisa Municipality Sindhupalchok', 'Phone Number': '9801191323', 'Email': 'barhabisa@arrownet.com.np', 'Address': 'Barhabise', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' }
             ];
@@ -1538,7 +1728,7 @@ async function getSampleTemplate(req, res, next) {
                     'Address': 'Putalisadak Chowk',
                     'City': 'Kathmandu',
                     'Province': 'Bagmati',
-                    'Branch Name': 'ARROWNET Pvt. Ltd.',
+                    'Branch Name': 'Arrownet',
                     'Sub-Branch Name': 'Arrownet Akar Complex',
                     'Interested Package': '100 Mbps',
                     'Status': 'new',
@@ -1582,35 +1772,31 @@ async function getSampleTemplate(req, res, next) {
             filename = 'sample_customers_with_radius';
             sampleRows = [
                 {
+                    'Lead ID': '21048',
                     'Customer ID': 'ARN-CUST-1001',
-                    'Lead ID': '',
-                    'First Name': 'Bikash',
-                    'Middle Name': 'Kumar',
-                    'Last Name': 'Shrestha',
-                    'Phone Number': '9841239901',
-                    'Email': 'bikash.shrestha@example.com',
-                    'PAN Number': '601234567',
-                    'Citizenship Number': '27-01-70-12345',
-                    'Address': 'Akar Complex, Ward 4',
-                    'City': 'Kathmandu',
-                    'Province': 'Bagmati',
-                    'Branch Name': 'ARROWNET Pvt. Ltd.',
-                    'Sub-Branch Name': 'Arrownet Akar Complex',
                     'Customer Type': 'Home',
                     'Package Name': '100 Mbps',
                     'Duration': '1 Month',
                     'Plan Start Date': new Date().toISOString().split('T')[0],
                     'Plan End Date': new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    'Branch Name': 'Arrownet',
+                    'Sub-Branch Name': 'Arrownet',
                     'PPPoE Username': 'bikash_arn1001',
                     'PPPoE Password': 'User@12345',
+                    'OLT Name': 'OLT-Akar-01',
+                    'OLT Port': '0/1/1',
+                    'Splitter Name': 'SPL-01',
+                    'Splitter Port': 'Port 1',
+                    'VLAN ID': '101',
                     'ONT Serial': 'ALCLB892109',
                     'MAC Address': '48:8F:5A:12:34:56',
-                    'VLAN ID': '101',
+                    'PAN Number': '601234567',
+                    'Citizenship Number': '27-01-70-12345',
                     'Status': 'active'
                 },
                 {
-                    'Customer ID': 'ARN-CUST-1002',
                     'Lead ID': '',
+                    'Customer ID': 'ARN-CUST-1002',
                     'First Name': 'Prakash',
                     'Middle Name': '',
                     'Last Name': 'Dahal',
@@ -1630,14 +1816,18 @@ async function getSampleTemplate(req, res, next) {
                     'Plan End Date': new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                     'PPPoE Username': 'prakash_chk50',
                     'PPPoE Password': 'User@12345',
+                    'OLT Name': 'OLT-Charikot-01',
+                    'OLT Port': '0/1/2',
+                    'Splitter Name': 'SPL-02',
+                    'Splitter Port': 'Port 2',
+                    'VLAN ID': '102',
                     'ONT Serial': 'HWTC782103',
                     'MAC Address': '74:4D:28:90:12:34',
-                    'VLAN ID': '102',
                     'Status': 'active'
                 },
                 {
-                    'Customer ID': 'ARN-CUST-1003',
                     'Lead ID': '',
+                    'Customer ID': 'ARN-CUST-1003',
                     'First Name': 'Sunil',
                     'Middle Name': 'Bahadur',
                     'Last Name': 'Khadka',
@@ -1657,9 +1847,13 @@ async function getSampleTemplate(req, res, next) {
                     'Plan End Date': new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                     'PPPoE Username': 'sunil_ent100',
                     'PPPoE Password': 'User@12345',
+                    'OLT Name': 'OLT-Khadichaur-01',
+                    'OLT Port': '0/1/3',
+                    'Splitter Name': 'SPL-03',
+                    'Splitter Port': 'Port 1',
+                    'VLAN ID': '103',
                     'ONT Serial': 'ZTEGC901234',
                     'MAC Address': '90:00:4E:55:66:77',
-                    'VLAN ID': '103',
                     'Status': 'active'
                 }
             ];
@@ -1703,4 +1897,3 @@ module.exports = {
     importCustomers,
     getSampleTemplate
 };
-
