@@ -221,6 +221,146 @@ function formatMikrotikRateLimit(upMbps, downMbps, priority = 8) {
     ].join(' ');
 }
 
+function calculateJuniperBurstBytes(mbps) {
+    const speed = Number(mbps) || 0;
+    return Math.round((speed * 1000000 / 8) * 0.005);
+}
+
+/**
+ * Parse Vendor-Specific Profiles from JSON or String
+ * e.g. [{"vendor":"JUNIPER","profile":"xFTTH-pp0"}] or "JUNIPER:xFTTH-pp0; NOKIA:profile1"
+ */
+function parseVendorProfiles(input) {
+    if (!input) return [];
+    if (Array.isArray(input)) return input;
+    if (typeof input === 'object') return [input];
+
+    const str = String(input).trim();
+    if (str.startsWith('[') || str.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(str);
+            return Array.isArray(parsed) ? parsed : [parsed];
+        } catch (e) {}
+    }
+
+    const items = str.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const profiles = [];
+    for (const item of items) {
+        const parts = item.split(/[:=]/).map(s => s.trim());
+        if (parts.length >= 2) {
+            profiles.push({ vendor: parts[0], profile: parts[1] });
+        } else if (parts.length === 1 && parts[0]) {
+            profiles.push({ vendor: 'JUNIPER', profile: parts[0] });
+        }
+    }
+    return profiles;
+}
+
+/**
+ * Parse Custom Radius Attributes from JSON or String
+ * e.g. [{"attribute":"ERX-IPv6-Delegated-Pool-Name","op":":=","value":"v6-default-pd"}]
+ * or "ERX-IPv6-Delegated-Pool-Name := v6-default-pd \n Framed-IPv6-Pool := v6-ndra"
+ */
+function parseCustomRadiusAttributes(input) {
+    if (!input) return [];
+    if (Array.isArray(input)) return input;
+    if (typeof input === 'object') return [input];
+
+    const str = String(input).trim();
+    if (str.startsWith('[') || str.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(str);
+            return Array.isArray(parsed) ? parsed : [parsed];
+        } catch (e) {}
+    }
+
+    const lines = str.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    const attrs = [];
+    for (const line of lines) {
+        const match = line.match(/^([A-Za-z0-9_-]+)\s*(:=|=|\+=|==|!=)\s*(.+)$/);
+        if (match) {
+            attrs.push({
+                attribute: match[1].trim(),
+                op: match[2].trim(),
+                value: match[3].trim().replace(/^["']|["']$/g, '')
+            });
+        }
+    }
+    return attrs;
+}
+
+/**
+ * Resolve Branch IDs from Organization / Branch input string or array
+ */
+async function resolveBranchIds(prisma, ispId, rawInput, branchLookupCache = null) {
+    if (!rawInput) return [];
+    if (Array.isArray(rawInput)) {
+        const ids = [];
+        for (const item of rawInput) {
+            const sub = await resolveBranchIds(prisma, ispId, item, branchLookupCache);
+            ids.push(...sub);
+        }
+        return [...new Set(ids)];
+    }
+
+    const inputStr = String(rawInput).trim();
+    if (!inputStr) return [];
+
+    if (/^all$/i.test(inputStr) || /^all\s+branches$/i.test(inputStr)) {
+        const allBranches = await prisma.Branch.findMany({
+            where: {
+                ...(ispId ? { ispId: Number(ispId) } : {}),
+                isDeleted: false
+            },
+            select: { id: true }
+        });
+        return allBranches.map(b => b.id);
+    }
+
+    // Split on commas or newlines (protecting parentheses)
+    const tokens = inputStr.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    const resolvedIds = [];
+
+    for (const token of tokens) {
+        // Check if token contains a branch code in parentheses, e.g. "Yatkha (SB-YATKHA)" or "Arrownet (BR-ARROWNET)"
+        const codeMatch = token.match(/\(([A-Z0-9_-]+)\)/i);
+        const candidateCode = codeMatch ? codeMatch[1].trim() : null;
+        const cleanName = token.replace(/\([^)]*\)/g, '').trim();
+
+        let branch = null;
+
+        if (candidateCode) {
+            branch = await prisma.Branch.findFirst({
+                where: {
+                    code: candidateCode,
+                    ...(ispId ? { ispId: Number(ispId) } : {}),
+                    isDeleted: false
+                }
+            });
+        }
+
+        if (!branch && cleanName) {
+            branch = await prisma.Branch.findFirst({
+                where: {
+                    OR: [
+                        { name: cleanName },
+                        { code: cleanName },
+                        { name: { contains: cleanName } }
+                    ],
+                    ...(ispId ? { ispId: Number(ispId) } : {}),
+                    isDeleted: false
+                }
+            });
+        }
+
+        if (branch) {
+            resolvedIds.push(branch.id);
+        }
+    }
+
+    return [...new Set(resolvedIds)];
+}
+
 // ==========================================
 // 1. IMPORT BRANCHES & SUB-BRANCHES
 // ==========================================
@@ -298,7 +438,6 @@ async function importBranches(req, res, next) {
                     });
                     isParentNewlyCreated = true;
                 } else if (!skipExisting) {
-                    // Update head branch details if new details are provided
                     await prisma.Branch.update({
                         where: { id: parentBranch.id },
                         data: {
@@ -315,8 +454,6 @@ async function importBranches(req, res, next) {
                 parentBranchCache.set(branchName.toLowerCase(), parentBranch);
             }
 
-            // If subBranchName is provided: create or verify the sub-branch under parentBranch
-            // NOTE: A Sub-Branch CAN have the exact same name as the Head Branch (e.g. Branch: Arrownet, Sub-Branch: Arrownet)
             if (subBranchName) {
                 let subBranch = await prisma.Branch.findFirst({
                     where: {
@@ -422,7 +559,367 @@ async function importBranches(req, res, next) {
 }
 
 // ==========================================
-// 2. IMPORT PACKAGES & TARIFFS WITH RADIUS
+// 2. IMPORT INTERNET PLANS (BASE PLANS & RADIUS)
+// ==========================================
+async function importPlans(req, res, next) {
+    const prisma = req.prisma;
+    const ispId = req.ispId ? Number(req.ispId) : null;
+    const { items = [], syncRadius = true, skipExisting = false } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'No internet plan items provided for import' });
+    }
+
+    let radiusClient = null;
+    if (syncRadius && ispId) {
+        try {
+            radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+        } catch (rErr) {
+            console.warn('[IMPORT PLANS] FreeRADIUS client not available:', rErr.message);
+        }
+    }
+
+    let defaultConnectionType = await prisma.ConnectionType.findFirst({
+        where: {
+            isDeleted: false,
+            ...(ispId ? { OR: [{ ispId }, { ispId: null }] } : {})
+        }
+    });
+
+    if (!defaultConnectionType) {
+        defaultConnectionType = await prisma.ConnectionType.create({
+            data: {
+                name: 'Fiber',
+                code: 'FIBER',
+                isActive: true,
+                isDeleted: false,
+                ispId: ispId || 1
+            }
+        });
+    }
+
+    const connectionTypeCache = new Map();
+    const logs = [];
+    let successCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < items.length; i++) {
+        const rowNumber = i + 1;
+        const row = items[i] || {};
+
+        const rawPlanName = (row.planName || row.name || row.packageName || row['Plan Name'] || row['Package Name'] || '').toString().trim();
+        if (!rawPlanName) {
+            logs.push({
+                rowNumber,
+                name: 'Empty Plan Name',
+                status: 'skipped',
+                message: 'Row skipped: Plan Name is required.'
+            });
+            skippedCount++;
+            continue;
+        }
+
+        try {
+            const rawPlanCode = (row.planCode || row.code || row['Plan Code'] || '').toString().trim();
+            const planCode = rawPlanCode ? slugify(rawPlanCode) : await generateUniquePlanCode(prisma, ispId, rawPlanName);
+
+            // 1. Connection Type Resolution
+            const rawConnType = (row.connectionType || row.type || row['Connection Type'] || 'Fiber').toString().trim();
+            let connectionTypeId = defaultConnectionType.id;
+
+            if (rawConnType) {
+                if (!isNaN(rawConnType) && Number(rawConnType) > 0) {
+                    connectionTypeId = Number(rawConnType);
+                } else {
+                    const ctKey = rawConnType.toLowerCase();
+                    if (connectionTypeCache.has(ctKey)) {
+                        connectionTypeId = connectionTypeCache.get(ctKey);
+                    } else {
+                        let ct = await prisma.ConnectionType.findFirst({
+                            where: {
+                                OR: [
+                                    { name: { contains: rawConnType } },
+                                    { code: { contains: rawConnType } }
+                                ],
+                                isDeleted: false,
+                                ...(ispId ? { OR: [{ ispId }, { ispId: null }] } : {})
+                            }
+                        });
+                        if (!ct) {
+                            ct = await prisma.ConnectionType.create({
+                                data: {
+                                    name: rawConnType,
+                                    code: slugify(rawConnType),
+                                    isActive: true,
+                                    isDeleted: false,
+                                    ispId: ispId || 1
+                                }
+                            });
+                        }
+                        connectionTypeId = ct.id;
+                        connectionTypeCache.set(ctKey, connectionTypeId);
+                    }
+                }
+            }
+
+            // 2. Speeds & Bandwidth Parsing
+            const speedInput = row.downSpeed || row.speed || row.bandwidth || row['Download Speed (Mbps)'] || row['Speed (Mbps)'] || rawPlanName;
+            const downSpeed = extractSpeedMbps(speedInput);
+            const upSpeed = row.upSpeed ? extractSpeedMbps(row.upSpeed || row['Upload Speed (Mbps)']) : downSpeed;
+            const intUpload = row.intUpload !== undefined && row.intUpload !== '' ? Number(row.intUpload || row['INT Upload']) : upSpeed;
+            const firDownload = row.firDownload !== undefined && row.firDownload !== '' ? Number(row.firDownload || row['FIR Download']) : downSpeed;
+            const localUpload = row.localUpload !== undefined && row.localUpload !== '' ? Number(row.localUpload || row['Local Upload']) : upSpeed;
+            const localDownload = row.localDownload !== undefined && row.localDownload !== '' ? Number(row.localDownload || row['Local Download']) : downSpeed;
+            const dataLimit = row.dataLimit !== undefined && row.dataLimit !== '' ? Number(row.dataLimit || row['Data Limit']) : 0;
+
+            // 3. Technical Parameters
+            const nasType = (row.nasType || row['NAS Type'] || 'mikrotik').toString().toLowerCase();
+            const service = (row.service || row['Service'] || 'Internet').toString().trim();
+            const priority = (row.priority || row['Priority'] || '1').toString().trim();
+            const packageType = (row.packageType || row['Package Type'] || 'HOME').toString().trim().toUpperCase();
+            const description = row.description || row['Description'] || `${rawPlanName} - ${downSpeed} Mbps High Speed Internet`;
+            const allowRename = Boolean(row.allowRename || row['Allow Rename']);
+            const fupApply = row.fupApply !== undefined ? Boolean(row.fupApply || row['FUP Apply']) : true;
+            const fupLimitGb = row.fupLimitGb !== undefined && row.fupLimitGb !== '' ? Number(row.fupLimitGb || row['FUP Limit (GB)']) : 0;
+            const isFupPackage = Boolean(row.isFupPackage || row['Is FUP Package']);
+            const onlyRenewal = Boolean(row.onlyRenewal || row['Only Renewal']);
+            const isPopular = Boolean(row.isPopular || row['Popular']);
+            const highPriority = Boolean(row.highPriority || row['High Priority']);
+            const applyFramedPool = Boolean(row.applyFramedPool || row['Apply Framed Pool']);
+            const framedPoolValue = (row.framedPoolValue || row['Framed Pool Value'] || '').toString().trim() || null;
+            const maxDiscountPercentage = row.maxDiscountPercentage !== undefined && row.maxDiscountPercentage !== '' ? Number(row.maxDiscountPercentage || row['Max Discount Percentage (%)']) : 100;
+            const maxDiscountCount = row.maxDiscountCount !== undefined && row.maxDiscountCount !== '' ? Number(row.maxDiscountCount || row['Max Discount Count Per Month']) : 0;
+
+            // 4. Vendor Profiles & Custom Radius Attributes
+            const vendorProfiles = parseVendorProfiles(row.vendorProfiles || row['Vendor-Specific Profiles'] || row.vendor_profiles);
+            const customRadiusAttributes = parseCustomRadiusAttributes(row.customRadiusAttributes || row['Custom Radius Attributes'] || row.custom_radius_attributes);
+
+            // 5. FUP Penalty Plan Resolution
+            let fupPenaltyPlanId = null;
+            const rawPenaltyPlan = (row.fupPenaltyPlan || row['FUP Penalty Plan'] || row.fupPenaltyPlanId || '').toString().trim();
+            if (rawPenaltyPlan) {
+                if (!isNaN(rawPenaltyPlan) && Number(rawPenaltyPlan) > 0) {
+                    fupPenaltyPlanId = Number(rawPenaltyPlan);
+                } else {
+                    const penaltyPlanRec = await prisma.PackagePlan.findFirst({
+                        where: {
+                            OR: [
+                                { planName: rawPenaltyPlan },
+                                { planCode: rawPenaltyPlan }
+                            ],
+                            ...(ispId ? { ispId } : {}),
+                            isDeleted: false
+                        }
+                    });
+                    if (penaltyPlanRec) fupPenaltyPlanId = penaltyPlanRec.id;
+                }
+            }
+
+            // 6. Check existing plan
+            let plan = await prisma.PackagePlan.findFirst({
+                where: {
+                    OR: [
+                        { planCode },
+                        { planName: rawPlanName }
+                    ],
+                    ...(ispId ? { ispId } : {}),
+                    isDeleted: false
+                }
+            });
+
+            if (plan && skipExisting) {
+                logs.push({
+                    rowNumber,
+                    name: rawPlanName,
+                    status: 'skipped',
+                    message: `Plan '${rawPlanName}' (${plan.planCode}) already exists in database.`
+                });
+                skippedCount++;
+                continue;
+            }
+
+            const planPayload = {
+                planName: rawPlanName,
+                planCode,
+                connectionType: connectionTypeId,
+                downSpeed,
+                upSpeed,
+                intUpload,
+                firDownload,
+                localUpload,
+                localDownload,
+                dataLimit,
+                service,
+                nasType,
+                priority,
+                packageType,
+                allowRename,
+                fupApply,
+                fupLimitGb,
+                fupPenaltyPlanId,
+                isFupPackage,
+                onlyRenewal,
+                isPopular,
+                highPriority,
+                applyFramedPool,
+                framedPoolValue,
+                vendorProfiles: vendorProfiles.length > 0 ? vendorProfiles : null,
+                customRadiusAttributes: customRadiusAttributes.length > 0 ? customRadiusAttributes : null,
+                maxDiscountPercentage,
+                maxDiscountCount,
+                description,
+                isActive: true,
+                isDeleted: false,
+                ispId: ispId || 1
+            };
+
+            if (!plan) {
+                plan = await prisma.PackagePlan.create({ data: planPayload });
+            } else {
+                plan = await prisma.PackagePlan.update({
+                    where: { id: plan.id },
+                    data: {
+                        ...planPayload,
+                        updatedAt: new Date()
+                    }
+                });
+            }
+
+            // 7. Organization / Branch Linking (PackagePlanBranch)
+            const rawOrganization = row.organization || row.Organization || row.branches || row.branch || row['Organization'] || row['Branch Name'] || row.subBranch || '';
+            const resolvedBranchIds = await resolveBranchIds(prisma, ispId, rawOrganization);
+
+            if (resolvedBranchIds.length > 0) {
+                await prisma.PackagePlanBranch.deleteMany({ where: { packagePlanId: plan.id } });
+                await prisma.PackagePlanBranch.createMany({
+                    data: resolvedBranchIds.map(bId => ({ packagePlanId: plan.id, branchId: Number(bId) })),
+                    skipDuplicates: true
+                });
+            }
+
+            // 8. FreeRADIUS Multi-Vendor Group Configuration
+            let radiusSyncMessage = 'FreeRADIUS not configured';
+            if (radiusClient) {
+                try {
+                    await radiusClient.createRadgroupcheck({
+                        groupname: plan.planCode,
+                        attribute: 'Auth-Type',
+                        op: ':=',
+                        value: 'Accept'
+                    }).catch(() => null);
+
+                    const nasList = (nasType || '').split(',').map(s => s.trim().toLowerCase());
+                    const replyAttributes = [];
+
+                    // MikroTik
+                    if (nasList.includes('mikrotik') || nasList.length === 0 || nasType === '') {
+                        replyAttributes.push(
+                            { attribute: 'Mikrotik-Rate-Limit', op: ':=', value: formatMikrotikRateLimit(upSpeed, downSpeed, priority || 8) },
+                            { attribute: 'Framed-Protocol', op: ':=', value: 'PPP' },
+                            { attribute: 'Service-Type', op: ':=', value: 'Framed-User' }
+                        );
+                    }
+
+                    // Juniper
+                    if (nasList.includes('juniper') || vendorProfiles.some(vp => (vp.vendor || '').toLowerCase() === 'juniper')) {
+                        const burstBytes = calculateJuniperBurstBytes(downSpeed || upSpeed);
+                        const jProfile = vendorProfiles.find(vp => (vp.vendor || '').toLowerCase() === 'juniper')?.profile || 'xFTTH-pp0';
+                        replyAttributes.push(
+                            { attribute: 'ERX-Client-Profile-Name', op: '=', value: jProfile },
+                            { attribute: 'ERX-Service-Description', op: '+=', value: `bandwidth=${downSpeed || upSpeed}m` },
+                            { attribute: 'ERX-Service-Description', op: '+=', value: `burst=${burstBytes}` },
+                            { attribute: 'ERX-IPv6-Delegated-Pool-Name', op: ':=', value: 'v6-default-pd' },
+                            { attribute: 'Framed-IPv6-Pool', op: ':=', value: 'v6-ndra' }
+                        );
+                    }
+
+                    // Nokia
+                    if (nasList.includes('nokia') || vendorProfiles.some(vp => (vp.vendor || '').toLowerCase() === 'nokia')) {
+                        const egressRate = downSpeed * 1000;
+                        const ingressRate = upSpeed * 1000;
+                        replyAttributes.push(
+                            { attribute: 'Alc-Subscriber-Qos-Override', op: '+=', value: `E:Q:1:pir=${egressRate},cir=${egressRate}` },
+                            { attribute: 'Alc-Subscriber-Qos-Override', op: '+=', value: `I:Q:1:pir=${ingressRate},cir=${ingressRate}` }
+                        );
+                    }
+
+                    // Framed-Pool
+                    if (applyFramedPool && framedPoolValue) {
+                        replyAttributes.push({ attribute: 'Framed-Pool', op: ':=', value: framedPoolValue });
+                    }
+
+                    // Custom Radius Attributes
+                    if (Array.isArray(customRadiusAttributes)) {
+                        for (const customAttr of customRadiusAttributes) {
+                            if (customAttr.attribute && customAttr.op && customAttr.value) {
+                                replyAttributes.push({
+                                    attribute: customAttr.attribute,
+                                    op: customAttr.op,
+                                    value: String(customAttr.value)
+                                });
+                            }
+                        }
+                    }
+
+                    let firstReplyId = null;
+                    for (const attr of replyAttributes) {
+                        try {
+                            const res = await radiusClient.createRadgroupreply({
+                                groupname: plan.planCode,
+                                ...attr
+                            });
+                            if (!firstReplyId && res?.id) firstReplyId = res.id;
+                        } catch (attrErr) {}
+                    }
+
+                    if (firstReplyId) {
+                        await prisma.PackagePlan.update({
+                            where: { id: plan.id },
+                            data: { radgroupreplyId: firstReplyId }
+                        });
+                    }
+
+                    radiusSyncMessage = `FreeRADIUS Synced (Group: ${plan.planCode}, Rate: ${upSpeed}M/${downSpeed}M, NAS: ${nasType})`;
+                } catch (rSyncErr) {
+                    radiusSyncMessage = `FreeRADIUS Warning: ${rSyncErr.message}`;
+                }
+            }
+
+            const branchInfo = resolvedBranchIds.length > 0 ? `Linked ${resolvedBranchIds.length} branches` : 'All Branches (Global)';
+
+            logs.push({
+                rowNumber,
+                name: rawPlanName,
+                status: 'success',
+                message: `✓ Internet Plan '${rawPlanName}' (${plan.planCode}) ensured | Speed: ${downSpeed}M/${upSpeed}M | Type: ${packageType} | ${branchInfo} | ✓ ${radiusSyncMessage}`
+            });
+            successCount++;
+
+        } catch (err) {
+            console.error(`Error importing plan row ${rowNumber}:`, err);
+            logs.push({
+                rowNumber,
+                name: rawPlanName,
+                status: 'failed',
+                message: `Failed: ${err.message}`
+            });
+            failedCount++;
+        }
+    }
+
+    res.json({
+        success: true,
+        total: items.length,
+        successCount,
+        skippedCount,
+        failedCount,
+        logs
+    });
+}
+
+// ==========================================
+// 3. IMPORT PACKAGES & TARIFF RATES (PRICES)
 // ==========================================
 async function importPackages(req, res, next) {
     const prisma = req.prisma;
@@ -752,7 +1249,7 @@ async function importPackages(req, res, next) {
 }
 
 // ==========================================
-// 3. IMPORT LEADS (CRM)
+// 4. IMPORT LEADS (CRM)
 // ==========================================
 async function importLeads(req, res, next) {
     const prisma = req.prisma;
@@ -983,7 +1480,7 @@ async function importLeads(req, res, next) {
 }
 
 // ==========================================
-// 4. IMPORT CUSTOMERS (WITH RADIUS & LEAD LINK)
+// 5. IMPORT CUSTOMERS (WITH RADIUS & LEAD LINK)
 // ==========================================
 async function importCustomers(req, res, next) {
     const prisma = req.prisma;
@@ -1019,7 +1516,6 @@ async function importCustomers(req, res, next) {
         const rowNumber = i + 1;
         const row = items[i] || {};
 
-        // 1. Check if Lead ID is provided
         const rawLeadId = row.leadId || row.lead_id || row['Lead ID'] || row['Lead'] || row.Lead || '';
         const parsedLeadId = rawLeadId ? parseInt(String(rawLeadId).replace(/[^0-9]/g, ''), 10) : null;
 
@@ -1041,7 +1537,6 @@ async function importCustomers(req, res, next) {
             }
         }
 
-        // 2. Personal & Contact Details (from Lead if available, fallback to Row)
         let firstName = (lead?.firstName || row.firstName || row.first_name || row['First Name'] || '').toString().trim();
         let middleName = (lead?.middleName || row.middleName || row.middle_name || row['Middle Name'] || '').toString().trim() || null;
         let lastName = (lead?.lastName || row.lastName || row.last_name || row['Last Name'] || '').toString().trim();
@@ -1068,7 +1563,6 @@ async function importCustomers(req, res, next) {
         const rawCustomerUniqueId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row.accountNo || row['Account No'] || '').toString().trim();
 
         try {
-            // 3. Branch & Sub-Branch Resolution
             const branchName = (row.branch || row.branchName || row['Branch Name'] || row.HeadBranch || '').toString().trim();
             const subBranchName = (row.subBranch || row.subBranchName || row['Sub-Branch Name'] || '').toString().trim();
 
@@ -1132,7 +1626,6 @@ async function importCustomers(req, res, next) {
                 subBranchId = branchCache.get(sbKey);
             }
 
-            // 4. Customer Type Resolution
             const typeName = (row.customerType || row.type || row['Customer Type'] || 'Home').toString().trim();
             let customerTypeId = row.customerTypeId ? Number(row.customerTypeId) : null;
             if (typeName && !customerTypeId) {
@@ -1150,7 +1643,6 @@ async function importCustomers(req, res, next) {
                 customerTypeId = customerTypeCache.get(tKey);
             }
 
-            // 5. Package / Internet Plan Resolution
             const pkgName = (row.packageName || row.package || row.plan || row.planName || row['Package Name'] || row['Plan Name'] || row['Internet Plan'] || row.planCode || '').toString().trim();
             let packagePrice = null;
 
@@ -1198,7 +1690,6 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            // 6. Check for Existing Customer Record
             const rawUsername = (row.username || row.radiusUsername || row.pppoeUsername || row['PPPoE Username'] || row['Radius Username'] || row['Username'] || '').toString().trim();
             const rawPassword = (row.password || row.radiusPassword || row.pppoePassword || row['PPPoE Password'] || row['Radius Password'] || row['Password'] || '').toString().trim();
 
@@ -1239,18 +1730,14 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            // 7. Ensure Lead is linked (or created if not exists)
             if (lead) {
-                // If this lead is already attached to another customer (and not current existingCustomer), check if we can reuse
                 const otherCustomer = await prisma.Customer.findUnique({ where: { leadId: lead.id } });
                 if (otherCustomer && (!existingCustomer || otherCustomer.id !== existingCustomer.id)) {
-                    // Lead is already used by a different customer, create a dedicated lead record
                     lead = null;
                 }
             }
 
             if (!lead) {
-                // Try finding an unlinked candidate lead by email or phone
                 if (cleanEmail || phone) {
                     const candidate = await prisma.Lead.findFirst({
                         where: {
@@ -1306,7 +1793,6 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            // 8. Create or Update Customer
             let customer = existingCustomer;
 
             if (!customer) {
@@ -1356,7 +1842,6 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            // 9. PPPoE / RADIUS Credentials (ConnectionUser)
             const finalUsername = rawUsername || String(customer.customerUniqueId).toLowerCase().replace(/[^a-z0-9_.-]/g, '');
             const finalPassword = rawPassword || generateSecurePassword(10);
 
@@ -1388,7 +1873,6 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            // 10. Subscription & Expiry Calculation
             const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
             const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'];
             const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'];
@@ -1431,7 +1915,6 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            // 11. FreeRADIUS Database Synchronization
             let radiusSyncMsg = 'Radius sync skipped';
             if (radiusClient && finalUsername && finalPassword) {
                 try {
@@ -1458,7 +1941,6 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            // 12. OLT, Splitter, Port, VLAN & Network Connection
             const rawOlt = (row.olt || row.oltName || row.oltId || row['OLT Name'] || row['OLT'] || '').toString().trim();
             let resolvedOltId = row.oltId && !isNaN(row.oltId) ? Number(row.oltId) : null;
             if (rawOlt && !resolvedOltId) {
@@ -1535,7 +2017,6 @@ async function importCustomers(req, res, next) {
                         });
                     }
 
-                    // Also assign to customer model directly
                     if (resolvedOltId || resolvedSplitterId) {
                         await prisma.Customer.update({
                             where: { id: customer.id },
@@ -1548,7 +2029,6 @@ async function importCustomers(req, res, next) {
                 } catch (connErr) {}
             }
 
-            // 13. Hardware / ONT Device Record
             const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || row['PON Serial'] || row['Serial Number'] || '').toString().trim();
             const macAddress = (row.macAddress || row['MAC Address'] || row.mac || '').toString().trim();
             const brand = (row.brand || row.deviceBrand || row['Brand'] || '').toString().trim() || null;
@@ -1618,11 +2098,11 @@ async function importCustomers(req, res, next) {
 }
 
 // ==========================================
-// 5. SAMPLE TEMPLATE EXPORT (XLSX, CSV, JSON)
+// 6. SAMPLE TEMPLATE EXPORT (XLSX, CSV, JSON)
 // ==========================================
 async function getSampleTemplate(req, res, next) {
     try {
-        const { type } = req.params; // 'branches' | 'packages' | 'leads' | 'customers'
+        const { type } = req.params; // 'branches' | 'plans' | 'packages' | 'leads' | 'customers'
         const format = (req.query.format || 'xlsx').toLowerCase(); // 'xlsx' | 'csv' | 'json'
 
         let sampleRows = [];
@@ -1639,6 +2119,106 @@ async function getSampleTemplate(req, res, next) {
                 { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Melung Arrownet', 'Phone Number': '9801191323', 'Email': 'melung@arrownet.com.np', 'Address': 'Melung Rural', 'City': 'Dolakha', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
                 { 'Branch Name': 'Chautara Link', 'Sub-Branch Name': 'Indrawati Chautara', 'Phone Number': '9801191323', 'Email': 'indrawati@arrownet.com.np', 'Address': 'Indrawati 4', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' },
                 { 'Branch Name': 'Khadichaur', 'Sub-Branch Name': 'Barhabisa Municipality Sindhupalchok', 'Phone Number': '9801191323', 'Email': 'barhabisa@arrownet.com.np', 'Address': 'Barhabise', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' }
+            ];
+        } else if (type === 'plans' || type === 'internet-plans') {
+            filename = 'sample_internet_plans';
+            sampleRows = [
+                {
+                    'Plan Name': '155 Mbps',
+                    'Plan Code': '155 MBPS',
+                    'Service': '155 Mbps',
+                    'NAS Type': 'cisco, juniper, mikrotik, nokia',
+                    'Priority': '1',
+                    'Package Type': 'HOME',
+                    'Connection Type': 'FTTH',
+                    'Data Limit (0 for unlimited)': 0,
+                    'Download Speed (Mbps)': 155,
+                    'Upload Speed (Mbps)': 155,
+                    'INT Upload': 155,
+                    'FIR Download': 155,
+                    'Local Upload': 155,
+                    'Local Download': 155,
+                    'Organization': 'Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD), Yatkha (SB-YATKHA), Bahrabise (SB-BAHRABISE), Charikot (BR-CHARIKOT)',
+                    'Allow Rename': 'FALSE',
+                    'FUP Apply': 'TRUE',
+                    'Is FUP Package': 'FALSE',
+                    'Only Renewal': 'FALSE',
+                    'Popular': 'TRUE',
+                    'High Priority': 'TRUE',
+                    'FUP Limit (GB)': 0,
+                    'FUP Penalty Plan': '',
+                    'Apply Framed Pool': 'TRUE',
+                    'Framed Pool Value': 'Pool 2 (pool2)',
+                    'Vendor-Specific Profiles': 'JUNIPER:xFTTH-pp0',
+                    'Custom Radius Attributes': 'ERX-IPv6-Delegated-Pool-Name := v6-default-pd\nFramed-IPv6-Pool := v6-ndra',
+                    'Max Discount Percentage (%)': 100,
+                    'Max Discount Count Per Month': 0,
+                    'Description': 'Ultra High Speed 155 Mbps FTTH Internet'
+                },
+                {
+                    'Plan Name': '100 Mbps',
+                    'Plan Code': '100 MBPS',
+                    'Service': 'Internet',
+                    'NAS Type': 'mikrotik, juniper',
+                    'Priority': '1',
+                    'Package Type': 'HOME',
+                    'Connection Type': 'Fiber',
+                    'Data Limit (0 for unlimited)': 0,
+                    'Download Speed (Mbps)': 100,
+                    'Upload Speed (Mbps)': 100,
+                    'INT Upload': 100,
+                    'FIR Download': 100,
+                    'Local Upload': 100,
+                    'Local Download': 100,
+                    'Organization': 'All Branches',
+                    'Allow Rename': 'FALSE',
+                    'FUP Apply': 'TRUE',
+                    'Is FUP Package': 'FALSE',
+                    'Only Renewal': 'FALSE',
+                    'Popular': 'TRUE',
+                    'High Priority': 'FALSE',
+                    'FUP Limit (GB)': 0,
+                    'FUP Penalty Plan': '',
+                    'Apply Framed Pool': 'FALSE',
+                    'Framed Pool Value': '',
+                    'Vendor-Specific Profiles': '',
+                    'Custom Radius Attributes': '',
+                    'Max Discount Percentage (%)': 100,
+                    'Max Discount Count Per Month': 0,
+                    'Description': 'Standard 100 Mbps Unlimited Fiber Internet'
+                },
+                {
+                    'Plan Name': '50 Mbps',
+                    'Plan Code': '50 MBPS',
+                    'Service': 'Internet',
+                    'NAS Type': 'mikrotik',
+                    'Priority': '2',
+                    'Package Type': 'HOME',
+                    'Connection Type': 'Fiber',
+                    'Data Limit (0 for unlimited)': 0,
+                    'Download Speed (Mbps)': 50,
+                    'Upload Speed (Mbps)': 50,
+                    'INT Upload': 50,
+                    'FIR Download': 50,
+                    'Local Upload': 50,
+                    'Local Download': 50,
+                    'Organization': 'Charikot (BR-CHARIKOT), Melung Arrownet (SB-MELUNG-ARROWNET)',
+                    'Allow Rename': 'FALSE',
+                    'FUP Apply': 'TRUE',
+                    'Is FUP Package': 'FALSE',
+                    'Only Renewal': 'FALSE',
+                    'Popular': 'FALSE',
+                    'High Priority': 'FALSE',
+                    'FUP Limit (GB)': 0,
+                    'FUP Penalty Plan': '',
+                    'Apply Framed Pool': 'FALSE',
+                    'Framed Pool Value': '',
+                    'Vendor-Specific Profiles': '',
+                    'Custom Radius Attributes': '',
+                    'Max Discount Percentage (%)': 100,
+                    'Max Discount Count Per Month': 0,
+                    'Description': '50 Mbps Home Internet Plan'
+                }
             ];
         } else if (type === 'packages') {
             filename = 'sample_packages_tariffs';
@@ -1858,7 +2438,7 @@ async function getSampleTemplate(req, res, next) {
                 }
             ];
         } else {
-            return res.status(400).json({ error: 'Invalid template type. Supported types: branches, packages, leads, customers' });
+            return res.status(400).json({ error: 'Invalid template type. Supported types: branches, plans, packages, leads, customers' });
         }
 
         if (format === 'json') {
@@ -1875,7 +2455,6 @@ async function getSampleTemplate(req, res, next) {
             return res.send(csvOutput);
         }
 
-        // Default to Excel (xlsx)
         const worksheet = xlsx.utils.json_to_sheet(sampleRows);
         const workbook = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(workbook, worksheet, 'Sample Data');
@@ -1892,6 +2471,7 @@ async function getSampleTemplate(req, res, next) {
 
 module.exports = {
     importBranches,
+    importPlans,
     importPackages,
     importLeads,
     importCustomers,

@@ -1,6 +1,7 @@
 const express = require('express');
 const {
     importBranches,
+    importPlans,
     importPackages,
     importLeads,
     importCustomers,
@@ -19,7 +20,7 @@ module.exports = (prisma) => {
         next();
     });
 
-    // Public or authenticated template download (supports branches, packages, leads, customers)
+    // Public or authenticated template download (supports branches, plans, packages, leads, customers)
     router.get('/template/:type', getSampleTemplate);
 
     // Apply isAuthenticated globally for import processing
@@ -28,7 +29,11 @@ module.exports = (prisma) => {
     // Import branches & sub-branches
     router.post('/branches', checkAnyPermission(['branches_create', 'branches_manage', 'settings_manage', 'admin', 'administrator']), importBranches);
 
-    // Import packages & internet plans
+    // Import base internet plans (PackagePlan with NAS types, speeds, organization branch mapping, RADIUS attributes)
+    router.post('/plans', checkAnyPermission(['packages_create', 'packages_manage', 'settings_manage', 'admin', 'administrator']), importPlans);
+    router.post('/package-plans', checkAnyPermission(['packages_create', 'packages_manage', 'settings_manage', 'admin', 'administrator']), importPlans);
+
+    // Import packages & tariffs (PackagePrice with 1M, 3M, 6M, 12M rate sheets)
     router.post('/packages', checkAnyPermission(['packages_create', 'packages_manage', 'settings_manage', 'admin', 'administrator']), importPackages);
 
     // Import leads (CRM)
@@ -39,4 +44,3 @@ module.exports = (prisma) => {
 
     return router;
 };
-
