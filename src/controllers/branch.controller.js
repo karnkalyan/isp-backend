@@ -556,6 +556,10 @@ async function getOverallStats(req, res, next) {
         // Format the response
         return res.json({
             totalBranches,
+            totalOrganizations: branches.filter(b => !b.parentId).length,
+            totalSubBranches: branches.filter(b => b.parentId).length,
+            activeOrganizations: branches.filter(b => !b.parentId && b.isActive).length,
+            activeSubBranches: branches.filter(b => b.parentId && b.isActive).length,
             totalUsers,
             totalCustomers,
             activeCustomers,

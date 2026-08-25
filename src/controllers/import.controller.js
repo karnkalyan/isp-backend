@@ -570,12 +570,23 @@ async function importPlans(req, res, next) {
         return res.status(400).json({ error: 'No internet plan items provided for import' });
     }
 
+    let targetIspId = ispId;
+    if (!targetIspId) {
+        const firstIsp = await prisma.ISP.findFirst({ select: { id: true } });
+        targetIspId = firstIsp ? firstIsp.id : 1;
+    }
+
     let radiusClient = null;
-    if (syncRadius && ispId) {
+    if (syncRadius && targetIspId) {
         try {
-            radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+            radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, targetIspId);
         } catch (rErr) {
-            console.warn('[IMPORT PLANS] FreeRADIUS client not available:', rErr.message);
+            try {
+                const { RadiusClient } = require('../services/radiusClient');
+                radiusClient = await RadiusClient.create(targetIspId);
+            } catch (rErr2) {
+                console.warn('[IMPORT PLANS] FreeRADIUS client not available:', rErr2.message || rErr.message);
+            }
         }
     }
 
