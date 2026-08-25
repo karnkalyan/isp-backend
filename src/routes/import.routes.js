@@ -2,6 +2,8 @@ const express = require('express');
 const {
     importBranches,
     importPackages,
+    importLeads,
+    importCustomers,
     getSampleTemplate
 } = require('../controllers/import.controller');
 
@@ -17,7 +19,7 @@ module.exports = (prisma) => {
         next();
     });
 
-    // Public or authenticated template download
+    // Public or authenticated template download (supports branches, packages, leads, customers)
     router.get('/template/:type', getSampleTemplate);
 
     // Apply isAuthenticated globally for import processing
@@ -29,5 +31,12 @@ module.exports = (prisma) => {
     // Import packages & internet plans
     router.post('/packages', checkAnyPermission(['packages_create', 'packages_manage', 'settings_manage', 'admin', 'administrator']), importPackages);
 
+    // Import leads (CRM)
+    router.post('/leads', checkAnyPermission(['lead_create', 'leads_manage', 'crm_manage', 'settings_manage', 'admin', 'administrator']), importLeads);
+
+    // Import customers (with FreeRADIUS & Lead ID linkage)
+    router.post('/customers', checkAnyPermission(['customers_create', 'customers_manage', 'settings_manage', 'admin', 'administrator']), importCustomers);
+
     return router;
 };
+

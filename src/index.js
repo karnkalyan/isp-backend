@@ -179,6 +179,7 @@ app.use('/bulk-inventory', require('./routes/bulkinventory.routes')(prisma));
 app.use('/drums', require('./routes/drum.routes')(prisma));
 app.use('/audit-logs', require('./routes/audit.routes')(prisma));
 app.use('/reports', require('./routes/report.routes')(prisma));
+app.use('/import', importRouter(prisma));
 
 app.use('/api/users', usersRouter(prisma));
 app.use('/api/auth', authRouter(prisma));
