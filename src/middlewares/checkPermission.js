@@ -1,19 +1,35 @@
 module.exports = function checkPermission(permissionName) {
     return (req, res, next) => {
-        // console.log(`Checking permission: '${permissionName}' for user:`, req.user); // Uncomment for debugging
-
-        if (!req.user || !Array.isArray(req.user.permissions)) {
-            // This case implies isAuthenticated failed to populate req.user correctly
-            console.log("Permission check failed: req.user or permissions array is missing/invalid.");
+        if (!req.user) {
             return res.status(403).json({ message: 'Access denied: User authentication incomplete or invalid' });
         }
 
-        if (!req.user.permissions.includes(permissionName)) {
-            console.log(`Permission check failed: User does not have '${permissionName}'. User permissions:`, req.user.permissions); // Uncomment for debugging
-            return res.status(403).json({ message: `Access Denied` });
+        const roleName = (req.user.role || '').toLowerCase();
+        if (
+            roleName === 'administrator' ||
+            roleName === 'admin' ||
+            roleName === 'super admin' ||
+            roleName === 'superadmin' ||
+            roleName === 'isp_admin' ||
+            roleName === 'global manager' ||
+            roleName.startsWith('global ')
+        ) {
+            return next();
         }
 
-        console.log(`Permission '${permissionName}' granted for user.`); // Uncomment for debugging
+        const userPermissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
+        const hasPermission = 
+            userPermissions.includes(permissionName) ||
+            userPermissions.includes(permissionName.toLowerCase()) ||
+            userPermissions.includes(permissionName.replace(/s_/, '_')) ||
+            userPermissions.includes(permissionName.replace(/_plans_/, '_plan_')) ||
+            userPermissions.includes(permissionName.replace(/_packages_/, '_package_'));
+
+        if (!hasPermission) {
+            console.log(`[checkPermission] Access Denied for ${req.user.email} (Role: ${req.user.role}). Required: ${permissionName}. User has:`, userPermissions);
+            return res.status(403).json({ message: 'Access Denied: Insufficient permissions' });
+        }
+
         next();
     };
 };
