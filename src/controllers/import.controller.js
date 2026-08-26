@@ -371,7 +371,7 @@ function formatMacToDotNotation(mac) {
 }
 
 /**
- * Parse OLT VLAN configurations with ID, Name, GEM Index, Type, Description
+ * Parse OLT VLAN configurations with dynamic multiple VLAN IDs, Names, GEM Indices, Types, and Descriptions
  */
 function parseOltVlans(row) {
     const results = [];
@@ -404,26 +404,33 @@ function parseOltVlans(row) {
         } catch (e) {}
     }
 
-    const rawVlanName = (row.vlanName || row['VLAN Name'] || '').toString().trim();
-    const rawGemIndex = parseInt(row.gemIndex || row.gemPort || row['GEM Index'] || row['GEM Port'] || '', 10);
-    const rawVlanType = (row.vlanType || row['VLAN Type'] || 'standard').toString().trim();
-    const rawVlanDesc = (row.vlanDescription || row['VLAN Description'] || '').toString().trim();
+    const rawVlanNames = (row.vlanName || row['VLAN Name'] || row.vlanNames || row['VLAN Names'] || '').toString().trim();
+    const rawGemIndices = (row.gemIndex || row.gemPort || row['GEM Index'] || row['GEM Port'] || row.gemIndices || row['GEM Indices'] || '').toString().trim();
+    const rawVlanTypes = (row.vlanType || row['VLAN Type'] || 'standard').toString().trim();
+    const rawVlanDescs = (row.vlanDescription || row['VLAN Description'] || '').toString().trim();
 
-    // Delimited string: e.g. "527:527_ACS:6, 101:101_INTERNET:1" or "527, 101, 102"
+    const nameList = rawVlanNames.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const gemList = rawGemIndices.split(/[,;\n]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    const typeList = rawVlanTypes.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const descList = rawVlanDescs.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+
+    // Delimited string: e.g. "527:527_ACS:6, 528:528_INTERNET:7" or "527, 528"
     const segments = str.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
     if (segments.length > 0) {
         segments.forEach((seg, idx) => {
             const parts = seg.split(/[:=]/).map(p => p.trim());
             const vNum = parseInt(parts[0], 10);
             if (!isNaN(vNum) && vNum >= 1 && vNum <= 4094) {
-                const name = parts[1] || (segments.length === 1 && rawVlanName ? rawVlanName : `${vNum}_VLAN`);
-                const gem = parts[2] ? parseInt(parts[2], 10) : (!isNaN(rawGemIndex) && idx === 0 ? rawGemIndex : vNum);
+                const name = parts[1] || nameList[idx] || (nameList.length === 1 && idx === 0 ? nameList[0] : `VLAN_${vNum}`);
+                const gem = parts[2] ? parseInt(parts[2], 10) : (gemList[idx] !== undefined ? gemList[idx] : (gemList.length === 1 ? gemList[0] + idx : vNum));
+                const vType = typeList[idx] || typeList[0] || 'standard';
+                const vDesc = descList[idx] || descList[0] || '';
                 results.push({
                     vlanId: vNum,
                     name,
                     gemIndex: !isNaN(gem) ? gem : vNum,
-                    vlanType: rawVlanType || 'standard',
-                    description: rawVlanDesc || ''
+                    vlanType: vType,
+                    description: vDesc
                 });
             }
         });
@@ -439,21 +446,43 @@ function parseOltProfiles(row, defaultVlans = []) {
     const lineProfiles = [];
     const serviceProfiles = [];
 
-    const rawLine = row.lineProfiles || row.lineProfile || row['Line Profiles'] || row['Line Profile'] || '';
-    const rawService = row.serviceProfiles || row.serviceProfile || row['Service Profiles'] || row['Service Profile'] || '';
+    const rawLine = row.lineProfiles || row['Line Profiles'] || '';
+    const rawService = row.serviceProfiles || row['Service Profiles'] || '';
 
-    // Direct column inputs
-    const profileId = (row.profileId || row['Profile ID'] || row.lineProfileId || row['Line Profile ID'] || '').toString().trim();
-    const profileName = (row.profileName || row['Profile Name'] || row.lineProfileName || row['Line Profile Name'] || '').toString().trim();
+    // Direct separate Line Profile columns
+    const lineProfId = (row.lineProfileId || row['Line Profile ID'] || '').toString().trim();
+    const lineProfName = (row.lineProfileName || row['Line Profile Name'] || row.lineProfile || row['Line Profile'] || '').toString().trim();
+
+    // Direct separate Service Profile columns
+    const servProfId = (row.serviceProfileId || row['Service Profile ID'] || '').toString().trim();
+    const servProfName = (row.serviceProfileName || row['Service Profile Name'] || row.serviceProfile || row['Service Profile'] || '').toString().trim();
+
+    // Combined/Generic Profile columns
+    const genProfileId = (row.profileId || row['Profile ID'] || '').toString().trim();
+    const genProfileName = (row.profileName || row['Profile Name'] || '').toString().trim();
+
     const upBw = (row.upstreamBandwidth || row['Upstream Bandwidth'] || '100M').toString().trim();
     const downBw = (row.downstreamBandwidth || row['Downstream Bandwidth'] || '1G').toString().trim();
     const rawServices = row.services || row['Services'] || ['internet', 'voice', 'iptv', 'management'];
     const servicesList = Array.isArray(rawServices) ? rawServices : String(rawServices).split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
     const desc = (row.profileDescription || row['Profile Description'] || row.description || '').toString().trim();
 
-    if (profileId || profileName) {
-        const pId = profileId || '12';
-        const pName = profileName || `PROFILE_${pId}`;
+    // 1. If explicit Line Profile provided
+    if (lineProfId || lineProfName) {
+        const lpId = lineProfId || genProfileId || (lineProfName ? slugify(lineProfName) : '12');
+        const lpName = lineProfName || `LineProfile_${lpId}`;
+        lineProfiles.push({
+            profileId: lpId,
+            name: lpName,
+            type: 'line',
+            upstreamBandwidth: upBw || '100M',
+            downstreamBandwidth: downBw || '1G',
+            tcontType: 'type4',
+            description: desc || `Line Profile ${lpName}`
+        });
+    } else if (genProfileId || genProfileName) {
+        const pId = genProfileId || '12';
+        const pName = genProfileName || `LineProfile_${pId}`;
         lineProfiles.push({
             profileId: pId,
             name: pName,
@@ -463,7 +492,24 @@ function parseOltProfiles(row, defaultVlans = []) {
             tcontType: 'type4',
             description: desc || `Line Profile ${pName}`
         });
+    }
 
+    // 2. If explicit Service Profile provided
+    if (servProfId || servProfName) {
+        const spId = servProfId || genProfileId || (servProfName ? slugify(servProfName) : '12');
+        const spName = servProfName || `ServiceProfile_${spId}`;
+        serviceProfiles.push({
+            profileId: spId,
+            name: spName,
+            type: 'service',
+            services: servicesList.length > 0 ? servicesList : ['internet', 'voice', 'iptv', 'management'],
+            vlans: defaultVlans.length > 0 ? defaultVlans : [100],
+            qosProfile: 'default',
+            description: desc || `Service Profile ${spName}`
+        });
+    } else if (genProfileId || genProfileName) {
+        const pId = genProfileId || '12';
+        const pName = genProfileName || `ServiceProfile_${pId}`;
         serviceProfiles.push({
             profileId: pId,
             name: pName,
@@ -475,7 +521,7 @@ function parseOltProfiles(row, defaultVlans = []) {
         });
     }
 
-    // Parse additional Line Profiles string / JSON
+    // 3. Parse additional Line Profiles string / JSON
     if (rawLine) {
         if (typeof rawLine === 'string' && rawLine.startsWith('[') && rawLine.endsWith(']')) {
             try {
@@ -521,7 +567,7 @@ function parseOltProfiles(row, defaultVlans = []) {
         }
     }
 
-    // Parse additional Service Profiles string / JSON
+    // 4. Parse additional Service Profiles string / JSON
     if (rawService) {
         if (typeof rawService === 'string' && rawService.startsWith('[') && rawService.endsWith(']')) {
             try {
@@ -3738,11 +3784,13 @@ async function getSampleTemplate(req, res, next) {
                     'OLT Port': '0/1/2',
                     'Splitter Name': 'SPL-02',
                     'Splitter Port': 'Port 2',
-                    'VLAN ID': '527',
-                    'VLAN Name': '527_ACS',
-                    'GEM Index': '6',
-                    'Profile ID': '12',
-                    'Profile Name': 'KISAN_FTTH',
+                    'VLAN IDs': '527, 528',
+                    'VLAN Names': '527_ACS, 528_INTERNET',
+                    'GEM Indices': '6, 7',
+                    'Line Profile ID': '12',
+                    'Line Profile Name': 'KISAN_LINE_100M',
+                    'Service Profile ID': '12',
+                    'Service Profile Name': 'KISAN_SERV_FTTH',
                     'Services': 'internet, voice, iptv, management',
                     'Upstream Bandwidth': '100M',
                     'Downstream Bandwidth': '1G',
@@ -3754,7 +3802,7 @@ async function getSampleTemplate(req, res, next) {
                     'MAC Address': '744d.2890.1234',
                     'Status': 'active',
                     'Source': 'customer_import',
-                    'Notes': 'Installed via Splitter SPL-02 Port 2',
+                    'Notes': 'Installed via Splitter SPL-02 Port 2 with multiple VLANs',
                     'Lead ID': ''
                 },
                 {
@@ -3784,11 +3832,13 @@ async function getSampleTemplate(req, res, next) {
                     'OLT Port': '0/1/3',
                     'Splitter Name': 'SPL-03',
                     'Splitter Port': 'Port 1',
-                    'VLAN ID': '103',
-                    'VLAN Name': '103_INTERNET',
-                    'GEM Index': '3',
-                    'Profile ID': '14',
-                    'Profile Name': 'ENT_PROFILE',
+                    'VLAN IDs': '103, 104',
+                    'VLAN Names': '103_ENT, 104_MGMT',
+                    'GEM Indices': '3, 4',
+                    'Line Profile ID': '14',
+                    'Line Profile Name': 'ENT_LINE_1G',
+                    'Service Profile ID': '14',
+                    'Service Profile Name': 'ENT_SERV_1G',
                     'Services': 'internet, management',
                     'Upstream Bandwidth': '100M',
                     'Downstream Bandwidth': '1G',
@@ -3800,7 +3850,7 @@ async function getSampleTemplate(req, res, next) {
                     'MAC Address': '9000.4e55.6677',
                     'Status': 'active',
                     'Source': 'Direct Sale',
-                    'Notes': 'Direct Enterprise Fiber Connection',
+                    'Notes': 'Direct Enterprise Fiber Connection with multi-vlan trunk',
                     'Lead ID': ''
                 },
                 {
@@ -3830,11 +3880,13 @@ async function getSampleTemplate(req, res, next) {
                     'OLT Port': '0/1/1',
                     'Splitter Name': 'SPL-01',
                     'Splitter Port': 'Port 1',
-                    'VLAN ID': '101',
-                    'VLAN Name': '101_DEFAULT',
-                    'GEM Index': '1',
-                    'Profile ID': '10',
-                    'Profile Name': 'HOME_FIBER',
+                    'VLAN IDs': '101, 102',
+                    'VLAN Names': '101_DEFAULT, 102_IPTV',
+                    'GEM Indices': '1, 2',
+                    'Line Profile ID': '10',
+                    'Line Profile Name': 'HOME_LINE_100M',
+                    'Service Profile ID': '10',
+                    'Service Profile Name': 'HOME_SERV_FTTH',
                     'Services': 'internet, iptv',
                     'Upstream Bandwidth': '100M',
                     'Downstream Bandwidth': '1G',
