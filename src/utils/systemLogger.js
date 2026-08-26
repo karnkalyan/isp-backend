@@ -36,10 +36,55 @@ function toSafeDetails(details, seen = new WeakSet()) {
   );
 }
 
+let tableChecked = false;
+let tableExists = true;
+
+async function ensureSystemLogsTable(client) {
+  if (tableChecked) return tableExists;
+  try {
+    if (client?.$executeRawUnsafe) {
+      await client.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS \`system_logs\` (
+          \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+          \`ispId\` INTEGER NULL,
+          \`userId\` INTEGER NULL,
+          \`level\` VARCHAR(16) NOT NULL,
+          \`operation\` VARCHAR(120) NOT NULL,
+          \`message\` TEXT NOT NULL,
+          \`method\` VARCHAR(10) NULL,
+          \`path\` VARCHAR(500) NULL,
+          \`statusCode\` INTEGER NULL,
+          \`ip\` VARCHAR(191) NULL,
+          \`userAgent\` VARCHAR(500) NULL,
+          \`durationMs\` INTEGER NULL,
+          \`details\` JSON NULL,
+          \`timestamp\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          INDEX \`system_logs_ispId_timestamp_idx\`(\`ispId\`, \`timestamp\`),
+          INDEX \`system_logs_level_timestamp_idx\`(\`level\`, \`timestamp\`),
+          INDEX \`system_logs_operation_timestamp_idx\`(\`operation\`, \`timestamp\`),
+          PRIMARY KEY (\`id\`)
+        ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      `);
+      tableExists = true;
+    }
+  } catch (e) {
+    tableExists = false;
+  } finally {
+    tableChecked = true;
+  }
+  return tableExists;
+}
+
 async function logSystem(prismaClient, entry = {}) {
   try {
     const client = prismaClient || defaultPrisma;
     if (!client?.systemLog) return;
+    
+    if (!tableChecked) {
+      await ensureSystemLogsTable(client);
+    }
+    if (!tableExists) return;
+
     await client.systemLog.create({
       data: {
         ispId: entry.ispId ? Number(entry.ispId) : null,
@@ -58,7 +103,10 @@ async function logSystem(prismaClient, entry = {}) {
       },
     });
   } catch (error) {
-    originalConsole.error('Unable to persist system log:', error.message);
+    if (error.message?.includes('system_logs') && error.message?.includes('does not exist')) {
+      tableExists = false;
+      tableChecked = true;
+    }
   }
 }
 
@@ -86,10 +134,8 @@ function installConsoleSystemLogger(prismaClient) {
             message: redactText(message || method),
             details: { arguments: safeArgs },
           }))
-          .catch((error) => originalConsole.error('Console system-log queue failed:', error.message));
-      } catch (error) {
-        originalConsole.error('Unable to capture console system log:', error.message);
-      }
+          .catch(() => {});
+      } catch (error) {}
     };
   });
 }
