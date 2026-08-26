@@ -2849,7 +2849,7 @@ async function getSampleTemplate(req, res, next) {
                     masterCharges = await prisma.OneTimeCharge.findMany({
                         where: {
                             isDeleted: false,
-                            ...(ispId ? { ispId: Number(ispId) } : {})
+                            ...(ispId ? { OR: [{ ispId: Number(ispId) }, { ispId: null }] } : {})
                         },
                         orderBy: { id: 'asc' }
                     });
@@ -2860,13 +2860,17 @@ async function getSampleTemplate(req, res, next) {
 
             // Filter for package creation items or fallback to all active charges
             let activeItems = masterCharges.filter(c => c.forPackageCreation);
-            if (activeItems.length === 0) {
-                activeItems = masterCharges.length > 0 ? masterCharges : [
-                    { name: 'Internet', code: 'INT', isRenewal: true, isTaxable: true, isTscApplicable: true },
-                    { name: 'Support and Maintenance', code: 'SM', isRenewal: true, isTaxable: true, isTscApplicable: false },
-                    { name: 'Drop Wire', code: 'DW', isRenewal: false, isTaxable: true, isTscApplicable: false },
-                    { name: 'Douplex Router', code: 'DR', isRenewal: false, isTaxable: true, isTscApplicable: false }
-                ];
+            if (activeItems.length === 0 && masterCharges.length > 0) {
+                activeItems = masterCharges;
+            }
+
+            // If completely empty in DB, initialize master charges
+            if (activeItems.length === 0 && prisma) {
+                try {
+                    activeItems = await ensureMasterPackageCharges(prisma, ispId);
+                } catch (e) {
+                    console.warn('[getSampleTemplate] Failed to ensure master charges:', e.message);
+                }
             }
 
             const durations = [
@@ -2877,9 +2881,9 @@ async function getSampleTemplate(req, res, next) {
             ];
 
             const samplePlans = [
-                { planName: '100 Mbps', refName: 'Premium Fiber 100M', speed: 100, baseInternet: 500, baseSupport: 500 },
-                { planName: '50 Mbps', refName: 'Standard Fiber 50M', speed: 50, baseInternet: 420, baseSupport: 420 },
-                { planName: '25 Mbps', refName: 'Starter Fiber 25M', speed: 25, baseInternet: 350, baseSupport: 350 }
+                { planName: '100 Mbps', refName: 'Premium Fiber 100M', speed: 100 },
+                { planName: '50 Mbps', refName: 'Standard Fiber 50M', speed: 50 },
+                { planName: '25 Mbps', refName: 'Starter Fiber 25M', speed: 25 }
             ];
 
             sampleRows = samplePlans.map((plan, pIdx) => {
@@ -2898,8 +2902,7 @@ async function getSampleTemplate(req, res, next) {
                     activeItems.forEach(item => {
                         const colKey = `${dur.prefix} ${item.name || item.code}`;
                         if (item.isRenewal) {
-                            const isInt = (item.code === 'INT' || String(item.name).toUpperCase().includes('INTERNET'));
-                            const unitPrice = isInt ? plan.baseInternet : plan.baseSupport;
+                            const unitPrice = item.amount > 0 ? item.amount : Math.round(plan.speed * 5);
                             row[colKey] = Math.round(unitPrice * dur.mult);
                         } else {
                             row[colKey] = item.amount || 0;

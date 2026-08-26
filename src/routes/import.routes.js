@@ -20,8 +20,35 @@ module.exports = (prisma) => {
         next();
     });
 
+    // Optional auth middleware helper to populate req.user & req.ispId if token exists
+    const optionalAuth = async (req, res, next) => {
+        try {
+            let token = req.cookies?.access_token;
+            if (!token && req.headers.authorization?.startsWith('Bearer ')) {
+                token = req.headers.authorization.slice(7).trim();
+            }
+            if (token && process.env.ACCESS_SECRET) {
+                const jwt = require('jsonwebtoken');
+                const payload = jwt.verify(token, process.env.ACCESS_SECRET);
+                if (payload?.userId) {
+                    const user = await prisma.user.findUnique({
+                        where: { id: payload.userId },
+                        select: { id: true, ispId: true, email: true }
+                    });
+                    if (user) {
+                        req.user = user;
+                        req.ispId = user.ispId;
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore auth error for public/optional template download
+        }
+        next();
+    };
+
     // Public or authenticated template download (supports branches, plans, packages, leads, customers)
-    router.get('/template/:type', getSampleTemplate);
+    router.get('/template/:type', optionalAuth, getSampleTemplate);
 
     // Apply isAuthenticated globally for import processing
     router.use(isAuthenticated(prisma));
