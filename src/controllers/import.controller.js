@@ -1,4 +1,5 @@
 const xlsx = require('xlsx');
+const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { computeExpiryFromBase, atPlanBoundary } = require('../utils/dateHelper');
@@ -2170,10 +2171,6 @@ async function importLeads(req, res, next) {
         logs
     });
 }
-
-// ==========================================
-// 5. IMPORT CUSTOMERS (WITH RADIUS & LEAD LINK)
-// ==========================================
 async function importCustomers(req, res, next) {
     const prisma = req.prisma;
     const ispId = req.ispId ? Number(req.ispId) : null;
@@ -2193,6 +2190,32 @@ async function importCustomers(req, res, next) {
         }
     }
 
+    let customerRole = null;
+    try {
+        customerRole = await prisma.Role.findFirst({ where: { name: 'Customer' } });
+        if (!customerRole) {
+            customerRole = await prisma.Role.create({ data: { name: 'Customer', isActive: true } });
+        }
+    } catch (e) {
+        console.warn('[IMPORT CUSTOMERS] Could not ensure Customer role:', e.message);
+    }
+
+    let nettvService = null;
+    try {
+        nettvService = await prisma.Service.findFirst({
+            where: {
+                OR: [
+                    { code: 'NETTV' },
+                    { name: { contains: 'NetTV' } },
+                    { category: 'STREAMING' }
+                ],
+                isDeleted: false
+            }
+        });
+    } catch (e) {
+        console.warn('[IMPORT CUSTOMERS] NetTV service lookup note:', e.message);
+    }
+
     const logs = [];
     let successCount = 0;
     let skippedCount = 0;
@@ -2203,6 +2226,7 @@ async function importCustomers(req, res, next) {
     const customerTypeCache = new Map();
     const oltCache = new Map();
     const splitterCache = new Map();
+    const nasCache = new Map();
 
     for (let i = 0; i < items.length; i++) {
         const rowNumber = i + 1;
@@ -2247,11 +2271,12 @@ async function importCustomers(req, res, next) {
         }
 
         const phone = (lead?.phoneNumber || row.phoneNumber || row.phone || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
+        const altPhone = (lead?.secondaryContactNumber || row.alternativePhone || row.altPhone || row['Alternative Phone Number'] || row['Secondary Contact Number'] || '').toString().trim();
         const rawEmail = (lead?.email || row.email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
         const cleanEmail = rawEmail || null;
 
-        const panNo = (row.panNo || row.pan || row['PAN No'] || row['PAN Number'] || row['PAN'] || '').toString().trim() || null;
-        const idNumber = (row.idNumber || row.citizenshipNo || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || `ID-${phone || Date.now() + i}`).toString().trim();
+        const panNo = (row.panNo || row.pan || row.panNumber || row['PAN No'] || row['PAN Number'] || row['PAN'] || '').toString().trim() || null;
+        const idNumber = (row.idNumber || row.citizenshipNo || row.citizenshipNumber || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || `ID-${phone || Date.now() + i}`).toString().trim();
         const rawCustomerUniqueId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row.accountNo || row['Account No'] || '').toString().trim();
 
         try {
@@ -2323,13 +2348,21 @@ async function importCustomers(req, res, next) {
             if (typeName && !customerTypeId) {
                 const tKey = typeName.toLowerCase();
                 if (!customerTypeCache.has(tKey)) {
-                    const ct = await prisma.CustomerType.findFirst({
+                    let ct = await prisma.CustomerType.findFirst({
                         where: {
                             name: { contains: typeName },
-                            ...(ispId ? { ispId } : {}),
                             isDeleted: false
                         }
                     });
+                    if (!ct) {
+                        try {
+                            ct = await prisma.CustomerType.create({
+                                data: { name: typeName }
+                            });
+                        } catch (e) {
+                            ct = await prisma.CustomerType.findFirst();
+                        }
+                    }
                     customerTypeCache.set(tKey, ct ? ct.id : null);
                 }
                 customerTypeId = customerTypeCache.get(tKey);
@@ -2450,6 +2483,13 @@ async function importCustomers(req, res, next) {
                 }
             }
 
+            const addressVal = (row.address || row['Address'] || '').toString().trim() || null;
+            const streetVal = (row.street || row['Street'] || '').toString().trim() || null;
+            const cityVal = (row.district || row.city || row['District'] || row['City'] || '').toString().trim() || null;
+            const provinceVal = (row.province || row.state || row['Province'] || row['State'] || '').toString().trim() || null;
+            const sourceVal = (row.source || row['Source'] || 'customer_import').toString().trim();
+            const notesVal = (row.notes || row['Notes'] || '').toString().trim() || null;
+
             if (!lead) {
                 lead = await prisma.Lead.create({
                     data: {
@@ -2458,17 +2498,20 @@ async function importCustomers(req, res, next) {
                         lastName,
                         email: cleanEmail,
                         phoneNumber: phone || null,
-                        address: (row.address || row['Address'] || '').toString().trim() || null,
-                        district: (row.district || row.city || row['District'] || row['City'] || '').toString().trim() || null,
-                        province: (row.province || row.state || row['Province'] || row['State'] || '').toString().trim() || null,
+                        secondaryContactNumber: altPhone || null,
+                        address: addressVal,
+                        street: streetVal,
+                        district: cityVal,
+                        province: provinceVal,
                         status: 'converted',
                         convertedToCustomer: true,
                         convertedAt: new Date(),
+                        convertedById: req.user?.id || null,
                         branchId: branchId || null,
                         subBranchId: subBranchId || null,
                         ispId: ispId || 1,
-                        source: 'customer_import',
-                        notes: (row.notes || row['Notes'] || '').toString().trim() || null,
+                        source: sourceVal,
+                        notes: notesVal,
                         interestedPackageId: packagePrice ? packagePrice.id : null,
                         isActive: true,
                         isDeleted: false
@@ -2480,7 +2523,13 @@ async function importCustomers(req, res, next) {
                     data: {
                         status: 'converted',
                         convertedToCustomer: true,
-                        convertedAt: lead.convertedAt || new Date()
+                        convertedAt: lead.convertedAt || new Date(),
+                        convertedById: lead.convertedById || req.user?.id || null,
+                        secondaryContactNumber: altPhone || lead.secondaryContactNumber,
+                        address: addressVal || lead.address,
+                        district: cityVal || lead.district,
+                        province: provinceVal || lead.province,
+                        interestedPackageId: packagePrice ? packagePrice.id : lead.interestedPackageId
                     }
                 });
             }
@@ -2529,6 +2578,7 @@ async function importCustomers(req, res, next) {
                         subscribedPkgId: packagePrice ? packagePrice.id : customer.subscribedPkgId,
                         customerTypeId: customerTypeId || customer.customerTypeId,
                         status: (row.status || customer.status).toString().trim().toLowerCase(),
+                        onboardStatus: 'fully_onboarded',
                         updatedAt: new Date()
                     }
                 });
@@ -2565,6 +2615,85 @@ async function importCustomers(req, res, next) {
                 });
             }
 
+            try {
+                const loginEmail = cleanEmail || `${finalUsername.toLowerCase()}@customer.portal`;
+                const passwordHash = await bcrypt.hash(finalPassword, 10);
+                const customerName = `${firstName} ${lastName}`.trim() || customer.customerUniqueId;
+
+                const existingPortalUser = await prisma.User.findFirst({
+                    where: {
+                        OR: [
+                            { customerId: customer.id },
+                            { email: loginEmail }
+                        ]
+                    }
+                });
+
+                if (existingPortalUser) {
+                    await prisma.User.update({
+                        where: { id: existingPortalUser.id },
+                        data: {
+                            customerId: customer.id,
+                            name: customerName,
+                            passwordHash,
+                            branchId: branchId || existingPortalUser.branchId,
+                            status: 'active',
+                            updatedAt: new Date()
+                        }
+                    });
+                } else {
+                    await prisma.User.create({
+                        data: {
+                            email: loginEmail,
+                            passwordHash,
+                            name: customerName,
+                            roleId: customerRole ? customerRole.id : null,
+                            status: 'active',
+                            ispId: ispId || 1,
+                            branchId: branchId || null,
+                            customerId: customer.id
+                        }
+                    });
+                }
+            } catch (usrErr) {
+                console.warn(`[CUSTOMER IMPORT] User portal account note for row ${rowNumber}:`, usrErr.message);
+            }
+
+            if (nettvService) {
+                try {
+                    await prisma.CustomerSubscribedService.upsert({
+                        where: {
+                            customerId_serviceId: {
+                                customerId: customer.id,
+                                serviceId: nettvService.id
+                            }
+                        },
+                        update: {
+                            status: 'active',
+                            externalUsername: finalUsername,
+                            serviceData: {
+                                username: finalUsername,
+                                pppoeUsername: finalUsername,
+                                syncedAt: new Date().toISOString()
+                            }
+                        },
+                        create: {
+                            customerId: customer.id,
+                            serviceId: nettvService.id,
+                            status: 'active',
+                            externalUsername: finalUsername,
+                            serviceData: {
+                                username: finalUsername,
+                                pppoeUsername: finalUsername,
+                                syncedAt: new Date().toISOString()
+                            }
+                        }
+                    });
+                } catch (ntvErr) {
+                    console.warn(`[CUSTOMER IMPORT] NetTV service mapping note for row ${rowNumber}:`, ntvErr.message);
+                }
+            }
+
             const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
             const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'];
             const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'];
@@ -2576,34 +2705,66 @@ async function importCustomers(req, res, next) {
                 planEnd = computeExpiryFromBase(planStart, '1 Month');
             }
 
+            let subscription = null;
             if (packagePrice) {
-                let subscription = await prisma.CustomerSubscription.findFirst({
-                    where: { customerId: customer.id, isDeleted: false }
+                subscription = await prisma.CustomerSubscription.findFirst({
+                    where: { customerId: customer.id }
                 });
 
                 if (subscription) {
-                    await prisma.CustomerSubscription.update({
+                    subscription = await prisma.CustomerSubscription.update({
                         where: { id: subscription.id },
                         data: {
-                            packagePriceId: packagePrice.id,
-                            planStart,
-                            planEnd,
-                            isActive: true,
-                            updatedAt: new Date()
-                        }
-                    });
-                } else {
-                    await prisma.CustomerSubscription.create({
-                        data: {
-                            customerId: customer.id,
-                            packagePriceId: packagePrice.id,
+                            package: packagePrice.id,
                             planStart,
                             planEnd,
                             isActive: true,
                             isTrial: false,
-                            isInvoicing: false
+                            isInvoicing: true,
+                            updatedAt: new Date()
                         }
                     });
+                } else {
+                    subscription = await prisma.CustomerSubscription.create({
+                        data: {
+                            customerId: customer.id,
+                            package: packagePrice.id,
+                            planStart,
+                            planEnd,
+                            isActive: true,
+                            isTrial: false,
+                            isInvoicing: true
+                        }
+                    });
+                }
+
+                try {
+                    const orderTotal = packagePrice.initialTotalWithTax || packagePrice.price || 0;
+                    const order = await prisma.CustomerOrderManagement.create({
+                        data: {
+                            customerId: customer.id,
+                            subscriptionId: subscription.id,
+                            package: packagePrice.id,
+                            orderDate: new Date(),
+                            packageStart: planStart,
+                            packageEnd: planEnd,
+                            totalAmount: orderTotal,
+                            isPaid: true,
+                            isActive: true,
+                            isDeleted: false
+                        }
+                    });
+
+                    await prisma.OrderDetail.create({
+                        data: {
+                            orderId: order.id,
+                            itemName: packagePrice.packageName || 'Internet Subscription',
+                            referenceId: packagePrice.referenceId || null,
+                            itemPrice: packagePrice.price || 0
+                        }
+                    });
+                } catch (ordErr) {
+                    console.warn(`[CUSTOMER IMPORT] Order record note for row ${rowNumber}:`, ordErr.message);
                 }
             }
 
@@ -2630,6 +2791,29 @@ async function importCustomers(req, res, next) {
                     radiusSyncMsg = `FreeRADIUS Synced (User: ${finalUsername}, Group: ${radiusGroupName || 'Default'})`;
                 } catch (rErr) {
                     radiusSyncMsg = `FreeRADIUS Sync Warning: ${rErr.message}`;
+                }
+            }
+
+            const rawNas = (row.nas || row.nasName || row.nasIp || row['NAS'] || row['NAS Name'] || '').toString().trim();
+            let resolvedNasId = row.nasId && !isNaN(row.nasId) ? Number(row.nasId) : null;
+            if (rawNas && !resolvedNasId) {
+                const nasKey = rawNas.toLowerCase();
+                if (nasCache.has(nasKey)) {
+                    resolvedNasId = nasCache.get(nasKey);
+                } else {
+                    const nasRec = await prisma.nas.findFirst({
+                        where: {
+                            OR: [
+                                { nasname: { contains: rawNas } },
+                                { shortname: { contains: rawNas } },
+                                { server: { contains: rawNas } }
+                            ],
+                            ...(ispId ? { ispId } : {}),
+                            isDeleted: false
+                        }
+                    });
+                    resolvedNasId = nasRec ? nasRec.id : null;
+                    nasCache.set(nasKey, resolvedNasId);
                 }
             }
 
@@ -2677,10 +2861,11 @@ async function importCustomers(req, res, next) {
             }
 
             const vlanId = (row.vlanId || row.vlan || row['VLAN ID'] || row['Vlan'] || '').toString().trim();
-            const oltPort = (row.oltPort || row['OLT Port'] || row.port || '').toString().trim();
+            const oltPort = (row.oltPort || row.oltPonNumber || row['OLT Port'] || row['OLT PON Number'] || row.port || '').toString().trim();
             const splitterPort = (row.splitterPort || row['Splitter Port'] || '').toString().trim();
+            const connType = (row.serviceType || row.connectionType || row['Service Type'] || row['Connection Type'] || 'fiber').toString().trim().toLowerCase();
 
-            if (resolvedOltId || resolvedSplitterId || vlanId || oltPort || splitterPort) {
+            if (resolvedOltId || resolvedSplitterId || vlanId || oltPort || splitterPort || connType) {
                 try {
                     const existingConn = await prisma.CustomerServiceConnection.findFirst({
                         where: { customerId: customer.id }
@@ -2693,7 +2878,9 @@ async function importCustomers(req, res, next) {
                                 splitterId: resolvedSplitterId || existingConn.splitterId,
                                 oltPort: oltPort || existingConn.oltPort,
                                 splitterPort: splitterPort || existingConn.splitterPort,
-                                vlanId: vlanId || existingConn.vlanId
+                                vlanId: vlanId || existingConn.vlanId,
+                                connectionType: connType || existingConn.connectionType || 'fiber',
+                                status: 'active'
                             }
                         });
                     } else {
@@ -2704,7 +2891,9 @@ async function importCustomers(req, res, next) {
                                 splitterId: resolvedSplitterId || null,
                                 oltPort: oltPort || null,
                                 splitterPort: splitterPort || null,
-                                vlanId: vlanId || null
+                                vlanId: vlanId || null,
+                                connectionType: connType || 'fiber',
+                                status: 'active'
                             }
                         });
                     }
@@ -2721,10 +2910,17 @@ async function importCustomers(req, res, next) {
                 } catch (connErr) {}
             }
 
-            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || row['PON Serial'] || row['Serial Number'] || '').toString().trim();
+            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || row['PON Serial'] || row['Device Serial Number'] || row['Serial Number'] || '').toString().trim();
             const macAddress = (row.macAddress || row['MAC Address'] || row.mac || '').toString().trim();
-            const brand = (row.brand || row.deviceBrand || row['Brand'] || '').toString().trim() || null;
-            const model = (row.model || row.deviceModel || row['Model'] || '').toString().trim() || null;
+            const brand = (row.brand || row.deviceBrand || row['Device Brand'] || row['Brand'] || '').toString().trim() || null;
+            const model = (row.model || row.deviceModel || row['Device Model'] || row['Model'] || '').toString().trim() || null;
+            const ponSerial = (row.ponSerial || row['PON Serial'] || serialNumber || '').toString().trim() || null;
+            const rawDevType = (row.deviceType || row['Device Type'] || 'ONT').toString().trim().toUpperCase();
+
+            let devTypeEnum = 'ONT';
+            if (rawDevType.includes('ROUT')) devTypeEnum = 'ROUTE';
+            else if (rawDevType.includes('STB') || rawDevType.includes('BOX') || rawDevType.includes('TV')) devTypeEnum = 'STB';
+            else devTypeEnum = 'ONT';
 
             if (serialNumber || macAddress) {
                 try {
@@ -2739,6 +2935,8 @@ async function importCustomers(req, res, next) {
                                 macAddress: macAddress || existingDev.macAddress,
                                 brand: brand || existingDev.brand,
                                 model: model || existingDev.model,
+                                ponSerial: ponSerial || existingDev.ponSerial,
+                                deviceType: devTypeEnum,
                                 provisioningStatus: 'active'
                             }
                         });
@@ -2746,16 +2944,94 @@ async function importCustomers(req, res, next) {
                         await prisma.CustomerDevice.create({
                             data: {
                                 customerId: customer.id,
-                                deviceType: 'ont',
+                                deviceType: devTypeEnum,
                                 serialNumber: serialNumber || null,
                                 macAddress: macAddress || null,
                                 brand,
                                 model,
+                                ponSerial,
                                 provisioningStatus: 'active'
                             }
                         });
                     }
-                } catch (devErr) {}
+
+                    let invItem = null;
+                    if (serialNumber) {
+                        invItem = await prisma.InventoryItem.findFirst({
+                            where: {
+                                OR: [
+                                    { serialNumber: serialNumber },
+                                    { ponSerialNumber: serialNumber }
+                                ],
+                                ...(ispId ? { ispId } : {})
+                            }
+                        });
+                    }
+                    if (!invItem && macAddress) {
+                        invItem = await prisma.InventoryItem.findFirst({
+                            where: {
+                                macAddress: macAddress,
+                                ...(ispId ? { ispId } : {})
+                            }
+                        });
+                    }
+
+                    if (invItem) {
+                        const prevStatus = invItem.status;
+                        await prisma.InventoryItem.update({
+                            where: { id: invItem.id },
+                            data: {
+                                status: 'ASSIGNED_TO_CUSTOMER',
+                                customerId: customer.id,
+                                userId: null,
+                                branchId: branchId || invItem.branchId,
+                                updatedAt: new Date()
+                            }
+                        });
+                        await prisma.InventoryLog.create({
+                            data: {
+                                inventoryItemId: invItem.id,
+                                fromStatus: prevStatus,
+                                toStatus: 'ASSIGNED_TO_CUSTOMER',
+                                entityType: 'CUSTOMER',
+                                toEntityId: customer.id,
+                                actionByUserId: req.user?.id || null,
+                                note: `Auto-assigned to customer ${customer.customerUniqueId || customer.id} during import`
+                            }
+                        });
+                    } else {
+                        const newInv = await prisma.InventoryItem.create({
+                            data: {
+                                type: devTypeEnum,
+                                name: model || brand || `${devTypeEnum} Device`,
+                                serialNumber: serialNumber || null,
+                                ponSerialNumber: ponSerial || serialNumber || null,
+                                macAddress: macAddress || null,
+                                model: model || null,
+                                status: 'ASSIGNED_TO_CUSTOMER',
+                                customerId: customer.id,
+                                branchId: branchId || null,
+                                ispId: ispId || 1,
+                                qty: 1,
+                                availableQty: 0,
+                                updatedAt: new Date()
+                            }
+                        });
+                        await prisma.InventoryLog.create({
+                            data: {
+                                inventoryItemId: newInv.id,
+                                fromStatus: 'IN_STOCK',
+                                toStatus: 'ASSIGNED_TO_CUSTOMER',
+                                entityType: 'CUSTOMER',
+                                toEntityId: customer.id,
+                                actionByUserId: req.user?.id || null,
+                                note: `Auto-created and assigned to customer ${customer.customerUniqueId || customer.id} during import`
+                            }
+                        });
+                    }
+                } catch (devErr) {
+                    console.warn(`[CUSTOMER IMPORT] Device/Inventory handling note for row ${rowNumber}:`, devErr.message);
+                }
             }
 
             const expDateFormatted = planEnd.toISOString().split('T')[0];
@@ -2798,289 +3074,191 @@ async function getSampleTemplate(req, res, next) {
         const format = (req.query.format || 'xlsx').toLowerCase(); // 'xlsx' | 'csv' | 'json'
 
         let sampleRows = [];
-        let filename = '';
+        let filename = `sample_${type}_import`;
 
         if (type === 'branches') {
-            filename = 'sample_branches_subbranches';
-            sampleRows = [
-                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet', 'Phone Number': '9802022600', 'Email': 'info@arrownet.com.np', 'Address': 'Head Office, Kathmandu', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
-                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet Akar Complex', 'Phone Number': '9802022600', 'Email': 'sushila@arrownet.com.np', 'Address': 'Akar Complex, Kathmandu', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Sushila Sharma' },
-                { 'Branch Name': 'Arrownet', 'Sub-Branch Name': 'Arrownet RTC', 'Phone Number': '9801191323', 'Email': 'pashupati@arrownet.com.np', 'Address': 'RTC Center', 'City': 'Kathmandu', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Charikot', 'Phone Number': '9801191323', 'Email': 'charikot@arrownet.com.np', 'Address': 'Main Bazar', 'City': 'Charikot', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Bhimeshwor', 'Phone Number': '9801191323', 'Email': 'bhimeshwor@arrownet.com.np', 'Address': 'Bhimeshwor Ward 3', 'City': 'Charikot', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Charikot', 'Sub-Branch Name': 'Melung Arrownet', 'Phone Number': '9801191323', 'Email': 'melung@arrownet.com.np', 'Address': 'Melung Rural', 'City': 'Dolakha', 'State': 'Bagmati', 'Contact Person': 'Pashupati Dahal' },
-                { 'Branch Name': 'Chautara Link', 'Sub-Branch Name': 'Indrawati Chautara', 'Phone Number': '9801191323', 'Email': 'indrawati@arrownet.com.np', 'Address': 'Indrawati 4', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' },
-                { 'Branch Name': 'Khadichaur', 'Sub-Branch Name': 'Barhabisa Municipality Sindhupalchok', 'Phone Number': '9801191323', 'Email': 'barhabisa@arrownet.com.np', 'Address': 'Barhabise', 'City': 'Sindhupalchok', 'State': 'Bagmati', 'Contact Person': 'Branch Manager' }
-            ];
-        } else if (type === 'plans' || type === 'internet-plans') {
-            filename = 'sample_internet_plans';
+            filename = 'sample_branches_import';
             sampleRows = [
                 {
-                    'Plan Name': '155 Mbps',
-                    'Plan Code': '155 MBPS',
-                    'Service': '155 Mbps',
-                    'NAS Type': 'cisco, juniper, mikrotik, nokia',
-                    'Priority': '1',
-                    'Package Type': 'HOME',
-                    'Connection Type': 'FTTH',
-                    'Data Limit (0 for unlimited)': 0,
-                    'Download Speed (Mbps)': 155,
-                    'Upload Speed (Mbps)': 155,
-                    'INT Upload': 155,
-                    'FIR Download': 155,
-                    'Local Upload': 155,
-                    'Local Download': 155,
-                    'Organization': 'Arrownet Pvt Ltd',
-                    'Branches': 'Yatkha, Bahrabise, Charikot',
-                    'Allow Rename': 'FALSE',
-                    'FUP Apply': 'TRUE',
-                    'Is FUP Package': 'FALSE',
-                    'Only Renewal': 'FALSE',
-                    'Popular': 'TRUE',
-                    'High Priority': 'TRUE',
+                    'Branch Name': 'Arrownet',
+                    'Code': 'ARN-HEAD',
+                    'Sub-Branch Name': 'Arrownet',
+                    'Sub-Branch Code': 'ARN-HQ',
+                    'Address': 'Kathmandu Main Road',
+                    'Phone': '9801191325',
+                    'Email': 'head@arrownet.com.np',
+                    'Status': 'active'
+                },
+                {
+                    'Branch Name': 'Charikot',
+                    'Code': 'CHK-01',
+                    'Sub-Branch Name': 'Bhimeshwor',
+                    'Sub-Branch Code': 'BHM-01',
+                    'Address': 'Charikot Bazar, Dolakha',
+                    'Phone': '9801198711',
+                    'Email': 'charikot@arrownet.com.np',
+                    'Status': 'active'
+                },
+                {
+                    'Branch Name': 'Khadichaur',
+                    'Code': 'KDC-01',
+                    'Sub-Branch Name': 'Barhabisa Municipality Sindhupalchok',
+                    'Sub-Branch Code': 'BRB-01',
+                    'Address': 'Barhabise Chowk, Sindhupalchok',
+                    'Phone': '9802022610',
+                    'Email': 'khadichaur@arrownet.com.np',
+                    'Status': 'active'
+                }
+            ];
+        } else if (type === 'plans' || type === 'package-plans') {
+            filename = 'sample_speed_plans_import';
+            sampleRows = [
+                {
+                    'Plan Name': '50 Mbps',
+                    'Plan Code': 'PLAN-50-MBPS',
+                    'Download Speed (Mbps)': 50,
+                    'Upload Speed (Mbps)': 50,
+                    'Connection Type': 'Fiber',
+                    'NAS Type': 'mikrotik',
+                    'Service Type': 'Internet',
                     'FUP Limit (GB)': 0,
-                    'FUP Penalty Plan': '',
-                    'Apply Framed Pool': 'TRUE',
-                    'Framed Pool Value': 'Pool 2 (pool2)',
-                    'Vendor-Specific Profiles': 'JUNIPER:xFTTH-pp0',
-                    'Custom Radius Attributes': 'ERX-IPv6-Delegated-Pool-Name := v6-default-pd\nFramed-IPv6-Pool := v6-ndra',
-                    'Max Discount Percentage (%)': 100,
-                    'Max Discount Count Per Month': 0,
-                    'Description': 'Ultra High Speed 155 Mbps FTTH Internet'
+                    'FUP Apply': 'FALSE',
+                    'Framed Pool': 'pool-50m',
+                    'High Priority': 'FALSE',
+                    'Active': 'TRUE',
+                    'Popular': 'FALSE'
                 },
                 {
                     'Plan Name': '100 Mbps',
-                    'Plan Code': '100 MBPS',
-                    'Service': 'Internet',
-                    'NAS Type': 'mikrotik, juniper',
-                    'Priority': '1',
-                    'Package Type': 'HOME',
-                    'Connection Type': 'Fiber',
-                    'Data Limit (0 for unlimited)': 0,
+                    'Plan Code': 'PLAN-100-MBPS',
                     'Download Speed (Mbps)': 100,
                     'Upload Speed (Mbps)': 100,
-                    'INT Upload': 100,
-                    'FIR Download': 100,
-                    'Local Upload': 100,
-                    'Local Download': 100,
-                    'Organization': 'All Branches',
-                    'Branches': 'All Branches',
-                    'Allow Rename': 'FALSE',
-                    'FUP Apply': 'TRUE',
-                    'Is FUP Package': 'FALSE',
-                    'Only Renewal': 'FALSE',
-                    'Popular': 'TRUE',
-                    'High Priority': 'FALSE',
+                    'Connection Type': 'Fiber',
+                    'NAS Type': 'mikrotik',
+                    'Service Type': 'Internet',
                     'FUP Limit (GB)': 0,
-                    'FUP Penalty Plan': '',
-                    'Apply Framed Pool': 'FALSE',
-                    'Framed Pool Value': '',
-                    'Vendor-Specific Profiles': '',
-                    'Custom Radius Attributes': '',
-                    'Max Discount Percentage (%)': 100,
-                    'Max Discount Count Per Month': 0,
-                    'Description': 'Standard 100 Mbps Unlimited Fiber Internet'
+                    'FUP Apply': 'FALSE',
+                    'Framed Pool': 'pool-100m',
+                    'High Priority': 'TRUE',
+                    'Active': 'TRUE',
+                    'Popular': 'TRUE'
+                },
+                {
+                    'Plan Name': '200 Mbps',
+                    'Plan Code': 'PLAN-200-MBPS',
+                    'Download Speed (Mbps)': 200,
+                    'Upload Speed (Mbps)': 200,
+                    'Connection Type': 'Fiber',
+                    'NAS Type': 'juniper',
+                    'Service Type': 'Internet',
+                    'FUP Limit (GB)': 0,
+                    'FUP Apply': 'FALSE',
+                    'Framed Pool': 'pool-200m',
+                    'High Priority': 'TRUE',
+                    'Active': 'TRUE',
+                    'Popular': 'FALSE'
+                }
+            ];
+        } else if (type === 'packages' || type === 'tariffs') {
+            filename = 'sample_packages_and_tariffs';
+            sampleRows = [
+                {
+                    'Plan Name': '100 Mbps',
+                    'Package Reference Name': 'Premium Fiber 100M',
+                    'Duration': '1 Month',
+                    'Enabled': 'TRUE',
+                    'Online': 'FALSE',
+                    'Package Items': 'Internet: 500, Support And Maintance: 500, Drop Wire: 0, Douplex Router: 0'
+                },
+                {
+                    'Plan Name': '100 Mbps',
+                    'Package Reference Name': 'Premium Fiber 100M',
+                    'Duration': '3 Months',
+                    'Enabled': 'TRUE',
+                    'Online': 'FALSE',
+                    'Package Items': 'Internet: 1400, Support And Maintance: 1400, Drop Wire: 0, Douplex Router: 0'
+                },
+                {
+                    'Plan Name': '100 Mbps',
+                    'Package Reference Name': 'Premium Fiber 100M',
+                    'Duration': '6 Months',
+                    'Enabled': 'TRUE',
+                    'Online': 'FALSE',
+                    'Package Items': 'Internet: 2700, Support And Maintance: 2700, Drop Wire: 0, Douplex Router: 0'
+                },
+                {
+                    'Plan Name': '100 Mbps',
+                    'Package Reference Name': 'Premium Fiber 100M',
+                    'Duration': '12 Months',
+                    'Enabled': 'TRUE',
+                    'Online': 'TRUE',
+                    'Package Items': 'Internet: 5200, Support And Maintance: 5200, Drop Wire: 0, Douplex Router: 0'
                 },
                 {
                     'Plan Name': '50 Mbps',
-                    'Plan Code': '50 MBPS',
-                    'Service': 'Internet',
-                    'NAS Type': 'mikrotik',
-                    'Priority': '2',
-                    'Package Type': 'HOME',
-                    'Connection Type': 'Fiber',
-                    'Data Limit (0 for unlimited)': 0,
-                    'Download Speed (Mbps)': 50,
-                    'Upload Speed (Mbps)': 50,
-                    'INT Upload': 50,
-                    'FIR Download': 50,
-                    'Local Upload': 50,
-                    'Local Download': 50,
-                    'Organization': 'Charikot',
-                    'Branches': 'Melung Arrownet, Bhimeshwor',
-                    'Allow Rename': 'FALSE',
-                    'FUP Apply': 'TRUE',
-                    'Is FUP Package': 'FALSE',
-                    'Only Renewal': 'FALSE',
-                    'Popular': 'FALSE',
-                    'High Priority': 'FALSE',
-                    'FUP Limit (GB)': 0,
-                    'FUP Penalty Plan': '',
-                    'Apply Framed Pool': 'FALSE',
-                    'Framed Pool Value': '',
-                    'Vendor-Specific Profiles': '',
-                    'Custom Radius Attributes': '',
-                    'Max Discount Percentage (%)': 100,
-                    'Max Discount Count Per Month': 0,
-                    'Description': '50 Mbps Home Internet Plan'
+                    'Package Reference Name': 'Standard Fiber 50M',
+                    'Duration': '1 Month',
+                    'Enabled': 'TRUE',
+                    'Online': 'FALSE',
+                    'Package Items': 'Internet: 250, Support And Maintance: 250, Drop Wire: 0, Douplex Router: 0'
                 }
             ];
-        } else if (type === 'packages') {
-            filename = 'sample_packages_tariffs';
-            const prisma = req.prisma;
-            const ispId = req.ispId ? Number(req.ispId) : null;
-
-            // Fetch active OneTimeCharges (Inventory Items for Package Addon Charges)
-            let masterCharges = [];
-            if (prisma) {
-                try {
-                    masterCharges = await prisma.OneTimeCharge.findMany({
-                        where: {
-                            isDeleted: false,
-                            ...(ispId ? { OR: [{ ispId: Number(ispId) }, { ispId: null }] } : {})
-                        },
-                        orderBy: { id: 'asc' }
-                    });
-                } catch (e) {
-                    console.warn('[getSampleTemplate] Failed to fetch OneTimeCharges:', e.message);
-                }
-            }
-
-            // Filter for package creation items or fallback to all active charges
-            let activeItems = masterCharges.filter(c => c.forPackageCreation);
-            if (activeItems.length === 0 && masterCharges.length > 0) {
-                activeItems = masterCharges;
-            }
-
-            // If completely empty in DB, initialize master charges
-            if (activeItems.length === 0 && prisma) {
-                try {
-                    activeItems = await ensureMasterPackageCharges(prisma, ispId);
-                } catch (e) {
-                    console.warn('[getSampleTemplate] Failed to ensure master charges:', e.message);
-                }
-            }
-
-            const durations = [
-                { name: '1 Month', prefix: '1M', mult: 1 },
-                { name: '3 Months', prefix: '3M', mult: 2.8 },
-                { name: '6 Months', prefix: '6M', mult: 5.4 },
-                { name: '12 Months', prefix: '12M', mult: 10.4 }
-            ];
-
-            const samplePlans = [
-                { planName: '100 Mbps', refName: 'Premium Fiber 100M', speed: 100 },
-                { planName: '50 Mbps', refName: 'Standard Fiber 50M', speed: 50 },
-                { planName: '25 Mbps', refName: 'Starter Fiber 25M', speed: 25 }
-            ];
-
-            sampleRows = [];
-            for (const plan of samplePlans) {
-                durations.forEach((dur, dIdx) => {
-                    const itemsStr = activeItems.map(item => {
-                        const label = item.name || item.code;
-                        if (item.isRenewal) {
-                            const unitPrice = item.amount > 0 ? item.amount : Math.round(plan.speed * 5);
-                            return `${label}: ${Math.round(unitPrice * dur.mult)}`;
-                        } else {
-                            return `${label}: ${item.amount || 0}`;
-                        }
-                    }).join(', ');
-
-                    sampleRows.push({
-                        'Plan Name': plan.planName,
-                        'Package Reference Name': plan.refName,
-                        'Duration': dur.name,
-                        'Enabled': 'TRUE',
-                        'Online': (dIdx === 3 && plan.speed === 100) ? 'TRUE' : 'FALSE',
-                        'Package Items': itemsStr
-                    });
-                });
-            }
         } else if (type === 'leads') {
-            filename = 'sample_leads';
+            filename = 'sample_leads_crm';
             sampleRows = [
                 {
-                    'First Name': 'Ram',
-                    'Middle Name': 'Bahadur',
-                    'Last Name': 'Thapa',
+                    'First Name': 'Bikash',
+                    'Middle Name': '',
+                    'Last Name': 'Shrestha',
                     'Phone Number': '9841234567',
-                    'Email': 'ram.thapa@gmail.com',
-                    'Address': 'Putalisadak Chowk',
+                    'Email': 'bikash.shrestha@example.com',
+                    'Address': 'Main Chowk',
                     'City': 'Kathmandu',
                     'Province': 'Bagmati',
                     'Branch Name': 'Arrownet',
-                    'Sub-Branch Name': 'Arrownet Akar Complex',
+                    'Sub-Branch Name': 'Arrownet',
                     'Interested Package': '100 Mbps',
-                    'Status': 'new',
-                    'Source': 'Website Referral',
-                    'Notes': 'Interested in high-speed optical fiber for work from home'
+                    'Status': 'qualified',
+                    'Source': 'Website Inquiry',
+                    'Notes': 'High speed fiber requested for office setup'
                 },
                 {
-                    'First Name': 'Sita',
+                    'First Name': 'Prakash',
                     'Middle Name': '',
-                    'Last Name': 'Shrestha',
-                    'Phone Number': '9851098765',
-                    'Email': 'sita.shrestha@hotmail.com',
-                    'Address': 'Bhimeshwor Ward 3',
+                    'Last Name': 'Dahal',
+                    'Phone Number': '9801191325',
+                    'Email': 'prakash.dahal@example.com',
+                    'Address': 'Bhimeshwor Main Road',
                     'City': 'Charikot',
                     'Province': 'Bagmati',
                     'Branch Name': 'Charikot',
                     'Sub-Branch Name': 'Bhimeshwor',
                     'Interested Package': '50 Mbps',
                     'Status': 'qualified',
-                    'Source': 'Phone Inquiry',
-                    'Notes': 'Wants 3-months advance plan'
-                },
-                {
-                    'First Name': 'Hari',
-                    'Middle Name': 'Prasad',
-                    'Last Name': 'Adhikari',
-                    'Phone Number': '9801198711',
-                    'Email': 'hari.adhikari@yahoo.com',
-                    'Address': 'Chautara Bazar',
-                    'City': 'Sindhupalchok',
-                    'Province': 'Bagmati',
-                    'Branch Name': 'Chautara Link',
-                    'Sub-Branch Name': 'Indrawati Chautara',
-                    'Interested Package': '100 Mbps',
-                    'Status': 'new',
                     'Source': 'Walk-in',
                     'Notes': 'Ready for fiber installation tomorrow'
                 }
             ];
         } else if (type === 'customers') {
-            filename = 'sample_customers_with_radius';
+            filename = 'sample_customers_complete';
             sampleRows = [
                 {
-                    'Lead ID': '21048',
-                    'Customer ID': 'ARN-CUST-1001',
-                    'Customer Type': 'Home',
-                    'Package Name': '100 Mbps',
-                    'Duration': '1 Month',
-                    'Plan Start Date': new Date().toISOString().split('T')[0],
-                    'Plan End Date': new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                    'Branch Name': 'Arrownet',
-                    'Sub-Branch Name': 'Arrownet',
-                    'PPPoE Username': 'bikash_arn1001',
-                    'PPPoE Password': 'User@12345',
-                    'OLT Name': 'OLT-Akar-01',
-                    'OLT Port': '0/1/1',
-                    'Splitter Name': 'SPL-01',
-                    'Splitter Port': 'Port 1',
-                    'VLAN ID': '101',
-                    'ONT Serial': 'ALCLB892109',
-                    'MAC Address': '48:8F:5A:12:34:56',
-                    'PAN Number': '601234567',
-                    'Citizenship Number': '27-01-70-12345',
-                    'Status': 'active'
-                },
-                {
-                    'Lead ID': '',
-                    'Customer ID': 'ARN-CUST-1002',
                     'First Name': 'Prakash',
                     'Middle Name': '',
                     'Last Name': 'Dahal',
                     'Phone Number': '9801191325',
+                    'Alternative Phone Number': '9841234567',
                     'Email': 'prakash.dahal@example.com',
-                    'PAN Number': '',
-                    'Citizenship Number': '24-02-72-98765',
                     'Address': 'Bhimeshwor Main Road',
                     'City': 'Charikot',
                     'Province': 'Bagmati',
                     'Branch Name': 'Charikot',
                     'Sub-Branch Name': 'Bhimeshwor',
+                    'PAN Number': '',
+                    'Citizenship Number': '24-02-72-98765',
                     'Customer Type': 'Home',
+                    'Service Type': 'Fiber',
+                    'NAS': 'Mikrotik-Charikot-01',
                     'Package Name': '50 Mbps',
                     'Duration': '3 Months',
                     'Plan Start Date': new Date().toISOString().split('T')[0],
@@ -3092,26 +3270,34 @@ async function getSampleTemplate(req, res, next) {
                     'Splitter Name': 'SPL-02',
                     'Splitter Port': 'Port 2',
                     'VLAN ID': '102',
-                    'ONT Serial': 'HWTC782103',
+                    'Device Type': 'ONT',
+                    'Device Brand': 'Huawei',
+                    'Device Model': 'HG8145V5',
+                    'Device Serial Number': 'HWTC782103',
                     'MAC Address': '74:4D:28:90:12:34',
-                    'Status': 'active'
+                    'Status': 'active',
+                    'Source': 'customer_import',
+                    'Notes': 'Installed via Splitter SPL-02 Port 2',
+                    'Lead ID': '',
+                    'Customer ID': 'ARN-CUST-1002'
                 },
                 {
-                    'Lead ID': '',
-                    'Customer ID': 'ARN-CUST-1003',
                     'First Name': 'Sunil',
                     'Middle Name': 'Bahadur',
                     'Last Name': 'Khadka',
                     'Phone Number': '9802022610',
+                    'Alternative Phone Number': '9812345678',
                     'Email': 'sunil.khadka@example.com',
-                    'PAN Number': '609876543',
-                    'Citizenship Number': '22-01-68-55443',
                     'Address': 'Barhabise Chowk',
                     'City': 'Sindhupalchok',
                     'Province': 'Bagmati',
                     'Branch Name': 'Khadichaur',
                     'Sub-Branch Name': 'Barhabisa Municipality Sindhupalchok',
+                    'PAN Number': '609876543',
+                    'Citizenship Number': '22-01-68-55443',
                     'Customer Type': 'Enterprise',
+                    'Service Type': 'Fiber',
+                    'NAS': 'Mikrotik-Khadichaur-01',
                     'Package Name': '100 Mbps',
                     'Duration': '12 Months',
                     'Plan Start Date': new Date().toISOString().split('T')[0],
@@ -3123,9 +3309,55 @@ async function getSampleTemplate(req, res, next) {
                     'Splitter Name': 'SPL-03',
                     'Splitter Port': 'Port 1',
                     'VLAN ID': '103',
-                    'ONT Serial': 'ZTEGC901234',
+                    'Device Type': 'ONT',
+                    'Device Brand': 'ZTE',
+                    'Device Model': 'F670L',
+                    'Device Serial Number': 'ZTEGC901234',
                     'MAC Address': '90:00:4E:55:66:77',
-                    'Status': 'active'
+                    'Status': 'active',
+                    'Source': 'Direct Sale',
+                    'Notes': 'Direct Enterprise Fiber Connection',
+                    'Lead ID': '',
+                    'Customer ID': 'ARN-CUST-1003'
+                },
+                {
+                    'First Name': 'Bikash',
+                    'Middle Name': '',
+                    'Last Name': 'Shrestha',
+                    'Phone Number': '9841234567',
+                    'Alternative Phone Number': '',
+                    'Email': 'bikash.shrestha@example.com',
+                    'Address': 'Main Chowk',
+                    'City': 'Kathmandu',
+                    'Province': 'Bagmati',
+                    'Branch Name': 'Arrownet',
+                    'Sub-Branch Name': 'Arrownet',
+                    'PAN Number': '601234567',
+                    'Citizenship Number': '27-01-70-12345',
+                    'Customer Type': 'Home',
+                    'Service Type': 'Fiber',
+                    'NAS': 'Mikrotik-Main-01',
+                    'Package Name': '100 Mbps',
+                    'Duration': '1 Month',
+                    'Plan Start Date': new Date().toISOString().split('T')[0],
+                    'Plan End Date': new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    'PPPoE Username': 'bikash_arn1001',
+                    'PPPoE Password': 'User@12345',
+                    'OLT Name': 'OLT-Akar-01',
+                    'OLT Port': '0/1/1',
+                    'Splitter Name': 'SPL-01',
+                    'Splitter Port': 'Port 1',
+                    'VLAN ID': '101',
+                    'Device Type': 'ONT',
+                    'Device Brand': 'Nokia',
+                    'Device Model': 'G-2425G-A',
+                    'Device Serial Number': 'ALCLB892109',
+                    'MAC Address': '48:8F:5A:12:34:56',
+                    'Status': 'active',
+                    'Source': 'CRM Lead Conversion',
+                    'Notes': 'Converted from Lead #21048',
+                    'Lead ID': '21048',
+                    'Customer ID': 'ARN-CUST-1001'
                 }
             ];
         } else {
