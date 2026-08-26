@@ -5,6 +5,7 @@ const {
     importPackages,
     importLeads,
     importCustomers,
+    importOlts,
     getSampleTemplate
 } = require('../controllers/import.controller');
 
@@ -47,7 +48,7 @@ module.exports = (prisma) => {
         next();
     };
 
-    // Public or authenticated template download (supports branches, plans, packages, leads, customers)
+    // Public or authenticated template download (supports branches, plans, packages, leads, customers, olts)
     router.get('/template/:type', optionalAuth, getSampleTemplate);
 
     // Apply isAuthenticated globally for import processing
@@ -68,6 +69,10 @@ module.exports = (prisma) => {
 
     // Import customers (with FreeRADIUS & Lead ID linkage)
     router.post('/customers', checkAnyPermission(['customers_create', 'customer_create', 'customers_manage', 'customer_manage', 'settings_manage', 'admin', 'administrator']), importCustomers);
+
+    // Import OLTs (with SSH/Telnet credentials, service boards array, VLANs, and profiles)
+    router.post('/olts', checkAnyPermission(['olt_create', 'olts_create', 'olt_manage', 'olts_manage', 'devices_manage', 'settings_manage', 'admin', 'administrator']), importOlts);
+    router.post('/olt', checkAnyPermission(['olt_create', 'olts_create', 'olt_manage', 'olts_manage', 'devices_manage', 'settings_manage', 'admin', 'administrator']), importOlts);
 
     return router;
 };
