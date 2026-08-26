@@ -2277,7 +2277,6 @@ async function importCustomers(req, res, next) {
 
         const panNo = (row.panNo || row.pan || row.panNumber || row['PAN No'] || row['PAN Number'] || row['PAN'] || '').toString().trim() || null;
         const idNumber = (row.idNumber || row.citizenshipNo || row.citizenshipNumber || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || `ID-${phone || Date.now() + i}`).toString().trim();
-        const rawCustomerUniqueId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row.accountNo || row['Account No'] || '').toString().trim();
 
         try {
             const branchName = (row.branch || row.branchName || row['Branch Name'] || row.HeadBranch || '').toString().trim();
@@ -2420,13 +2419,7 @@ async function importCustomers(req, res, next) {
 
             let existingCustomer = null;
 
-            if (rawCustomerUniqueId) {
-                existingCustomer = await prisma.Customer.findUnique({
-                    where: { customerUniqueId: rawCustomerUniqueId }
-                });
-            }
-
-            if (!existingCustomer && rawUsername) {
+            if (rawUsername) {
                 const connUser = await prisma.ConnectionUser.findFirst({
                     where: { username: rawUsername, isDeleted: false },
                     include: { customer: true }
@@ -2554,7 +2547,7 @@ async function importCustomers(req, res, next) {
                     }
                 });
 
-                const generatedUniqueId = rawCustomerUniqueId || await generateCustomerUniqueId(
+                const generatedUniqueId = await generateCustomerUniqueId(
                     prisma,
                     customer.id,
                     firstName,
@@ -3278,8 +3271,7 @@ async function getSampleTemplate(req, res, next) {
                     'Status': 'active',
                     'Source': 'customer_import',
                     'Notes': 'Installed via Splitter SPL-02 Port 2',
-                    'Lead ID': '',
-                    'Customer ID': 'ARN-CUST-1002'
+                    'Lead ID': ''
                 },
                 {
                     'First Name': 'Sunil',
@@ -3317,8 +3309,7 @@ async function getSampleTemplate(req, res, next) {
                     'Status': 'active',
                     'Source': 'Direct Sale',
                     'Notes': 'Direct Enterprise Fiber Connection',
-                    'Lead ID': '',
-                    'Customer ID': 'ARN-CUST-1003'
+                    'Lead ID': ''
                 },
                 {
                     'First Name': 'Bikash',
@@ -3356,8 +3347,7 @@ async function getSampleTemplate(req, res, next) {
                     'Status': 'active',
                     'Source': 'CRM Lead Conversion',
                     'Notes': 'Converted from Lead #21048',
-                    'Lead ID': '21048',
-                    'Customer ID': 'ARN-CUST-1001'
+                    'Lead ID': '21048'
                 }
             ];
         } else {
