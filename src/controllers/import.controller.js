@@ -355,6 +355,220 @@ function parseServiceBoardsFromRow(row) {
 }
 
 /**
+ * Format MAC Address to xxxx.xxxx.xxxx format (Cisco / Huawei dot notation)
+ */
+function formatMacToDotNotation(mac) {
+    if (!mac && mac !== 0) return null;
+    const clean = String(mac).replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+    if (clean.length === 12) {
+        return `${clean.slice(0, 4)}.${clean.slice(4, 8)}.${clean.slice(8, 12)}`;
+    }
+    const str = String(mac).trim().toLowerCase();
+    if (/^[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}$/.test(str)) {
+        return str;
+    }
+    return str || null;
+}
+
+/**
+ * Parse OLT VLAN configurations with ID, Name, GEM Index, Type, Description
+ */
+function parseOltVlans(row) {
+    const results = [];
+    const rawVlans = row.vlans || row.vlan || row.vlanId || row['VLANs'] || row['VLAN ID'] || row['VLAN'] || '';
+
+    // Check if array
+    if (Array.isArray(rawVlans)) {
+        return rawVlans.map((v, idx) => ({
+            vlanId: Number(v.vlanId || v.id || v.vlan || 100),
+            name: (v.name || v.vlanName || `${v.vlanId || v.id || 100}_VLAN`).toString().trim(),
+            gemIndex: v.gemIndex !== undefined && v.gemIndex !== null ? Number(v.gemIndex) : (Number(v.vlanId || v.id) || idx + 1),
+            vlanType: (v.vlanType || v.type || 'standard').toString().trim(),
+            description: (v.description || '').toString().trim()
+        })).filter(v => v.vlanId >= 1 && v.vlanId <= 4094);
+    }
+
+    const str = String(rawVlans).trim();
+    if (str.startsWith('[') && str.endsWith(']')) {
+        try {
+            const parsed = JSON.parse(str);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed.map((v, idx) => ({
+                    vlanId: Number(v.vlanId || v.id || v.vlan || 100),
+                    name: (v.name || v.vlanName || `${v.vlanId || v.id || 100}_VLAN`).toString().trim(),
+                    gemIndex: v.gemIndex !== undefined && v.gemIndex !== null ? Number(v.gemIndex) : (Number(v.vlanId || v.id) || idx + 1),
+                    vlanType: (v.vlanType || v.type || 'standard').toString().trim(),
+                    description: (v.description || '').toString().trim()
+                })).filter(v => v.vlanId >= 1 && v.vlanId <= 4094);
+            }
+        } catch (e) {}
+    }
+
+    const rawVlanName = (row.vlanName || row['VLAN Name'] || '').toString().trim();
+    const rawGemIndex = parseInt(row.gemIndex || row.gemPort || row['GEM Index'] || row['GEM Port'] || '', 10);
+    const rawVlanType = (row.vlanType || row['VLAN Type'] || 'standard').toString().trim();
+    const rawVlanDesc = (row.vlanDescription || row['VLAN Description'] || '').toString().trim();
+
+    // Delimited string: e.g. "527:527_ACS:6, 101:101_INTERNET:1" or "527, 101, 102"
+    const segments = str.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    if (segments.length > 0) {
+        segments.forEach((seg, idx) => {
+            const parts = seg.split(/[:=]/).map(p => p.trim());
+            const vNum = parseInt(parts[0], 10);
+            if (!isNaN(vNum) && vNum >= 1 && vNum <= 4094) {
+                const name = parts[1] || (segments.length === 1 && rawVlanName ? rawVlanName : `${vNum}_VLAN`);
+                const gem = parts[2] ? parseInt(parts[2], 10) : (!isNaN(rawGemIndex) && idx === 0 ? rawGemIndex : vNum);
+                results.push({
+                    vlanId: vNum,
+                    name,
+                    gemIndex: !isNaN(gem) ? gem : vNum,
+                    vlanType: rawVlanType || 'standard',
+                    description: rawVlanDesc || ''
+                });
+            }
+        });
+    }
+
+    return results;
+}
+
+/**
+ * Parse OLT Line & Service Profiles with ID, Name, Services, VLANs, Bandwidth, Description
+ */
+function parseOltProfiles(row, defaultVlans = []) {
+    const lineProfiles = [];
+    const serviceProfiles = [];
+
+    const rawLine = row.lineProfiles || row.lineProfile || row['Line Profiles'] || row['Line Profile'] || '';
+    const rawService = row.serviceProfiles || row.serviceProfile || row['Service Profiles'] || row['Service Profile'] || '';
+
+    // Direct column inputs
+    const profileId = (row.profileId || row['Profile ID'] || row.lineProfileId || row['Line Profile ID'] || '').toString().trim();
+    const profileName = (row.profileName || row['Profile Name'] || row.lineProfileName || row['Line Profile Name'] || '').toString().trim();
+    const upBw = (row.upstreamBandwidth || row['Upstream Bandwidth'] || '100M').toString().trim();
+    const downBw = (row.downstreamBandwidth || row['Downstream Bandwidth'] || '1G').toString().trim();
+    const rawServices = row.services || row['Services'] || ['internet', 'voice', 'iptv', 'management'];
+    const servicesList = Array.isArray(rawServices) ? rawServices : String(rawServices).split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const desc = (row.profileDescription || row['Profile Description'] || row.description || '').toString().trim();
+
+    if (profileId || profileName) {
+        const pId = profileId || '12';
+        const pName = profileName || `PROFILE_${pId}`;
+        lineProfiles.push({
+            profileId: pId,
+            name: pName,
+            type: 'line',
+            upstreamBandwidth: upBw || '100M',
+            downstreamBandwidth: downBw || '1G',
+            tcontType: 'type4',
+            description: desc || `Line Profile ${pName}`
+        });
+
+        serviceProfiles.push({
+            profileId: pId,
+            name: pName,
+            type: 'service',
+            services: servicesList.length > 0 ? servicesList : ['internet', 'voice', 'iptv', 'management'],
+            vlans: defaultVlans.length > 0 ? defaultVlans : [100],
+            qosProfile: 'default',
+            description: desc || `Service Profile ${pName}`
+        });
+    }
+
+    // Parse additional Line Profiles string / JSON
+    if (rawLine) {
+        if (typeof rawLine === 'string' && rawLine.startsWith('[') && rawLine.endsWith(']')) {
+            try {
+                const parsed = JSON.parse(rawLine);
+                if (Array.isArray(parsed)) {
+                    parsed.forEach((p, idx) => {
+                        const id = (p.profileId || p.id || `LP_${idx + 1}`).toString().trim();
+                        const name = (p.name || `LineProfile_${id}`).toString().trim();
+                        if (!lineProfiles.find(x => x.profileId === id || x.name === name)) {
+                            lineProfiles.push({
+                                profileId: id,
+                                name,
+                                type: 'line',
+                                upstreamBandwidth: p.upstreamBandwidth || '100M',
+                                downstreamBandwidth: p.downstreamBandwidth || '1G',
+                                tcontType: p.tcontType || 'type4',
+                                description: p.description || `Line Profile ${name}`
+                            });
+                        }
+                    });
+                }
+            } catch (e) {}
+        } else {
+            const segs = String(rawLine).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+            segs.forEach((seg, idx) => {
+                const parts = seg.split(/[:=]/).map(p => p.trim());
+                const id = parts[0] || `LP_${idx + 1}`;
+                const name = parts[1] || id;
+                const up = parts[2] || '100M';
+                const down = parts[3] || '1G';
+                if (!lineProfiles.find(x => x.profileId === id || x.name === name)) {
+                    lineProfiles.push({
+                        profileId: id,
+                        name,
+                        type: 'line',
+                        upstreamBandwidth: up,
+                        downstreamBandwidth: down,
+                        tcontType: 'type4',
+                        description: `Line Profile ${name}`
+                    });
+                }
+            });
+        }
+    }
+
+    // Parse additional Service Profiles string / JSON
+    if (rawService) {
+        if (typeof rawService === 'string' && rawService.startsWith('[') && rawService.endsWith(']')) {
+            try {
+                const parsed = JSON.parse(rawService);
+                if (Array.isArray(parsed)) {
+                    parsed.forEach((p, idx) => {
+                        const id = (p.profileId || p.id || `SP_${idx + 1}`).toString().trim();
+                        const name = (p.name || `ServiceProfile_${id}`).toString().trim();
+                        if (!serviceProfiles.find(x => x.profileId === id || x.name === name)) {
+                            serviceProfiles.push({
+                                profileId: id,
+                                name,
+                                type: 'service',
+                                services: Array.isArray(p.services) ? p.services : ['internet', 'voice', 'iptv', 'management'],
+                                vlans: Array.isArray(p.vlans) ? p.vlans : defaultVlans,
+                                qosProfile: p.qosProfile || 'default',
+                                description: p.description || `Service Profile ${name}`
+                            });
+                        }
+                    });
+                }
+            } catch (e) {}
+        } else {
+            const segs = String(rawService).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+            segs.forEach((seg, idx) => {
+                const parts = seg.split(/[:=]/).map(p => p.trim());
+                const id = parts[0] || `SP_${idx + 1}`;
+                const name = parts[1] || id;
+                if (!serviceProfiles.find(x => x.profileId === id || x.name === name)) {
+                    serviceProfiles.push({
+                        profileId: id,
+                        name,
+                        type: 'service',
+                        services: ['internet', 'voice', 'iptv', 'management'],
+                        vlans: defaultVlans,
+                        qosProfile: 'default',
+                        description: `Service Profile ${name}`
+                    });
+                }
+            });
+        }
+    }
+
+    return { lineProfiles, serviceProfiles };
+}
+
+/**
  * Parse Vendor-Specific Profiles from JSON or String
  * e.g. [{"vendor":"JUNIPER","profile":"xFTTH-pp0"}] or "JUNIPER:xFTTH-pp0; NOKIA:profile1"
  */
@@ -2982,19 +3196,24 @@ async function importCustomers(req, res, next) {
 
             const vlanRaw = (row.vlanId || row.vlan || row.vlans || row['VLAN ID'] || row['VLANs'] || row['Vlan'] || '').toString().trim();
             const parsedVlans = parseVlanList(vlanRaw);
-            const rawGem = parseInt(row.gemIndex || row.gemPort || row['GEM Index'] || row['GEM Port'] || '', 10);
-            const gemIndex = !isNaN(rawGem) ? rawGem : (parsedVlans[0] || null);
+            const oltVlanConfigs = parseOltVlans(row);
 
-            // Auto-provision VLANs, Line Profile, and Service Profile into OLT if missing
-            if (resolvedOltId && parsedVlans.length > 0) {
+            // Auto-provision VLANs, Line Profile, and Service Profile into OLT if missing (strictly in local DB, no device push)
+            if (resolvedOltId && (parsedVlans.length > 0 || oltVlanConfigs.length > 0)) {
                 try {
-                    for (let vIdx = 0; vIdx < parsedVlans.length; vIdx++) {
-                        const vNum = parsedVlans[vIdx];
-                        const currentGem = !isNaN(rawGem) ? (rawGem + vIdx) : vNum;
+                    const vlansToProcess = oltVlanConfigs.length > 0 ? oltVlanConfigs : parsedVlans.map((v, idx) => ({
+                        vlanId: v,
+                        name: row.vlanName || row['VLAN Name'] || `VLAN ${v}`,
+                        gemIndex: !isNaN(parseInt(row.gemIndex || row.gemPort, 10)) ? parseInt(row.gemIndex || row.gemPort, 10) : v,
+                        vlanType: (row.vlanType || row['VLAN Type'] || 'standard').toString().trim(),
+                        description: (row.vlanDescription || row['VLAN Description'] || `Auto-provisioned for customer ${customer.customerUniqueId}`).toString().trim()
+                    }));
+
+                    for (const vObj of vlansToProcess) {
                         const existingVlan = await (prisma.oLTVLAN || prisma.OLTVLAN).findFirst({
                             where: {
                                 oltId: resolvedOltId,
-                                vlanId: vNum
+                                vlanId: vObj.vlanId
                             }
                         });
 
@@ -3002,11 +3221,11 @@ async function importCustomers(req, res, next) {
                             await (prisma.oLTVLAN || prisma.OLTVLAN).create({
                                 data: {
                                     oltId: resolvedOltId,
-                                    vlanId: vNum,
-                                    name: `VLAN ${vNum}`,
-                                    description: `Auto-provisioned from customer ${finalUsername || customer.customerUniqueId}`,
-                                    gemIndex: currentGem,
-                                    vlanType: 'standard',
+                                    vlanId: vObj.vlanId,
+                                    name: vObj.name || `VLAN ${vObj.vlanId}`,
+                                    description: vObj.description || `Auto-provisioned for customer ${customer.customerUniqueId}`,
+                                    gemIndex: vObj.gemIndex || vObj.vlanId,
+                                    vlanType: vObj.vlanType || 'standard',
                                     priority: 0,
                                     status: 'active'
                                 }
@@ -3014,67 +3233,91 @@ async function importCustomers(req, res, next) {
                         }
                     }
 
-                    // Check & provision Line Profile if missing
-                    const rawLineProf = (row.lineProfile || row.lineProfileName || row['Line Profile'] || row['Line Profile Name'] || '').toString().trim();
-                    const lineProfName = rawLineProf || (pkgName ? `LineProfile_${slugify(pkgName).substring(0, 20)}` : `LineProfile_${parsedVlans[0]}`);
-                    const lineProfId = (row.lineProfileId || row['Line Profile ID'] || lineProfName).toString().trim();
-
-                    const existingLineProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
-                        where: {
-                            oltId: resolvedOltId,
-                            type: 'line',
-                            OR: [
-                                { profileId: lineProfId },
-                                { name: lineProfName }
-                            ]
-                        }
-                    });
-
-                    if (!existingLineProf) {
+                    // Line & Service Profiles
+                    const parsedProfiles = parseOltProfiles(row, vlansToProcess.map(v => v.vlanId));
+                    if (parsedProfiles.lineProfiles.length === 0 && (row.lineProfile || row.lineProfileName || pkgName)) {
                         const speedMbps = extractSpeedMbps(pkgName);
-                        await (prisma.oLTProfile || prisma.OLTProfile).create({
-                            data: {
-                                oltId: resolvedOltId,
-                                profileId: lineProfId,
-                                name: lineProfName,
-                                type: 'line',
-                                description: `Auto-provisioned Line Profile for ${pkgName || 'Internet Plan'}`,
-                                upstreamBandwidth: `${speedMbps}M`,
-                                downstreamBandwidth: `${speedMbps}M`,
-                                tcontType: 'type4'
-                            }
+                        const lineProfName = (row.lineProfile || row.lineProfileName || row['Line Profile'] || row['Line Profile Name'] || (pkgName ? `LineProfile_${slugify(pkgName).substring(0, 20)}` : `LineProfile_${vlansToProcess[0]?.vlanId || 100}`)).toString().trim();
+                        const lineProfId = (row.profileId || row['Profile ID'] || row.lineProfileId || row['Line Profile ID'] || lineProfName).toString().trim();
+                        parsedProfiles.lineProfiles.push({
+                            profileId: lineProfId,
+                            name: lineProfName,
+                            type: 'line',
+                            description: `Auto-provisioned Line Profile for ${pkgName || 'Internet Plan'}`,
+                            upstreamBandwidth: `${speedMbps}M`,
+                            downstreamBandwidth: `${speedMbps}M`,
+                            tcontType: 'type4'
                         });
                     }
 
-                    // Check & provision Service Profile if missing
-                    const rawServProf = (row.serviceProfile || row.serviceProfileName || row['Service Profile'] || row['Service Profile Name'] || '').toString().trim();
-                    const servProfName = rawServProf || `ServiceProfile_VLAN_${parsedVlans[0]}`;
-                    const servProfId = (row.serviceProfileId || row['Service Profile ID'] || servProfName).toString().trim();
-
-                    const existingServProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
-                        where: {
-                            oltId: resolvedOltId,
+                    if (parsedProfiles.serviceProfiles.length === 0 && (row.serviceProfile || row.serviceProfileName || vlansToProcess.length > 0)) {
+                        const servProfName = (row.serviceProfile || row.serviceProfileName || row['Service Profile'] || row['Service Profile Name'] || `ServiceProfile_VLAN_${vlansToProcess[0]?.vlanId || 100}`).toString().trim();
+                        const servProfId = (row.profileId || row['Profile ID'] || row.serviceProfileId || row['Service Profile ID'] || servProfName).toString().trim();
+                        parsedProfiles.serviceProfiles.push({
+                            profileId: servProfId,
+                            name: servProfName,
                             type: 'service',
-                            OR: [
-                                { profileId: servProfId },
-                                { name: servProfName }
-                            ]
-                        }
-                    });
+                            description: `Auto-provisioned Service Profile for VLAN(s) ${vlansToProcess.map(v => v.vlanId).join(', ')}`,
+                            vlans: vlansToProcess.map(v => v.vlanId),
+                            services: ['internet', 'voice', 'iptv', 'management'],
+                            qosProfile: 'default'
+                        });
+                    }
 
-                    if (!existingServProf) {
-                        await (prisma.oLTProfile || prisma.OLTProfile).create({
-                            data: {
+                    for (const lp of parsedProfiles.lineProfiles) {
+                        const existingLineProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
+                            where: {
                                 oltId: resolvedOltId,
-                                profileId: servProfId,
-                                name: servProfName,
-                                type: 'service',
-                                description: `Auto-provisioned Service Profile for VLAN(s) ${parsedVlans.join(', ')}`,
-                                vlans: JSON.stringify(parsedVlans),
-                                services: JSON.stringify(['internet']),
-                                qosProfile: 'default'
+                                type: 'line',
+                                OR: [
+                                    { profileId: lp.profileId },
+                                    { name: lp.name }
+                                ]
                             }
                         });
+
+                        if (!existingLineProf) {
+                            await (prisma.oLTProfile || prisma.OLTProfile).create({
+                                data: {
+                                    oltId: resolvedOltId,
+                                    profileId: lp.profileId,
+                                    name: lp.name,
+                                    type: 'line',
+                                    description: lp.description,
+                                    upstreamBandwidth: lp.upstreamBandwidth,
+                                    downstreamBandwidth: lp.downstreamBandwidth,
+                                    tcontType: lp.tcontType || 'type4'
+                                }
+                            });
+                        }
+                    }
+
+                    for (const sp of parsedProfiles.serviceProfiles) {
+                        const existingServProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
+                            where: {
+                                oltId: resolvedOltId,
+                                type: 'service',
+                                OR: [
+                                    { profileId: sp.profileId },
+                                    { name: sp.name }
+                                ]
+                            }
+                        });
+
+                        if (!existingServProf) {
+                            await (prisma.oLTProfile || prisma.OLTProfile).create({
+                                data: {
+                                    oltId: resolvedOltId,
+                                    profileId: sp.profileId,
+                                    name: sp.name,
+                                    type: 'service',
+                                    description: sp.description,
+                                    vlans: JSON.stringify(sp.vlans),
+                                    services: JSON.stringify(sp.services),
+                                    qosProfile: sp.qosProfile || 'default'
+                                }
+                            });
+                        }
                     }
                 } catch (oltProvErr) {
                     console.warn(`[CUSTOMER IMPORT] OLT VLAN/Profile auto-provision note for row ${rowNumber}:`, oltProvErr.message);
@@ -3131,11 +3374,16 @@ async function importCustomers(req, res, next) {
                 } catch (connErr) {}
             }
 
-            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.ponSerial || row['PON Serial'] || row['Device Serial Number'] || row['Serial Number'] || '').toString().trim();
-            const macAddress = (row.macAddress || row['MAC Address'] || row.mac || '').toString().trim();
+            const serialNumber = (row.serialNumber || row.ontSerial || row['ONT Serial'] || row.deviceSerial || row['Device Serial Number'] || row['Serial Number'] || row.ponSerial || row['PON Serial'] || '').toString().trim();
+            const ponSerial = (row.ponSerial || row['PON Serial'] || serialNumber || '').toString().trim() || null;
+            const finalSerial = serialNumber || ponSerial || null;
+            const finalPonSerial = ponSerial || serialNumber || null;
+
+            const rawMac = (row.macAddress || row['MAC Address'] || row.mac || '').toString().trim();
+            const macAddress = formatMacToDotNotation(rawMac);
+
             const brand = (row.brand || row.deviceBrand || row['Device Brand'] || row['Brand'] || '').toString().trim() || null;
             const model = (row.model || row.deviceModel || row['Device Model'] || row['Model'] || '').toString().trim() || null;
-            const ponSerial = (row.ponSerial || row['PON Serial'] || serialNumber || '').toString().trim() || null;
             const rawDevType = (row.deviceType || row['Device Type'] || 'ONT').toString().trim().toUpperCase();
 
             let devTypeEnum = 'ONT';
@@ -3143,7 +3391,7 @@ async function importCustomers(req, res, next) {
             else if (rawDevType.includes('STB') || rawDevType.includes('BOX') || rawDevType.includes('TV')) devTypeEnum = 'STB';
             else devTypeEnum = 'ONT';
 
-            if (serialNumber || macAddress) {
+            if (finalSerial || macAddress) {
                 try {
                     const existingDev = await prisma.CustomerDevice.findFirst({
                         where: { customerId: customer.id }
@@ -3152,11 +3400,11 @@ async function importCustomers(req, res, next) {
                         await prisma.CustomerDevice.update({
                             where: { id: existingDev.id },
                             data: {
-                                serialNumber: serialNumber || existingDev.serialNumber,
+                                serialNumber: finalSerial || existingDev.serialNumber,
                                 macAddress: macAddress || existingDev.macAddress,
                                 brand: brand || existingDev.brand,
                                 model: model || existingDev.model,
-                                ponSerial: ponSerial || existingDev.ponSerial,
+                                ponSerial: finalPonSerial || existingDev.ponSerial,
                                 deviceType: devTypeEnum,
                                 provisioningStatus: 'active'
                             }
@@ -3166,23 +3414,23 @@ async function importCustomers(req, res, next) {
                             data: {
                                 customerId: customer.id,
                                 deviceType: devTypeEnum,
-                                serialNumber: serialNumber || null,
+                                serialNumber: finalSerial || null,
                                 macAddress: macAddress || null,
                                 brand,
                                 model,
-                                ponSerial,
+                                ponSerial: finalPonSerial || null,
                                 provisioningStatus: 'active'
                             }
                         });
                     }
 
                     let invItem = null;
-                    if (serialNumber) {
+                    if (finalSerial) {
                         invItem = await prisma.InventoryItem.findFirst({
                             where: {
                                 OR: [
-                                    { serialNumber: serialNumber },
-                                    { ponSerialNumber: serialNumber }
+                                    { serialNumber: finalSerial },
+                                    { ponSerialNumber: finalSerial }
                                 ],
                                 ...(ispId ? { ispId } : {})
                             }
@@ -3225,8 +3473,8 @@ async function importCustomers(req, res, next) {
                             data: {
                                 type: devTypeEnum,
                                 name: model || brand || `${devTypeEnum} Device`,
-                                serialNumber: serialNumber || null,
-                                ponSerialNumber: ponSerial || serialNumber || null,
+                                serialNumber: finalSerial || null,
+                                ponSerialNumber: finalPonSerial || finalSerial || null,
                                 macAddress: macAddress || null,
                                 model: model || null,
                                 status: 'ASSIGNED_TO_CUSTOMER',
@@ -3251,7 +3499,7 @@ async function importCustomers(req, res, next) {
                         });
                     }
                 } catch (devErr) {
-                    console.warn(`[CUSTOMER IMPORT] Device/Inventory handling note for row ${rowNumber}:`, devErr.message);
+                    console.warn(`[CUSTOMER IMPORT] Device auto-provisioning note for row ${rowNumber}:`, devErr.message);
                 }
             }
 
@@ -3490,12 +3738,20 @@ async function getSampleTemplate(req, res, next) {
                     'OLT Port': '0/1/2',
                     'Splitter Name': 'SPL-02',
                     'Splitter Port': 'Port 2',
-                    'VLAN ID': '102',
+                    'VLAN ID': '527',
+                    'VLAN Name': '527_ACS',
+                    'GEM Index': '6',
+                    'Profile ID': '12',
+                    'Profile Name': 'KISAN_FTTH',
+                    'Services': 'internet, voice, iptv, management',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
                     'Device Type': 'ONT',
                     'Device Brand': 'Huawei',
                     'Device Model': 'HG8145V5',
                     'Device Serial Number': 'HWTC782103',
-                    'MAC Address': '74:4D:28:90:12:34',
+                    'PON Serial': 'HWTC782103',
+                    'MAC Address': '744d.2890.1234',
                     'Status': 'active',
                     'Source': 'customer_import',
                     'Notes': 'Installed via Splitter SPL-02 Port 2',
@@ -3529,11 +3785,19 @@ async function getSampleTemplate(req, res, next) {
                     'Splitter Name': 'SPL-03',
                     'Splitter Port': 'Port 1',
                     'VLAN ID': '103',
+                    'VLAN Name': '103_INTERNET',
+                    'GEM Index': '3',
+                    'Profile ID': '14',
+                    'Profile Name': 'ENT_PROFILE',
+                    'Services': 'internet, management',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
                     'Device Type': 'ONT',
                     'Device Brand': 'ZTE',
                     'Device Model': 'F670L',
                     'Device Serial Number': 'ZTEGC901234',
-                    'MAC Address': '90:00:4E:55:66:77',
+                    'PON Serial': 'ZTEGC901234',
+                    'MAC Address': '9000.4e55.6677',
                     'Status': 'active',
                     'Source': 'Direct Sale',
                     'Notes': 'Direct Enterprise Fiber Connection',
@@ -3567,11 +3831,19 @@ async function getSampleTemplate(req, res, next) {
                     'Splitter Name': 'SPL-01',
                     'Splitter Port': 'Port 1',
                     'VLAN ID': '101',
+                    'VLAN Name': '101_DEFAULT',
+                    'GEM Index': '1',
+                    'Profile ID': '10',
+                    'Profile Name': 'HOME_FIBER',
+                    'Services': 'internet, iptv',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
                     'Device Type': 'ONT',
                     'Device Brand': 'Nokia',
                     'Device Model': 'G-2425G-A',
                     'Device Serial Number': 'ALCLB892109',
-                    'MAC Address': '48:8F:5A:12:34:56',
+                    'PON Serial': 'ALCLB892109',
+                    'MAC Address': '488f.5a12.3456',
                     'Status': 'active',
                     'Source': 'CRM Lead Conversion',
                     'Notes': 'Converted from Lead #21048',
@@ -3599,9 +3871,17 @@ async function getSampleTemplate(req, res, next) {
                     'Board Type': 'GPON',
                     'Ports per Board': 16,
                     'Service Boards': '[{"slot": 1, "type": "GPON", "portCount": 16}, {"slot": 2, "type": "GPON", "portCount": 16}]',
-                    'VLANs': '101, 102, 103',
-                    'Line Profiles': 'LineProfile_100M, LineProfile_50M',
-                    'Service Profiles': 'ServiceProfile_Internet, ServiceProfile_IPTV',
+                    'VLAN ID': '527',
+                    'VLAN Name': '527_ACS',
+                    'GEM Index': '6',
+                    'VLANs': '527, 101, 102',
+                    'Profile ID': '12',
+                    'Profile Name': 'KISAN_FTTH',
+                    'Services': 'internet, voice, iptv, management',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
+                    'Line Profiles': '12:KISAN_FTTH:100M:1G',
+                    'Service Profiles': '12:KISAN_FTTH',
                     'Region': 'Bagmati',
                     'Site': 'Charikot POP',
                     'Rack': 1,
@@ -3628,9 +3908,17 @@ async function getSampleTemplate(req, res, next) {
                     'Board Type': 'GPON',
                     'Ports per Board': 16,
                     'Service Boards': '[{"slot": 1, "type": "GPON", "portCount": 16}]',
-                    'VLANs': '101, 102',
-                    'Line Profiles': 'LineProfile_100M',
-                    'Service Profiles': 'ServiceProfile_Internet',
+                    'VLAN ID': '103',
+                    'VLAN Name': '103_INTERNET',
+                    'GEM Index': '3',
+                    'VLANs': '101, 102, 103',
+                    'Profile ID': '14',
+                    'Profile Name': 'ENT_PROFILE',
+                    'Services': 'internet, management',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
+                    'Line Profiles': '14:ENT_PROFILE:100M:1G',
+                    'Service Profiles': '14:ENT_PROFILE',
                     'Region': 'Bagmati',
                     'Site': 'Khadichaur POP',
                     'Rack': 1,
@@ -3657,9 +3945,17 @@ async function getSampleTemplate(req, res, next) {
                     'Board Type': 'EPON',
                     'Ports per Board': 8,
                     'Service Boards': '[{"slot": 1, "type": "EPON", "portCount": 8}]',
+                    'VLAN ID': '101',
+                    'VLAN Name': '101_DEFAULT',
+                    'GEM Index': '1',
                     'VLANs': '101',
-                    'Line Profiles': 'LineProfile_50M',
-                    'Service Profiles': 'ServiceProfile_Internet',
+                    'Profile ID': '10',
+                    'Profile Name': 'HOME_FIBER',
+                    'Services': 'internet, iptv',
+                    'Upstream Bandwidth': '100M',
+                    'Downstream Bandwidth': '1G',
+                    'Line Profiles': '10:HOME_FIBER:50M:50M',
+                    'Service Profiles': '10:HOME_FIBER',
                     'Region': 'Bagmati',
                     'Site': 'Head Office Akar',
                     'Rack': 2,
@@ -3970,22 +4266,21 @@ async function importOlts(req, res, next) {
                     importedCount++;
                 }
 
-                // VLANs provisioning (if provided in row: "101, 102" or JSON array)
-                const vlanRaw = row.vlans || row.vlan || row.vlanId || row['VLANs'] || row['VLAN ID'] || '';
-                const vlansList = parseVlanList(vlanRaw);
-                for (const vlanNum of vlansList) {
+                // VLANs provisioning
+                const parsedOltVlans = parseOltVlans(row);
+                for (const vlanObj of parsedOltVlans) {
                     const existingVlan = await (prisma.oLTVLAN || prisma.OLTVLAN).findFirst({
-                        where: { oltId: oltRecord.id, vlanId: vlanNum }
+                        where: { oltId: oltRecord.id, vlanId: vlanObj.vlanId }
                     });
                     if (!existingVlan) {
                         await (prisma.oLTVLAN || prisma.OLTVLAN).create({
                             data: {
                                 oltId: oltRecord.id,
-                                vlanId: vlanNum,
-                                name: `VLAN ${vlanNum}`,
-                                description: `Imported VLAN for ${oltRecord.name}`,
-                                gemIndex: vlanNum,
-                                vlanType: 'standard',
+                                vlanId: vlanObj.vlanId,
+                                name: vlanObj.name,
+                                description: vlanObj.description || `Imported VLAN for ${oltRecord.name}`,
+                                gemIndex: vlanObj.gemIndex,
+                                vlanType: vlanObj.vlanType || 'standard',
                                 priority: 0,
                                 status: 'active'
                             }
@@ -3993,52 +4288,59 @@ async function importOlts(req, res, next) {
                     }
                 }
 
-                // Line & Service Profiles
-                const lineProfileRaw = (row.lineProfiles || row.lineProfile || row['Line Profiles'] || row['Line Profile'] || '').toString().trim();
-                if (lineProfileRaw) {
-                    const profiles = lineProfileRaw.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
-                    for (const prof of profiles) {
-                        const existingProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
-                            where: { oltId: oltRecord.id, type: 'line', profileId: prof }
-                        });
-                        if (!existingProf) {
-                            await (prisma.oLTProfile || prisma.OLTProfile).create({
-                                data: {
-                                    oltId: oltRecord.id,
-                                    profileId: prof,
-                                    name: prof,
-                                    type: 'line',
-                                    description: `Imported Line Profile ${prof}`,
-                                    upstreamBandwidth: '100M',
-                                    downstreamBandwidth: '100M',
-                                    tcontType: 'type4'
-                                }
-                            });
+                // Line & Service Profiles provisioning
+                const parsedProfiles = parseOltProfiles(row, parsedOltVlans.map(v => v.vlanId));
+                for (const lp of parsedProfiles.lineProfiles) {
+                    const existingProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
+                        where: {
+                            oltId: oltRecord.id,
+                            type: 'line',
+                            OR: [
+                                { profileId: lp.profileId },
+                                { name: lp.name }
+                            ]
                         }
+                    });
+                    if (!existingProf) {
+                        await (prisma.oLTProfile || prisma.OLTProfile).create({
+                            data: {
+                                oltId: oltRecord.id,
+                                profileId: lp.profileId,
+                                name: lp.name,
+                                type: 'line',
+                                description: lp.description || `Line Profile ${lp.name}`,
+                                upstreamBandwidth: lp.upstreamBandwidth || '100M',
+                                downstreamBandwidth: lp.downstreamBandwidth || '1G',
+                                tcontType: lp.tcontType || 'type4'
+                            }
+                        });
                     }
                 }
 
-                const servProfileRaw = (row.serviceProfiles || row.serviceProfile || row['Service Profiles'] || row['Service Profile'] || '').toString().trim();
-                if (servProfileRaw) {
-                    const sProfiles = servProfileRaw.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
-                    for (const sProf of sProfiles) {
-                        const existingSProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
-                            where: { oltId: oltRecord.id, type: 'service', profileId: sProf }
-                        });
-                        if (!existingSProf) {
-                            await (prisma.oLTProfile || prisma.OLTProfile).create({
-                                data: {
-                                    oltId: oltRecord.id,
-                                    profileId: sProf,
-                                    name: sProf,
-                                    type: 'service',
-                                    description: `Imported Service Profile ${sProf}`,
-                                    vlans: JSON.stringify(vlansList.length > 0 ? vlansList : [100]),
-                                    services: JSON.stringify(['internet']),
-                                    qosProfile: 'default'
-                                }
-                            });
+                for (const sp of parsedProfiles.serviceProfiles) {
+                    const existingSProf = await (prisma.oLTProfile || prisma.OLTProfile).findFirst({
+                        where: {
+                            oltId: oltRecord.id,
+                            type: 'service',
+                            OR: [
+                                { profileId: sp.profileId },
+                                { name: sp.name }
+                            ]
                         }
+                    });
+                    if (!existingSProf) {
+                        await (prisma.oLTProfile || prisma.OLTProfile).create({
+                            data: {
+                                oltId: oltRecord.id,
+                                profileId: sp.profileId,
+                                name: sp.name,
+                                type: 'service',
+                                description: sp.description || `Service Profile ${sp.name}`,
+                                vlans: JSON.stringify(sp.vlans || []),
+                                services: JSON.stringify(sp.services || ['internet', 'voice', 'iptv', 'management']),
+                                qosProfile: sp.qosProfile || 'default'
+                            }
+                        });
                     }
                 }
 
