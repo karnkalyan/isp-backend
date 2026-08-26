@@ -1225,6 +1225,64 @@ function findMatchingAddon(rawKey, addonList) {
 }
 
 /**
+ * Helper to parse a list of items from string or object
+ * Supports:
+ * - "Internet: 500, Support And Maintance: 500, Drop Wire: 0, Douplex Router: 0"
+ * - "INT: 500; SM: 500; DW: 0; DR: 0"
+ * - "INT=500, SM=500"
+ * - { INT: 500, SM: 500 }
+ */
+function parseItemsList(rawVal, allAddonCharges) {
+    const items = [];
+    if (!rawVal) return items;
+
+    if (typeof rawVal === 'object') {
+        for (const [k, v] of Object.entries(rawVal)) {
+            const matched = findMatchingAddon(k, allAddonCharges);
+            if (matched) {
+                const amt = parseFloat(v);
+                items.push({ addon: matched, amount: isNaN(amt) ? (matched.amount || 0) : amt });
+            }
+        }
+        return items;
+    }
+
+    const str = String(rawVal).trim();
+    if (!str) return items;
+
+    // Split by commas, semicolons, pipes, or newlines
+    const entries = str.split(/[\n\r,;|]+/).map(s => s.trim()).filter(Boolean);
+    for (const entry of entries) {
+        let k = '', v = '0';
+        if (entry.includes(':') || entry.includes('=')) {
+            const parts = entry.split(/[:=]+/);
+            k = parts[0]?.trim() || '';
+            v = parts.slice(1).join(':').trim();
+        } else {
+            const numMatch = entry.match(/^(.*?)\s+([\d.]+)$/);
+            if (numMatch) {
+                k = numMatch[1].trim();
+                v = numMatch[2].trim();
+            } else {
+                k = entry;
+                v = '0';
+            }
+        }
+
+        if (k) {
+            const matched = findMatchingAddon(k, allAddonCharges);
+            if (matched) {
+                const parsedAmt = parseFloat(v);
+                const finalAmt = isNaN(parsedAmt) ? (matched.amount || 0) : parsedAmt;
+                items.push({ addon: matched, amount: finalAmt });
+            }
+        }
+    }
+
+    return items;
+}
+
+/**
  * Ensure standard master OneTimeCharge items exist for Package Creation
  */
 async function ensureMasterPackageCharges(prisma, ispId) {
@@ -1498,104 +1556,124 @@ async function importPackages(req, res, next) {
                 }
             }
 
-            // Dynamically parse duration tiers from row keys
+            // Dynamically parse duration tiers from row
             const parsedDurationTiers = [];
 
-            for (const durConf of DURATIONS_CONFIG) {
-                let tierActive = true;
-                let tierOnline = false;
-                let tierHasExplicitData = false;
-                let fallbackTotal = null;
-                const tierItems = [];
+            // Case A: Check if the row has an explicit single Duration column (e.g. "Duration": "1 Month")
+            const rowDurationRaw = (row.duration || row['Duration'] || row.period || row['Period'] || row.tier || row['Tier'] || '').toString().trim();
+            if (rowDurationRaw) {
+                const matchedDurConf = DURATIONS_CONFIG.find(dc => {
+                    const normD = rowDurationRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    return dc.prefixes.some(p => normD === p.replace(/[^a-z0-9]/g, '') || normD.startsWith(p.replace(/[^a-z0-9]/g, '')));
+                }) || DURATIONS_CONFIG[0];
 
+                const tierActive = parseBooleanValue(row.enabled ?? row['Enabled'] ?? row.active ?? row['Active'] ?? row.status ?? row['Status'], true);
+                const tierOnline = parseBooleanValue(row.online ?? row['Online'] ?? row.isOnline ?? row['Is Online'], false);
+                const fallbackTotal = parseFloat(row.total || row['Total'] || row.price || row['Price'] || row.initialTotal || row['Initial Total with Tax (Rs.)'] || row['Total (Rs.)'] || row['Renew Amount with Tax (Rs.)']) || null;
+
+                // Parse items from Package Items column
+                const rawItems = row.packageItems || row['Package Items'] || row.items || row['Items'] || row.addons || row['Addon Charges'] || row['Item Charges'] || row.itemList;
+                const tierItems = parseItemsList(rawItems, allAddonCharges);
+
+                // Also check if any standalone item column exists on this row (e.g. "Internet": 500)
                 for (const [rawColKey, rawVal] of Object.entries(row)) {
                     if (rawVal === undefined || rawVal === null || rawVal === '') continue;
                     const colKey = rawColKey.trim();
-                    const colKeyLower = colKey.toLowerCase();
+                    const matchedAddon = findMatchingAddon(colKey, allAddonCharges);
+                    if (matchedAddon && !tierItems.some(ti => ti.addon.id === matchedAddon.id)) {
+                        tierItems.push({ addon: matchedAddon, amount: parseFloat(rawVal) || 0 });
+                    }
+                }
 
-                    // Find if colKey starts with any prefix for this duration
-                    let matchedPrefix = null;
-                    for (const p of durConf.prefixes) {
-                        if (colKeyLower.startsWith(p)) {
-                            const rem = colKey.slice(p.length);
-                            if (!rem || /^[\s_:-]/.test(rem)) {
-                                matchedPrefix = p;
-                                break;
+                parsedDurationTiers.push({
+                    duration: matchedDurConf.duration,
+                    active: tierActive,
+                    online: tierOnline,
+                    items: tierItems,
+                    fallbackTotal
+                });
+            } else {
+                // Case B: Multi-duration columns on a single row (1M Enabled, 1M Items, 3M Enabled, 3M Items, etc.)
+                for (const durConf of DURATIONS_CONFIG) {
+                    let tierActive = true;
+                    let tierOnline = false;
+                    let tierHasExplicitData = false;
+                    let fallbackTotal = null;
+                    const tierItems = [];
+
+                    for (const [rawColKey, rawVal] of Object.entries(row)) {
+                        if (rawVal === undefined || rawVal === null || rawVal === '') continue;
+                        const colKey = rawColKey.trim();
+                        const colKeyLower = colKey.toLowerCase();
+
+                        // Find if colKey starts with any prefix for this duration
+                        let matchedPrefix = null;
+                        for (const p of durConf.prefixes) {
+                            if (colKeyLower.startsWith(p)) {
+                                const rem = colKey.slice(p.length);
+                                if (!rem || /^[\s_:-]/.test(rem)) {
+                                    matchedPrefix = p;
+                                    break;
+                                }
                             }
+                        }
+
+                        if (!matchedPrefix) continue;
+
+                        const suffix = colKey.slice(matchedPrefix.length).replace(/^[\s_:-]+/, '').trim();
+                        const normSuffix = suffix.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                        // Enabled / Active flag
+                        if (['enabled', 'active', 'isactive', 'isenabled', 'status'].includes(normSuffix)) {
+                            tierActive = parseBooleanValue(rawVal, true);
+                            tierHasExplicitData = true;
+                            continue;
+                        }
+
+                        // Online flag
+                        if (['online', 'isonline', 'live', 'portal'].includes(normSuffix)) {
+                            tierOnline = parseBooleanValue(rawVal, false);
+                            tierHasExplicitData = true;
+                            continue;
+                        }
+
+                        // Fallback Total column
+                        if (['total', 'price', 'totalamount', 'amountwithtax'].includes(normSuffix)) {
+                            fallbackTotal = parseFloat(rawVal) || 0;
+                            tierHasExplicitData = true;
+                            continue;
+                        }
+
+                        // Items list string (e.g. "INT: 500; SM: 500; DW: 0") or JSON
+                        if (['items', 'addons', 'charges', 'itemlist', 'packageitems'].includes(normSuffix)) {
+                            tierHasExplicitData = true;
+                            const parsed = parseItemsList(rawVal, allAddonCharges);
+                            for (const itm of parsed) {
+                                if (!tierItems.some(ti => ti.addon.id === itm.addon.id)) {
+                                    tierItems.push(itm);
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Match suffix against any active OneTimeCharge item in the database
+                        const matchedAddon = findMatchingAddon(suffix, allAddonCharges);
+                        if (matchedAddon) {
+                            const amt = parseFloat(rawVal) || 0;
+                            tierItems.push({ addon: matchedAddon, amount: amt });
+                            tierHasExplicitData = true;
                         }
                     }
 
-                    if (!matchedPrefix) continue;
-
-                    const suffix = colKey.slice(matchedPrefix.length).replace(/^[\s_:-]+/, '').trim();
-                    const normSuffix = suffix.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-                    // Enabled / Active flag
-                    if (['enabled', 'active', 'isactive', 'isenabled', 'status'].includes(normSuffix)) {
-                        tierActive = parseBooleanValue(rawVal, true);
-                        tierHasExplicitData = true;
-                        continue;
+                    if (tierHasExplicitData || tierItems.length > 0 || fallbackTotal !== null) {
+                        parsedDurationTiers.push({
+                            duration: durConf.duration,
+                            active: tierActive,
+                            online: tierOnline,
+                            items: tierItems,
+                            fallbackTotal
+                        });
                     }
-
-                    // Online flag
-                    if (['online', 'isonline', 'live', 'portal'].includes(normSuffix)) {
-                        tierOnline = parseBooleanValue(rawVal, false);
-                        tierHasExplicitData = true;
-                        continue;
-                    }
-
-                    // Fallback Total column
-                    if (['total', 'price', 'totalamount', 'amountwithtax'].includes(normSuffix)) {
-                        fallbackTotal = parseFloat(rawVal) || 0;
-                        tierHasExplicitData = true;
-                        continue;
-                    }
-
-                    // Items list string (e.g. "INT: 500; SM: 500; DW: 0") or JSON
-                    if (['items', 'addons', 'charges', 'itemlist'].includes(normSuffix)) {
-                        tierHasExplicitData = true;
-                        try {
-                            if (typeof rawVal === 'object') {
-                                for (const [k, v] of Object.entries(rawVal)) {
-                                    const matched = findMatchingAddon(k, allAddonCharges);
-                                    if (matched) {
-                                        tierItems.push({ addon: matched, amount: parseFloat(v) || 0 });
-                                    }
-                                }
-                            } else if (typeof rawVal === 'string') {
-                                const parts = rawVal.split(/[;,|]+/);
-                                for (const part of parts) {
-                                    const [k, v] = part.split(/[:=]+/);
-                                    if (k && v !== undefined) {
-                                        const matched = findMatchingAddon(k.trim(), allAddonCharges);
-                                        if (matched) {
-                                            tierItems.push({ addon: matched, amount: parseFloat(v.trim()) || 0 });
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e) {}
-                        continue;
-                    }
-
-                    // Match suffix against any active OneTimeCharge item in the database
-                    const matchedAddon = findMatchingAddon(suffix, allAddonCharges);
-                    if (matchedAddon) {
-                        const amt = parseFloat(rawVal) || 0;
-                        tierItems.push({ addon: matchedAddon, amount: amt });
-                        tierHasExplicitData = true;
-                    }
-                    // If no match, it is cleanly discarded / ignored
-                }
-
-                if (tierHasExplicitData || tierItems.length > 0 || fallbackTotal !== null) {
-                    parsedDurationTiers.push({
-                        duration: durConf.duration,
-                        active: tierActive,
-                        online: tierOnline,
-                        items: tierItems,
-                        fallbackTotal
-                    });
                 }
             }
 
@@ -2874,10 +2952,10 @@ async function getSampleTemplate(req, res, next) {
             }
 
             const durations = [
-                { prefix: '1M', label: '1M', mult: 1 },
-                { prefix: '3M', label: '3M', mult: 2.8 },
-                { prefix: '6M', label: '6M', mult: 5.4 },
-                { prefix: '12M', label: '12M', mult: 10.4 }
+                { name: '1 Month', prefix: '1M', mult: 1 },
+                { name: '3 Months', prefix: '3M', mult: 2.8 },
+                { name: '6 Months', prefix: '6M', mult: 5.4 },
+                { name: '12 Months', prefix: '12M', mult: 10.4 }
             ];
 
             const samplePlans = [
@@ -2886,32 +2964,29 @@ async function getSampleTemplate(req, res, next) {
                 { planName: '25 Mbps', refName: 'Starter Fiber 25M', speed: 25 }
             ];
 
-            sampleRows = samplePlans.map((plan, pIdx) => {
-                const row = {
-                    'Plan Name': plan.planName,
-                    'Package Reference Name': plan.refName,
-                    'Speed (Mbps)': plan.speed,
-                    'NAS Type': 'mikrotik',
-                    'Connection Type': 'Fiber'
-                };
-
+            sampleRows = [];
+            for (const plan of samplePlans) {
                 durations.forEach((dur, dIdx) => {
-                    row[`${dur.prefix} Enabled`] = 'TRUE';
-                    row[`${dur.prefix} Online`] = (dIdx === 3 && pIdx === 0) ? 'TRUE' : 'FALSE';
-
-                    activeItems.forEach(item => {
-                        const colKey = `${dur.prefix} ${item.name || item.code}`;
+                    const itemsStr = activeItems.map(item => {
+                        const label = item.name || item.code;
                         if (item.isRenewal) {
                             const unitPrice = item.amount > 0 ? item.amount : Math.round(plan.speed * 5);
-                            row[colKey] = Math.round(unitPrice * dur.mult);
+                            return `${label}: ${Math.round(unitPrice * dur.mult)}`;
                         } else {
-                            row[colKey] = item.amount || 0;
+                            return `${label}: ${item.amount || 0}`;
                         }
+                    }).join(', ');
+
+                    sampleRows.push({
+                        'Plan Name': plan.planName,
+                        'Package Reference Name': plan.refName,
+                        'Duration': dur.name,
+                        'Enabled': 'TRUE',
+                        'Online': (dIdx === 3 && plan.speed === 100) ? 'TRUE' : 'FALSE',
+                        'Package Items': itemsStr
                     });
                 });
-
-                return row;
-            });
+            }
         } else if (type === 'leads') {
             filename = 'sample_leads';
             sampleRows = [
