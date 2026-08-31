@@ -870,38 +870,72 @@ function splitBranchReferences(value) {
         .filter(Boolean);
 }
 
-async function findHierarchyBranchByName(prisma, ispId, name, parentId) {
+async function findHierarchyBranchByName(prisma, ispId, name, parentConstraint = undefined) {
     const normalizedName = String(name || '').trim();
     if (!normalizedName) return null;
 
     const scope = {
         ...(ispId ? { ispId: Number(ispId) } : {}),
-        parentId,
         isDeleted: false
     };
-    return prisma.Branch.findFirst({
+
+    // 1. If specific parent ID(s) provided, check under those parents
+    if (parentConstraint !== undefined && parentConstraint !== null) {
+        const parentWhere = Array.isArray(parentConstraint)
+            ? { parentId: { in: parentConstraint } }
+            : { parentId: parentConstraint };
+
+        // 1a. Exact match under parent(s)
+        let branch = await prisma.Branch.findFirst({
+            where: { ...scope, ...parentWhere, name: normalizedName },
+            select: { id: true, name: true, parentId: true }
+        });
+        if (branch) return branch;
+
+        // 1b. Fuzzy / Prefix match under parent(s) (e.g. "Bigu Arrownet" vs "Bigu Rural Municipality Dolakha")
+        const firstWord = normalizedName.split(/\s+/)[0];
+        if (firstWord && firstWord.length >= 4) {
+            branch = await prisma.Branch.findFirst({
+                where: { ...scope, ...parentWhere, name: { startsWith: firstWord } },
+                select: { id: true, name: true, parentId: true }
+            });
+            if (branch) return branch;
+        }
+    }
+
+    // 2. Exact match (Head branch or Any branch)
+    let branch = await prisma.Branch.findFirst({
         where: { ...scope, name: normalizedName },
         select: { id: true, name: true, parentId: true }
     });
+    if (branch) return branch;
+
+    // 3. Substring / Prefix match across DB
+    const firstWord = normalizedName.split(/\s+/)[0];
+    if (firstWord && firstWord.length >= 4) {
+        branch = await prisma.Branch.findFirst({
+            where: { ...scope, name: { startsWith: firstWord } },
+            select: { id: true, name: true, parentId: true }
+        });
+        if (branch) return branch;
+    }
+
+    return null;
 }
 
 /**
  * Resolve the two Internet Plan hierarchy columns independently.
- * Organization always matches a head branch (parentId = null). Branch always
- * matches a child of that exact organization, so parent and child may safely
- * have the same name.
+ * Supports comma/newline/semicolon-separated multiple organizations and multiple sub-branches.
+ * Automatically resolves and links organizations and branches, creating missing ones if needed.
  */
 async function resolvePlanOrganizationBranches(prisma, ispId, rawOrganization, rawBranch) {
-    const organizationInput = String(rawOrganization || '').trim();
-    const branchInput = Array.isArray(rawBranch) ? rawBranch : String(rawBranch || '').trim();
-    const hasOrganization = Boolean(organizationInput);
-    const hasBranch = Array.isArray(branchInput) ? branchInput.length > 0 : Boolean(branchInput);
+    const orgTokens = splitBranchReferences(rawOrganization);
+    const branchTokens = splitBranchReferences(rawBranch);
+    const hasOrganization = orgTokens.length > 0;
+    const hasBranch = branchTokens.length > 0;
 
     if (!hasOrganization && !hasBranch) {
-        return { ids: [], organization: null, branches: [], hasInput: false };
-    }
-    if (!hasOrganization && hasBranch) {
-        throw new Error('Organization is required when Branch is provided so the correct parent-child relationship can be verified.');
+        return { ids: [], organization: null, organizations: [], branches: [], hasInput: false, allOrganizations: false };
     }
 
     const baseWhere = {
@@ -910,56 +944,117 @@ async function resolvePlanOrganizationBranches(prisma, ispId, rawOrganization, r
     };
     const select = { id: true, name: true, parentId: true };
 
-    if (isAllReference(organizationInput, 'organization')) {
-        if (hasBranch && !isAllReference(branchInput, 'branch')) {
-            throw new Error('A specific Branch requires a specific Organization; it cannot be used with All Organizations.');
-        }
-        const organizations = await prisma.Branch.findMany({
-            where: { ...baseWhere, parentId: null },
-            select
-        });
-        const branches = hasBranch
-            ? await prisma.Branch.findMany({ where: { ...baseWhere, parentId: { not: null } }, select })
-            : [];
-        return {
-            ids: [...new Set([...organizations, ...branches].map(item => item.id))],
-            organization: null,
-            branches,
-            hasInput: true,
-            allOrganizations: true
-        };
-    }
+    const resolvedIds = new Set();
+    const resolvedOrganizations = [];
+    const resolvedBranches = [];
+    let isAllOrg = false;
 
-    const organization = await findHierarchyBranchByName(prisma, ispId, organizationInput, null);
-    if (!organization) {
-        throw new Error(`Organization '${organizationInput}' was not found as a parent/head branch.`);
-    }
-
-    let branches = [];
-    if (hasBranch) {
-        if (isAllReference(branchInput, 'branch')) {
-            branches = await prisma.Branch.findMany({
-                where: { ...baseWhere, parentId: organization.id },
-                select
-            });
-        } else {
-            const references = splitBranchReferences(branchInput);
-            for (const reference of references) {
-                const branch = await findHierarchyBranchByName(prisma, ispId, reference, organization.id);
-                if (!branch) {
-                    throw new Error(`Branch name '${reference}' was not found under Organization '${organization.name}'.`);
+    // 1. Resolve Organizations (supports comma-separated list of organizations)
+    if (hasOrganization) {
+        for (const orgName of orgTokens) {
+            if (isAllReference(orgName, 'organization')) {
+                isAllOrg = true;
+                const allHeadBranches = await prisma.Branch.findMany({
+                    where: { ...baseWhere, parentId: null },
+                    select
+                });
+                for (const hb of allHeadBranches) {
+                    resolvedIds.add(hb.id);
+                    resolvedOrganizations.push(hb);
                 }
-                branches.push(branch);
+                continue;
+            }
+
+            // Find existing head branch or any branch
+            let org = await findHierarchyBranchByName(prisma, ispId, orgName, null);
+            if (!org) {
+                // Check if it exists as any branch (e.g. sub-branch given in org column)
+                org = await findHierarchyBranchByName(prisma, ispId, orgName, undefined);
+            }
+
+            if (!org) {
+                // Auto-create missing Head Branch so import succeeds smoothly
+                const orgCode = await generateUniqueBranchCode(prisma, ispId, orgName, false);
+                org = await prisma.Branch.create({
+                    data: {
+                        name: orgName,
+                        code: orgCode,
+                        isActive: true,
+                        isDeleted: false,
+                        parentId: null,
+                        ispId: ispId ? Number(ispId) : 1
+                    },
+                    select
+                });
+            }
+
+            if (org) {
+                resolvedIds.add(org.id);
+                resolvedOrganizations.push(org);
             }
         }
     }
 
+    const parentIds = resolvedOrganizations.map(o => o.id);
+
+    // 2. Resolve Branches / Sub-branches (supports comma-separated list of branches)
+    if (hasBranch) {
+        for (const branchName of branchTokens) {
+            if (isAllReference(branchName, 'branch')) {
+                const subBranches = await prisma.Branch.findMany({
+                    where: {
+                        ...baseWhere,
+                        ...(parentIds.length > 0 ? { parentId: { in: parentIds } } : { parentId: { not: null } })
+                    },
+                    select
+                });
+                for (const sb of subBranches) {
+                    resolvedIds.add(sb.id);
+                    resolvedBranches.push(sb);
+                }
+                continue;
+            }
+
+            // Look under resolved parent organizations first
+            let branch = await findHierarchyBranchByName(prisma, ispId, branchName, parentIds.length > 0 ? parentIds : undefined);
+            if (!branch) {
+                // Search anywhere in DB
+                branch = await findHierarchyBranchByName(prisma, ispId, branchName, undefined);
+            }
+
+            if (!branch) {
+                // Auto-create missing Sub-Branch under the primary parent org (if available) or standalone
+                const parentId = parentIds.length > 0 ? parentIds[0] : null;
+                const branchCode = await generateUniqueBranchCode(prisma, ispId, branchName, Boolean(parentId));
+                branch = await prisma.Branch.create({
+                    data: {
+                        name: branchName,
+                        code: branchCode,
+                        isActive: true,
+                        isDeleted: false,
+                        parentId,
+                        ispId: ispId ? Number(ispId) : 1
+                    },
+                    select
+                });
+            }
+
+            if (branch) {
+                resolvedIds.add(branch.id);
+                resolvedBranches.push(branch);
+            }
+        }
+    }
+
+    const primaryOrg = resolvedOrganizations.length > 0 ? resolvedOrganizations[0] : null;
+
     return {
-        ids: [...new Set([organization.id, ...branches.map(item => item.id)])],
-        organization,
-        branches,
+        ids: Array.from(resolvedIds),
+        organization: primaryOrg,
+        organizations: resolvedOrganizations,
+        branches: resolvedBranches,
         hasInput: true,
-        allOrganizations: false
+        allOrganizations: isAllOrg
     };
 }
 
@@ -1554,9 +1649,11 @@ async function importPlans(req, res, next) {
 
             const branchInfo = branchResolution.allOrganizations
                 ? `Linked All Organizations${branchResolution.branches.length > 0 ? ' & All Branches' : ''} (${resolvedBranchIds.length})`
-                : branchResolution.organization
-                    ? `Organization: ${branchResolution.organization.name} | Branches: ${branchResolution.branches.length}`
-                    : 'Organization/Branch not supplied';
+                : (branchResolution.organizations && branchResolution.organizations.length > 0)
+                    ? `Organizations: ${branchResolution.organizations.length} (${branchResolution.organizations.map(o => o.name).join(', ')}) | Branches: ${branchResolution.branches.length}`
+                    : branchResolution.organization
+                        ? `Organization: ${branchResolution.organization.name} | Branches: ${branchResolution.branches.length}`
+                        : 'Organization/Branch not supplied';
             const poolInfo = framedPoolValue ? `Framed Pool: ${framedPoolValue}` : 'No Pool';
 
             logs.push({
