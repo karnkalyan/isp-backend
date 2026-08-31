@@ -199,6 +199,21 @@ function extractSpeedMbps(nameOrSpeed) {
 }
 
 /**
+ * Return the first populated value from a spreadsheet/JSON row while
+ * preserving meaningful false and zero values.
+ */
+function getFirstRowValue(row, keys, fallback = undefined) {
+    for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+        const value = row[key];
+        if (value === undefined || value === null) continue;
+        if (typeof value === 'string' && value.trim() === '') continue;
+        return value;
+    }
+    return fallback;
+}
+
+/**
  * Format Mikrotik Rate Limit string
  */
 function formatMikrotikRateLimit(upMbps, downMbps, priority = 8) {
@@ -1233,7 +1248,7 @@ async function importPlans(req, res, next) {
             const planCode = rawPlanCode ? slugify(rawPlanCode) : await generateUniquePlanCode(prisma, ispId, rawPlanName);
 
             // 1. Connection Type Resolution
-            const rawConnType = (row.connectionType || row.type || row['Connection Type'] || 'Fiber').toString().trim();
+            const rawConnType = String(getFirstRowValue(row, ['connectionType', 'type', 'Connection Type'], 'Fiber')).trim();
             let connectionTypeId = defaultConnectionType.id;
 
             if (rawConnType) {
@@ -1272,32 +1287,46 @@ async function importPlans(req, res, next) {
             }
 
             // 2. Speeds & Bandwidth Parsing
-            const speedInput = row.downSpeed || row.speed || row.bandwidth || row['Download Speed (Mbps)'] || row['Speed (Mbps)'] || rawPlanName;
+            const speedInput = getFirstRowValue(
+                row,
+                ['downSpeed', 'speed', 'bandwidth', 'Download Speed (Mbps)', 'Speed (Mbps)'],
+                rawPlanName
+            );
             const downSpeed = extractSpeedMbps(speedInput);
-            const upSpeed = row.upSpeed ? extractSpeedMbps(row.upSpeed || row['Upload Speed (Mbps)']) : downSpeed;
-            const intUpload = row.intUpload !== undefined && row.intUpload !== '' ? Number(row.intUpload || row['INT Upload']) : upSpeed;
-            const firDownload = row.firDownload !== undefined && row.firDownload !== '' ? Number(row.firDownload || row['FIR Download']) : downSpeed;
-            const localUpload = row.localUpload !== undefined && row.localUpload !== '' ? Number(row.localUpload || row['Local Upload']) : upSpeed;
-            const localDownload = row.localDownload !== undefined && row.localDownload !== '' ? Number(row.localDownload || row['Local Download']) : downSpeed;
-            const dataLimit = row.dataLimit !== undefined && row.dataLimit !== '' ? Number(row.dataLimit || row['Data Limit']) : 0;
+            const upSpeedValue = getFirstRowValue(row, ['upSpeed', 'Upload Speed (Mbps)']);
+            const upSpeed = upSpeedValue !== undefined ? extractSpeedMbps(upSpeedValue) : downSpeed;
+            const intUploadValue = getFirstRowValue(row, ['intUpload', 'INT Upload']);
+            const firDownloadValue = getFirstRowValue(row, ['firDownload', 'FIR Download']);
+            const localUploadValue = getFirstRowValue(row, ['localUpload', 'Local Upload']);
+            const localDownloadValue = getFirstRowValue(row, ['localDownload', 'Local Download']);
+            const dataLimitValue = getFirstRowValue(row, ['dataLimit', 'Data Limit']);
+            const intUpload = intUploadValue !== undefined ? extractSpeedMbps(intUploadValue) : upSpeed;
+            const firDownload = firDownloadValue !== undefined ? extractSpeedMbps(firDownloadValue) : downSpeed;
+            const localUpload = localUploadValue !== undefined ? extractSpeedMbps(localUploadValue) : upSpeed;
+            const localDownload = localDownloadValue !== undefined ? extractSpeedMbps(localDownloadValue) : downSpeed;
+            const dataLimit = dataLimitValue !== undefined ? Number(dataLimitValue) || 0 : 0;
 
             // 3. Technical Parameters & Framed Pool Resolution
-            const nasType = (row.nasType || row['NAS Type'] || 'mikrotik').toString().toLowerCase();
-            const service = (row.service || row['Service'] || 'Internet').toString().trim();
-            const priority = (row.priority || row['Priority'] || '1').toString().trim();
-            const packageType = (row.packageType || row['Package Type'] || 'HOME').toString().trim().toUpperCase();
-            const description = row.description || row['Description'] || `${rawPlanName} - ${downSpeed} Mbps High Speed Internet`;
-            const allowRename = Boolean(row.allowRename || row['Allow Rename']);
-            const fupApply = row.fupApply !== undefined ? Boolean(row.fupApply || row['FUP Apply']) : true;
-            const fupLimitGb = row.fupLimitGb !== undefined && row.fupLimitGb !== '' ? Number(row.fupLimitGb || row['FUP Limit (GB)']) : 0;
-            const isFupPackage = Boolean(row.isFupPackage || row['Is FUP Package']);
-            const onlyRenewal = Boolean(row.onlyRenewal || row['Only Renewal']);
-            const isPopular = Boolean(row.isPopular || row['Popular']);
-            const highPriority = Boolean(row.highPriority || row['High Priority']);
+            const nasType = String(getFirstRowValue(row, ['nasType', 'NAS Type'], 'mikrotik')).toLowerCase();
+            const service = String(getFirstRowValue(row, ['service', 'Service', 'Service Type'], 'Internet')).trim();
+            const priority = String(getFirstRowValue(row, ['priority', 'Priority'], '1')).trim();
+            const packageType = String(getFirstRowValue(row, ['packageType', 'Package Type'], 'HOME')).trim().toUpperCase();
+            const description = String(getFirstRowValue(row, ['description', 'Description'], `${rawPlanName} - ${downSpeed} Mbps High Speed Internet`));
+            const allowRename = parseBooleanValue(getFirstRowValue(row, ['allowRename', 'Allow Rename']), false);
+            const fupApply = parseBooleanValue(getFirstRowValue(row, ['fupApply', 'FUP Apply']), true);
+            const fupLimitGb = Number(getFirstRowValue(row, ['fupLimitGb', 'FUP Limit (GB)'], 0)) || 0;
+            const isFupPackage = parseBooleanValue(getFirstRowValue(row, ['isFupPackage', 'Is FUP Package']), false);
+            const onlyRenewal = parseBooleanValue(getFirstRowValue(row, ['onlyRenewal', 'Only Renewal']), false);
+            const isPopular = parseBooleanValue(getFirstRowValue(row, ['isPopular', 'Popular']), false);
+            const highPriority = parseBooleanValue(getFirstRowValue(row, ['highPriority', 'High Priority']), false);
 
             // Resolve Framed Pool (e.g. 'Pool 2 (pool2)', 'pool2', 'Pool 2')
-            const rawApplyPool = row.applyFramedPool !== undefined ? row.applyFramedPool : (row['Apply Framed Pool'] !== undefined ? row['Apply Framed Pool'] : row.apply_framed_pool);
-            const rawPoolInput = row.framedPoolValue || row['Framed Pool Value'] || row.framedPool || row['Framed Pool'] || row.pool || row['Pool'] || row.framed_pool_value || '';
+            const rawApplyPool = getFirstRowValue(row, ['applyFramedPool', 'Apply Framed Pool', 'apply_framed_pool']);
+            const rawPoolInput = getFirstRowValue(
+                row,
+                ['framedPoolValue', 'Framed Pool Value', 'framedPool', 'Framed Pool', 'pool', 'Pool', 'framed_pool_value'],
+                ''
+            );
 
             const resolvedPool = await resolveFramedPool(prisma, targetIspId, rawPoolInput, existingRadiusPools);
             const framedPoolValue = resolvedPool.value;
@@ -1309,8 +1338,8 @@ async function importPlans(req, res, next) {
             const maxDiscountCount = row.maxDiscountCount !== undefined && row.maxDiscountCount !== '' ? Number(row.maxDiscountCount || row['Max Discount Count Per Month']) : 0;
 
             // 4. Vendor Profiles & Custom Radius Attributes
-            const vendorProfiles = parseVendorProfiles(row.vendorProfiles || row['Vendor-Specific Profiles'] || row.vendor_profiles);
-            const customRadiusAttributes = parseCustomRadiusAttributes(row.customRadiusAttributes || row['Custom Radius Attributes'] || row.custom_radius_attributes);
+            const vendorProfiles = parseVendorProfiles(getFirstRowValue(row, ['vendorProfiles', 'Vendor-Specific Profiles', 'vendor_profiles'], ''));
+            const customRadiusAttributes = parseCustomRadiusAttributes(getFirstRowValue(row, ['customRadiusAttributes', 'Custom Radius Attributes', 'custom_radius_attributes'], ''));
 
             // 5. FUP Penalty Plan Resolution
             let fupPenaltyPlanId = null;
@@ -3629,49 +3658,60 @@ async function getSampleTemplate(req, res, next) {
             filename = 'sample_speed_plans_import';
             sampleRows = [
                 {
-                    'Plan Name': '50 Mbps',
-                    'Plan Code': 'PLAN-50-MBPS',
-                    'Download Speed (Mbps)': 50,
-                    'Upload Speed (Mbps)': 50,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik',
-                    'Service Type': 'Internet',
+                    'Plan Name': '155 Mbps',
+                    'Plan Code': '155 MBPS',
+                    'Service': '155 Mbps',
+                    'NAS Type': 'cisco, juniper, mikrotik, nokia',
+                    'Priority': 1,
+                    'Package Type': 'HOME',
+                    'Connection Type': 'FTTH',
+                    'Download Speed (Mbps)': 155,
+                    'Upload Speed (Mbps)': 155,
+                    'INT Upload': 155,
+                    'FIR Download': 155,
+                    'Local Upload': 155,
+                    'Local Download': 155,
+                    'Organization': 'Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD), Yatkha (SB-YATKHA), Bahrabise (SB-BAHRABISE), Charikot (BR-CHARIKOT)',
+                    'Allow Rename': 'FALSE',
+                    'FUP Apply': 'TRUE',
+                    'Is FUP Package': 'FALSE',
+                    'Only Renewal': 'FALSE',
+                    'Popular': 'TRUE',
+                    'High Priority': 'TRUE',
                     'FUP Limit (GB)': 0,
-                    'FUP Apply': 'FALSE',
-                    'Framed Pool': 'pool-50m',
-                    'High Priority': 'FALSE',
-                    'Active': 'TRUE',
-                    'Popular': 'FALSE'
+                    'Apply Framed Pool': 'TRUE',
+                    'Framed Pool Value': 'Pool 2 (pool2)',
+                    'Vendor-Specific Profiles': 'JUNIPER:xFTTH-pp0',
+                    'Custom Radius Attributes': 'ERX-IPv6-Delegated-Pool-Name := v6-default-pd\nFramed-IPv6-Pool := v6-ndra',
+                    'Description': 'Ultra High Speed 155 Mbps FTTH Internet'
                 },
                 {
                     'Plan Name': '100 Mbps',
-                    'Plan Code': 'PLAN-100-MBPS',
+                    'Plan Code': '100 MBPS',
+                    'Service': 'Internet',
+                    'NAS Type': 'mikrotik, juniper',
+                    'Priority': 1,
+                    'Package Type': 'HOME',
+                    'Connection Type': 'Fiber',
                     'Download Speed (Mbps)': 100,
                     'Upload Speed (Mbps)': 100,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'mikrotik',
-                    'Service Type': 'Internet',
+                    'INT Upload': 100,
+                    'FIR Download': 100,
+                    'Local Upload': 100,
+                    'Local Download': 100,
+                    'Organization': 'All Branches',
+                    'Allow Rename': 'FALSE',
+                    'FUP Apply': 'TRUE',
+                    'Is FUP Package': 'FALSE',
+                    'Only Renewal': 'FALSE',
+                    'Popular': 'TRUE',
+                    'High Priority': 'FALSE',
                     'FUP Limit (GB)': 0,
-                    'FUP Apply': 'FALSE',
-                    'Framed Pool': 'pool-100m',
-                    'High Priority': 'TRUE',
-                    'Active': 'TRUE',
-                    'Popular': 'TRUE'
-                },
-                {
-                    'Plan Name': '200 Mbps',
-                    'Plan Code': 'PLAN-200-MBPS',
-                    'Download Speed (Mbps)': 200,
-                    'Upload Speed (Mbps)': 200,
-                    'Connection Type': 'Fiber',
-                    'NAS Type': 'juniper',
-                    'Service Type': 'Internet',
-                    'FUP Limit (GB)': 0,
-                    'FUP Apply': 'FALSE',
-                    'Framed Pool': 'pool-200m',
-                    'High Priority': 'TRUE',
-                    'Active': 'TRUE',
-                    'Popular': 'FALSE'
+                    'Apply Framed Pool': 'FALSE',
+                    'Framed Pool Value': '',
+                    'Vendor-Specific Profiles': '',
+                    'Custom Radius Attributes': '',
+                    'Description': 'Standard 100 Mbps Unlimited Fiber Internet'
                 }
             ];
         } else if (type === 'packages' || type === 'tariffs') {
