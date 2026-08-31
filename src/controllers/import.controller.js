@@ -852,124 +852,115 @@ async function resolveFramedPool(prisma, ispId, rawInput, poolsCache = null) {
     return { value: extractedValue, name: extractedName, apply: true };
 }
 
+function isAllReference(value, type) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (['all', 'global'].includes(normalized)) return true;
+    return type === 'organization'
+        ? /^all\s+organizations?$/.test(normalized)
+        : /^all\s+branches$/.test(normalized);
+}
+
+function splitBranchReferences(value) {
+    if (Array.isArray(value)) return value.flatMap(splitBranchReferences);
+    return String(value || '')
+        .replace(/\\n/g, '\n')
+        .split(/[\r\n,;]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+async function findHierarchyBranchByName(prisma, ispId, name, parentId) {
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName) return null;
+
+    const scope = {
+        ...(ispId ? { ispId: Number(ispId) } : {}),
+        parentId,
+        isDeleted: false
+    };
+    return prisma.Branch.findFirst({
+        where: { ...scope, name: normalizedName },
+        select: { id: true, name: true, parentId: true }
+    });
+}
+
 /**
- * Resolve Branch IDs from Organization and/or Branches input (supports plain names, codes, or combined)
- * e.g. "Arrownet Pvt Ltd", "Yatkha, Bahrabise, Charikot", "Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD)", "All Branches"
+ * Resolve the two Internet Plan hierarchy columns independently.
+ * Organization always matches a head branch (parentId = null). Branch always
+ * matches a child of that exact organization, so parent and child may safely
+ * have the same name.
  */
-async function resolveBranchIds(prisma, ispId, rawInput, branchLookupCache = null) {
-    if (!rawInput) return [];
-    if (Array.isArray(rawInput)) {
-        const ids = [];
-        for (const item of rawInput) {
-            if (item) {
-                const sub = await resolveBranchIds(prisma, ispId, item, branchLookupCache);
-                ids.push(...sub);
-            }
-        }
-        return [...new Set(ids)];
+async function resolvePlanOrganizationBranches(prisma, ispId, rawOrganization, rawBranch) {
+    const organizationInput = String(rawOrganization || '').trim();
+    const branchInput = Array.isArray(rawBranch) ? rawBranch : String(rawBranch || '').trim();
+    const hasOrganization = Boolean(organizationInput);
+    const hasBranch = Array.isArray(branchInput) ? branchInput.length > 0 : Boolean(branchInput);
+
+    if (!hasOrganization && !hasBranch) {
+        return { ids: [], organization: null, branches: [], hasInput: false };
+    }
+    if (!hasOrganization && hasBranch) {
+        throw new Error('Organization is required when Branch is provided so the correct parent-child relationship can be verified.');
     }
 
-    let inputStr = String(rawInput).trim();
-    if (!inputStr) return [];
+    const baseWhere = {
+        ...(ispId ? { ispId: Number(ispId) } : {}),
+        isDeleted: false
+    };
+    const select = { id: true, name: true, parentId: true };
 
-    inputStr = inputStr.replace(/\\n/g, '\n');
-
-    if (/^all$/i.test(inputStr) || /^all\s+branches$/i.test(inputStr) || /^all\s+organizations?$/i.test(inputStr) || /^global$/i.test(inputStr)) {
-        const allBranches = await prisma.Branch.findMany({
-            where: {
-                ...(ispId ? { ispId: Number(ispId) } : {}),
-                isDeleted: false
-            },
-            select: { id: true }
+    if (isAllReference(organizationInput, 'organization')) {
+        if (hasBranch && !isAllReference(branchInput, 'branch')) {
+            throw new Error('A specific Branch requires a specific Organization; it cannot be used with All Organizations.');
+        }
+        const organizations = await prisma.Branch.findMany({
+            where: { ...baseWhere, parentId: null },
+            select
         });
-        return allBranches.map(b => b.id);
+        const branches = hasBranch
+            ? await prisma.Branch.findMany({ where: { ...baseWhere, parentId: { not: null } }, select })
+            : [];
+        return {
+            ids: [...new Set([...organizations, ...branches].map(item => item.id))],
+            organization: null,
+            branches,
+            hasInput: true,
+            allOrganizations: true
+        };
     }
 
-    // Split on commas, semicolons, or newlines
-    const tokens = inputStr.split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
-    const resolvedIds = [];
+    const organization = await findHierarchyBranchByName(prisma, ispId, organizationInput, null);
+    if (!organization) {
+        throw new Error(`Organization '${organizationInput}' was not found as a parent/head branch.`);
+    }
 
-    for (const token of tokens) {
-        if (/^all$/i.test(token) || /^all\s+branches$/i.test(token)) {
-            const allBranches = await prisma.Branch.findMany({
-                where: {
-                    ...(ispId ? { ispId: Number(ispId) } : {}),
-                    isDeleted: false
-                },
-                select: { id: true }
+    let branches = [];
+    if (hasBranch) {
+        if (isAllReference(branchInput, 'branch')) {
+            branches = await prisma.Branch.findMany({
+                where: { ...baseWhere, parentId: organization.id },
+                select
             });
-            resolvedIds.push(...allBranches.map(b => b.id));
-            continue;
-        }
-
-        // Direct Numeric ID check
-        if (/^\d+$/.test(token)) {
-            const branchById = await prisma.Branch.findFirst({
-                where: { id: Number(token), isDeleted: false, ...(ispId ? { ispId: Number(ispId) } : {}) },
-                select: { id: true }
-            });
-            if (branchById) {
-                resolvedIds.push(branchById.id);
-                continue;
-            }
-        }
-
-        // Check if token contains a branch code in parentheses, e.g. "Yatkha (SB-YATKHA)" or "Arrownet (BR-ARROWNET)"
-        const codeMatch = token.match(/\(([A-Z0-9_-]+)\)/i);
-        const candidateCode = codeMatch ? codeMatch[1].trim() : null;
-        const cleanName = token.replace(/\([^)]*\)/g, '').trim();
-
-        let branch = null;
-
-        if (candidateCode) {
-            branch = await prisma.Branch.findFirst({
-                where: {
-                    code: candidateCode,
-                    ...(ispId ? { ispId: Number(ispId) } : {}),
-                    isDeleted: false
+        } else {
+            const references = splitBranchReferences(branchInput);
+            for (const reference of references) {
+                const branch = await findHierarchyBranchByName(prisma, ispId, reference, organization.id);
+                if (!branch) {
+                    throw new Error(`Branch name '${reference}' was not found under Organization '${organization.name}'.`);
                 }
-            });
-        }
-
-        if (!branch && cleanName) {
-            // 1. Exact name match (case insensitive in MySQL/Prisma)
-            branch = await prisma.Branch.findFirst({
-                where: {
-                    name: cleanName,
-                    ...(ispId ? { ispId: Number(ispId) } : {}),
-                    isDeleted: false
-                }
-            });
-
-            // 2. Exact code match with cleanName
-            if (!branch) {
-                branch = await prisma.Branch.findFirst({
-                    where: {
-                        code: cleanName.toUpperCase(),
-                        ...(ispId ? { ispId: Number(ispId) } : {}),
-                        isDeleted: false
-                    }
-                });
+                branches.push(branch);
             }
-
-            // 3. Partial contains match
-            if (!branch) {
-                branch = await prisma.Branch.findFirst({
-                    where: {
-                        name: { contains: cleanName },
-                        ...(ispId ? { ispId: Number(ispId) } : {}),
-                        isDeleted: false
-                    }
-                });
-            }
-        }
-
-        if (branch) {
-            resolvedIds.push(branch.id);
         }
     }
 
-    return [...new Set(resolvedIds)];
+    return {
+        ids: [...new Set([organization.id, ...branches.map(item => item.id)])],
+        organization,
+        branches,
+        hasInput: true,
+        allOrganizations: false
+    };
 }
 
 // ==========================================
@@ -1385,6 +1376,27 @@ async function importPlans(req, res, next) {
                 continue;
             }
 
+            // Resolve the two hierarchy columns before writing the plan. This
+            // prevents partially importing a plan when its parent/child
+            // relationship is invalid or ambiguous.
+            const rawOrganization = getFirstRowValue(
+                row,
+                ['organization', 'Organization', 'Organization Name', 'Head Branch', 'org'],
+                ''
+            );
+            const rawBranch = getFirstRowValue(
+                row,
+                ['branch', 'Branch', 'branches', 'Branches', 'Branch Name', 'Sub-Branches', 'Sub Branches', 'Sub-Branch', 'subBranch'],
+                ''
+            );
+            const branchResolution = await resolvePlanOrganizationBranches(
+                prisma,
+                targetIspId,
+                rawOrganization,
+                rawBranch
+            );
+            const resolvedBranchIds = branchResolution.ids;
+
             const planPayload = {
                 planName: rawPlanName,
                 planCode,
@@ -1432,20 +1444,16 @@ async function importPlans(req, res, next) {
                 });
             }
 
-            // 7. Organization & Branch Linking (PackagePlanBranch)
-            // Supports separate 'Organization' (Head Branch) and 'Branches' (Sub-Branches) columns, as well as combined formats
-            const rawOrganization = row.organization || row.Organization || row['Organization Name'] || row['Head Branch'] || row.org || '';
-            const rawBranches = row.branches || row.Branches || row.branch || row.Branch || row['Branch Name'] || row['Sub-Branches'] || row['Sub Branches'] || row['Sub-Branch'] || row.subBranch || '';
-
-            const branchInputs = [rawOrganization, rawBranches].filter(Boolean);
-            const resolvedBranchIds = await resolveBranchIds(prisma, targetIspId, branchInputs);
-
-            if (resolvedBranchIds.length > 0) {
+            // 7. Link the verified parent organization and only its verified
+            // child branch(es). Omitted columns preserve existing mappings.
+            if (branchResolution.hasInput) {
                 await prisma.PackagePlanBranch.deleteMany({ where: { packagePlanId: plan.id } });
-                await prisma.PackagePlanBranch.createMany({
-                    data: resolvedBranchIds.map(bId => ({ packagePlanId: plan.id, branchId: Number(bId) })),
-                    skipDuplicates: true
-                });
+                if (resolvedBranchIds.length > 0) {
+                    await prisma.PackagePlanBranch.createMany({
+                        data: resolvedBranchIds.map(bId => ({ packagePlanId: plan.id, branchId: Number(bId) })),
+                        skipDuplicates: true
+                    });
+                }
             }
 
             // 8. FreeRADIUS Multi-Vendor Group Configuration
@@ -1544,7 +1552,11 @@ async function importPlans(req, res, next) {
                 }
             }
 
-            const branchInfo = resolvedBranchIds.length > 0 ? `Linked ${resolvedBranchIds.length} branches` : 'All Branches (Global)';
+            const branchInfo = branchResolution.allOrganizations
+                ? `Linked All Organizations${branchResolution.branches.length > 0 ? ' & All Branches' : ''} (${resolvedBranchIds.length})`
+                : branchResolution.organization
+                    ? `Organization: ${branchResolution.organization.name} | Branches: ${branchResolution.branches.length}`
+                    : 'Organization/Branch not supplied';
             const poolInfo = framedPoolValue ? `Framed Pool: ${framedPoolValue}` : 'No Pool';
 
             logs.push({
@@ -3671,7 +3683,8 @@ async function getSampleTemplate(req, res, next) {
                     'FIR Download': 155,
                     'Local Upload': 155,
                     'Local Download': 155,
-                    'Organization': 'Arrownet Pvt Ltd (BR-ARROWNET-PVT-LTD), Yatkha (SB-YATKHA), Bahrabise (SB-BAHRABISE), Charikot (BR-CHARIKOT)',
+                    'Organization': 'ARROWNET Pvt. Ltd.',
+                    'Branch': 'ARROWNET Pvt. Ltd.',
                     'Allow Rename': 'FALSE',
                     'FUP Apply': 'TRUE',
                     'Is FUP Package': 'FALSE',
@@ -3699,7 +3712,8 @@ async function getSampleTemplate(req, res, next) {
                     'FIR Download': 100,
                     'Local Upload': 100,
                     'Local Download': 100,
-                    'Organization': 'All Branches',
+                    'Organization': 'ARROWNET Pvt. Ltd.',
+                    'Branch': 'Arrownet RTC',
                     'Allow Rename': 'FALSE',
                     'FUP Apply': 'TRUE',
                     'Is FUP Package': 'FALSE',
