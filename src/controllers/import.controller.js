@@ -3094,10 +3094,10 @@ async function importCustomers(req, res, next) {
                         ...(ispId ? { ispId } : {}),
                         isDeleted: false
                     },
-                    include: { customer: true }
+                    include: { customers: true }
                 });
-                if (candidateLead?.customer) {
-                    existingCustomer = candidateLead.customer;
+                if (candidateLead && candidateLead.customers && candidateLead.customers.length > 0) {
+                    existingCustomer = candidateLead.customers[0];
                     lead = candidateLead;
                 }
             }
