@@ -535,12 +535,18 @@ function extractIspIdFromReq(req) {
   const token = req.cookies?.access_token || (authHeader && authHeader.startsWith('Bearer ')
     ? authHeader.slice(7).trim()
     : null);
-  if (token && process.env.ACCESS_SECRET) {
+  if (token) {
     try {
-      const decoded = jwt.verify(token, process.env.ACCESS_SECRET);
-      if (decoded?.ispId) return Number(decoded.ispId);
+      if (process.env.ACCESS_SECRET) {
+        const decoded = jwt.verify(token, process.env.ACCESS_SECRET);
+        if (decoded?.ispId) return Number(decoded.ispId);
+      }
     } catch {
-      // Authentication middleware will reject an invalid token later.
+      // Decode payload even if access token is expired so licenseGuard checks the genuine tenant
+      const unverified = jwt.decode(token);
+      if (unverified && typeof unverified === 'object' && unverified.ispId) {
+        return Number(unverified.ispId);
+      }
     }
   }
 

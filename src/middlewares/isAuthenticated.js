@@ -28,7 +28,7 @@ module.exports = (prisma) => {
       payload = jwt.verify(token, ACCESS_SECRET);
     } catch (err) {
       console.error('JWT verification failed:', err.message);
-      return res.status(403).json({ error: 'Unauthorized: Invalid token' });
+      return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
     }
 
     // 3) Load user + role + permissions (MINIMAL & CORRECT)

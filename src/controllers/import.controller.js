@@ -631,18 +631,30 @@ function parseOltProfiles(row, defaultVlans = []) {
 
 /**
  * Parse Vendor-Specific Profiles from JSON or String
- * e.g. [{"vendor":"JUNIPER","profile":"xFTTH-pp0"}] or "JUNIPER:xFTTH-pp0; NOKIA:profile1"
+ * e.g. [{"vendor":"juniper","profile":"xFTTH-pp0"}] or "JUNIPER:xFTTH-pp0; NOKIA:profile1"
  */
 function parseVendorProfiles(input) {
     if (!input) return [];
-    if (Array.isArray(input)) return input;
-    if (typeof input === 'object') return [input];
+    if (Array.isArray(input)) {
+        return input.map(item => {
+            if (typeof item === 'object' && item && item.vendor && item.profile) {
+                return { vendor: String(item.vendor).toLowerCase().trim(), profile: String(item.profile).trim() };
+            }
+            return null;
+        }).filter(Boolean);
+    }
+    if (typeof input === 'object') {
+        if (input.vendor && input.profile) {
+            return [{ vendor: String(input.vendor).toLowerCase().trim(), profile: String(input.profile).trim() }];
+        }
+        return [];
+    }
 
     const str = String(input).trim();
     if (str.startsWith('[') || str.startsWith('{')) {
         try {
             const parsed = JSON.parse(str);
-            return Array.isArray(parsed) ? parsed : [parsed];
+            return parseVendorProfiles(parsed);
         } catch (e) {}
     }
 
@@ -651,9 +663,9 @@ function parseVendorProfiles(input) {
     for (const item of items) {
         const parts = item.split(/[:=]/).map(s => s.trim());
         if (parts.length >= 2) {
-            profiles.push({ vendor: parts[0], profile: parts[1] });
+            profiles.push({ vendor: parts[0].toLowerCase(), profile: parts[1] });
         } else if (parts.length === 1 && parts[0]) {
-            profiles.push({ vendor: 'JUNIPER', profile: parts[0] });
+            profiles.push({ vendor: 'juniper', profile: parts[0] });
         }
     }
     return profiles;
@@ -1393,7 +1405,10 @@ async function importPlans(req, res, next) {
             const dataLimit = dataLimitValue !== undefined ? Number(dataLimitValue) || 0 : 0;
 
             // 3. Technical Parameters & Framed Pool Resolution
-            const nasType = String(getFirstRowValue(row, ['nasType', 'NAS Type'], 'mikrotik')).toLowerCase();
+            const rawNasType = String(getFirstRowValue(row, ['nasType', 'NAS Type'], 'mikrotik')).toLowerCase();
+            const rawNasList = rawNasType.split(/[,;\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+            if (rawNasList.length === 0) rawNasList.push('mikrotik');
+
             const service = String(getFirstRowValue(row, ['service', 'Service', 'Service Type'], 'Internet')).trim();
             const priority = String(getFirstRowValue(row, ['priority', 'Priority'], '1')).trim();
             const packageType = String(getFirstRowValue(row, ['packageType', 'Package Type'], 'HOME')).trim().toUpperCase();
@@ -1424,8 +1439,24 @@ async function importPlans(req, res, next) {
             const maxDiscountCount = row.maxDiscountCount !== undefined && row.maxDiscountCount !== '' ? Number(row.maxDiscountCount || row['Max Discount Count Per Month']) : 0;
 
             // 4. Vendor Profiles & Custom Radius Attributes
-            const vendorProfiles = parseVendorProfiles(getFirstRowValue(row, ['vendorProfiles', 'Vendor-Specific Profiles', 'vendor_profiles'], ''));
+            let vendorProfiles = parseVendorProfiles(getFirstRowValue(row, ['vendorProfiles', 'Vendor-Specific Profiles', 'vendor_profiles'], ''));
             const customRadiusAttributes = parseCustomRadiusAttributes(getFirstRowValue(row, ['customRadiusAttributes', 'Custom Radius Attributes', 'custom_radius_attributes'], ''));
+
+            // Auto-populate / sync vendor profiles and NAS list so all selected vendors (e.g. mikrotik, juniper) are preserved
+            const nasSet = new Set(rawNasList);
+            for (const vp of vendorProfiles) {
+                if (vp.vendor) nasSet.add(vp.vendor.toLowerCase());
+            }
+            if (nasSet.has('juniper') && !vendorProfiles.some(vp => vp.vendor === 'juniper')) {
+                vendorProfiles.push({ vendor: 'juniper', profile: 'xFTTH-pp0' });
+            }
+            if (nasSet.has('nokia') && !vendorProfiles.some(vp => vp.vendor === 'nokia')) {
+                vendorProfiles.push({ vendor: 'nokia', profile: `pkg-${downSpeed || 0}mbps` });
+            }
+            if (nasSet.has('cisco') && !vendorProfiles.some(vp => vp.vendor === 'cisco')) {
+                vendorProfiles.push({ vendor: 'cisco', profile: 'cisco-default' });
+            }
+            const cleanNasType = Array.from(nasSet).join(',');
 
             // 5. FUP Penalty Plan Resolution
             let fupPenaltyPlanId = null;
@@ -1504,7 +1535,7 @@ async function importPlans(req, res, next) {
                 localDownload,
                 dataLimit,
                 service,
-                nasType,
+                nasType: cleanNasType,
                 priority,
                 packageType,
                 allowRename,
@@ -1562,7 +1593,7 @@ async function importPlans(req, res, next) {
                         value: 'Accept'
                     }).catch(() => null);
 
-                    const nasList = (nasType || '').split(',').map(s => s.trim().toLowerCase());
+                    const nasList = (cleanNasType || '').split(',').map(s => s.trim().toLowerCase());
                     const replyAttributes = [];
 
                     // MikroTik

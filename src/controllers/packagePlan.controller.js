@@ -68,11 +68,23 @@ async function generateRadiusAttributes(plan) {
 
   // 1. MikroTik logic (Standard attribute)
   if (nasList.includes('mikrotik')) {
-    replyAttrs.push({
-      attribute: 'Mikrotik-Rate-Limit',
-      op: ':=',
-      value: formatMikrotikRateLimit(plan, upMbps, downMbps)
-    });
+    replyAttrs.push(
+      {
+        attribute: 'Mikrotik-Rate-Limit',
+        op: ':=',
+        value: formatMikrotikRateLimit(plan, upMbps, downMbps)
+      },
+      {
+        attribute: 'Framed-Protocol',
+        op: ':=',
+        value: 'PPP'
+      },
+      {
+        attribute: 'Service-Type',
+        op: ':=',
+        value: 'Framed-User'
+      }
+    );
   }
 
   // 2. Generic / Multi-vendor Dynamic Profiles
