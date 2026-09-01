@@ -2,7 +2,7 @@ const xlsx = require('xlsx');
 const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
-const { computeExpiryFromBase, atPlanBoundary } = require('../utils/dateHelper');
+const { computeExpiryFromBase, atPlanBoundary, parseAnyDate } = require('../utils/dateHelper');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 
 /**
@@ -2922,29 +2922,110 @@ async function importCustomers(req, res, next) {
                 customerTypeId = customerTypeCache.get(tKey);
             }
 
+            const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
             const pkgName = (row.packageName || row.package || row.plan || row.planName || row['Package Name'] || row['Plan Name'] || row['Internet Plan'] || row.planCode || '').toString().trim();
             let packagePrice = null;
 
             if (pkgName) {
-                const pKey = pkgName.toLowerCase();
+                const pKey = `${pkgName}_${durationStr}`.toLowerCase();
                 if (packageCache.has(pKey)) {
                     packagePrice = packageCache.get(pKey);
                 } else {
-                    packagePrice = await prisma.PackagePrice.findFirst({
-                        where: {
-                            OR: [
-                                { packageName: { contains: pkgName } },
-                                { referenceId: { contains: pkgName } },
-                                { packagePlanDetails: { planName: { contains: pkgName } } },
-                                { packagePlanDetails: { planCode: { contains: pkgName } } }
-                            ],
-                            ...(ispId ? { ispId } : {}),
-                            isDeleted: false
-                        },
-                        include: {
-                            packagePlanDetails: true
+                    // 1. Try matching with duration
+                    if (durationStr) {
+                        packagePrice = await prisma.PackagePrice.findFirst({
+                            where: {
+                                OR: [
+                                    { packageName: { contains: pkgName } },
+                                    { referenceId: { contains: pkgName } },
+                                    { packagePlanDetails: { planName: { contains: pkgName } } },
+                                    { packagePlanDetails: { planCode: { contains: pkgName } } }
+                                ],
+                                packageDuration: { contains: durationStr },
+                                ...(ispId ? { ispId } : {}),
+                                isDeleted: false
+                            },
+                            include: {
+                                packagePlanDetails: true
+                            }
+                        });
+                    }
+
+                    // 2. Fallback matching without duration
+                    if (!packagePrice) {
+                        packagePrice = await prisma.PackagePrice.findFirst({
+                            where: {
+                                OR: [
+                                    { packageName: { contains: pkgName } },
+                                    { referenceId: { contains: pkgName } },
+                                    { packagePlanDetails: { planName: { contains: pkgName } } },
+                                    { packagePlanDetails: { planCode: { contains: pkgName } } }
+                                ],
+                                ...(ispId ? { ispId } : {}),
+                                isDeleted: false
+                            },
+                            include: {
+                                packagePlanDetails: true
+                            }
+                        });
+                    }
+
+                    // 3. Auto-create Plan & PackagePrice if missing so exact package & duration are created
+                    if (!packagePrice) {
+                        let plan = await prisma.PackagePlan.findFirst({
+                            where: {
+                                OR: [
+                                    { planName: { contains: pkgName } },
+                                    { planCode: { contains: pkgName } }
+                                ],
+                                ...(ispId ? { ispId } : {}),
+                                isDeleted: false
+                            }
+                        });
+
+                        if (!plan) {
+                            const planCode = slugify(pkgName).replace(/[^A-Z0-9]/g, '').substring(0, 16) || `PLAN${Date.now()}`;
+                            const speedMbps = extractSpeedMbps(pkgName) || 100;
+                            plan = await prisma.PackagePlan.create({
+                                data: {
+                                    planName: pkgName,
+                                    planCode,
+                                    serviceType: (row.serviceType || 'fiber').toString().trim().toLowerCase(),
+                                    downloadSpeed: `${speedMbps} Mbps`,
+                                    uploadSpeed: `${speedMbps} Mbps`,
+                                    volume: 'Unlimited',
+                                    validity: durationStr || '1 Month',
+                                    nasType: (row.nas || 'juniper').toString().trim().toLowerCase(),
+                                    isActive: true,
+                                    isDeleted: false,
+                                    ispId: ispId || 1
+                                }
+                            });
                         }
-                    });
+
+                        const baseRefId = `INT-${slugify(plan.planCode)}${slugify(durationStr)}`.replace(/[^A-Z0-9]/g, '');
+                        const finalRefId = await generateUniqueReferenceId(prisma, baseRefId);
+                        const rawPrice = parseFloat(row.price || row.packagePrice || row.amount || row['Package Price'] || row['Price'] || 0);
+
+                        packagePrice = await prisma.PackagePrice.create({
+                            data: {
+                                planId: plan.id,
+                                packageName: `${plan.planName} - ${durationStr}`,
+                                packageDuration: durationStr,
+                                price: rawPrice,
+                                initialTotalWithTax: rawPrice ? Math.round(rawPrice * 1.13 * 100) / 100 : 0,
+                                renewAmountWithTax: rawPrice ? Math.round(rawPrice * 1.13 * 100) / 100 : 0,
+                                referenceId: finalRefId,
+                                isActive: true,
+                                isDeleted: false,
+                                ispId: ispId || 1
+                            },
+                            include: {
+                                packagePlanDetails: true
+                            }
+                        });
+                    }
+
                     packageCache.set(pKey, packagePrice);
                 }
             }
@@ -2984,10 +3065,41 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            if (!existingCustomer && panNo) {
-                existingCustomer = await prisma.Customer.findUnique({
-                    where: { panNo }
+            const rawCustomId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row['Customer Id'] || '').toString().trim();
+            if (!existingCustomer && rawCustomId) {
+                existingCustomer = await prisma.Customer.findFirst({
+                    where: { customerUniqueId: rawCustomId, ...(ispId ? { ispId } : {}) }
                 });
+            }
+
+            if (!existingCustomer && panNo) {
+                existingCustomer = await prisma.Customer.findFirst({
+                    where: { panNo, ...(ispId ? { ispId } : {}) }
+                });
+            }
+
+            if (!existingCustomer && idNumber && !idNumber.startsWith('ID-')) {
+                existingCustomer = await prisma.Customer.findFirst({
+                    where: { idNumber, ...(ispId ? { ispId } : {}) }
+                });
+            }
+
+            if (!existingCustomer && (cleanEmail || phone)) {
+                const candidateLead = await prisma.Lead.findFirst({
+                    where: {
+                        OR: [
+                            ...(cleanEmail ? [{ email: cleanEmail }] : []),
+                            ...(phone ? [{ phoneNumber: phone }] : [])
+                        ],
+                        ...(ispId ? { ispId } : {}),
+                        isDeleted: false
+                    },
+                    include: { customer: true }
+                });
+                if (candidateLead?.customer) {
+                    existingCustomer = candidateLead.customer;
+                    lead = candidateLead;
+                }
             }
 
             if (existingCustomer) {
@@ -3000,6 +3112,9 @@ async function importCustomers(req, res, next) {
                     });
                     skippedCount++;
                     continue;
+                }
+                if (!lead && existingCustomer.leadId) {
+                    lead = await prisma.Lead.findUnique({ where: { id: existingCustomer.leadId } });
                 }
             }
 
@@ -3031,6 +3146,9 @@ async function importCustomers(req, res, next) {
                 }
             }
 
+            const rawRegisteredOn = row['Registered on'] || row['Registration Date'] || row.registeredOn || row.createdAt || row['Created At'];
+            const registeredAt = parseAnyDate(rawRegisteredOn);
+
             const addressVal = (row.address || row['Address'] || '').toString().trim() || null;
             const streetVal = (row.street || row['Street'] || '').toString().trim() || null;
             const cityVal = (row.district || row.city || row['District'] || row['City'] || '').toString().trim() || null;
@@ -3053,7 +3171,7 @@ async function importCustomers(req, res, next) {
                         province: provinceVal,
                         status: 'converted',
                         convertedToCustomer: true,
-                        convertedAt: new Date(),
+                        convertedAt: registeredAt || new Date(),
                         convertedById: req.user?.id || null,
                         branchId: branchId || null,
                         subBranchId: subBranchId || null,
@@ -3062,22 +3180,29 @@ async function importCustomers(req, res, next) {
                         notes: notesVal,
                         interestedPackageId: packagePrice ? packagePrice.id : null,
                         isActive: true,
-                        isDeleted: false
+                        isDeleted: false,
+                        createdAt: registeredAt || new Date()
                     }
                 });
             } else {
                 await prisma.Lead.update({
                     where: { id: lead.id },
                     data: {
+                        firstName: firstName || lead.firstName,
+                        middleName: middleName !== undefined ? middleName : lead.middleName,
+                        lastName: lastName || lead.lastName,
+                        email: cleanEmail || lead.email,
+                        phoneNumber: phone || lead.phoneNumber,
                         status: 'converted',
                         convertedToCustomer: true,
-                        convertedAt: lead.convertedAt || new Date(),
+                        convertedAt: lead.convertedAt || registeredAt || new Date(),
                         convertedById: lead.convertedById || req.user?.id || null,
                         secondaryContactNumber: altPhone || lead.secondaryContactNumber,
                         address: addressVal || lead.address,
                         district: cityVal || lead.district,
                         province: provinceVal || lead.province,
-                        interestedPackageId: packagePrice ? packagePrice.id : lead.interestedPackageId
+                        interestedPackageId: packagePrice ? packagePrice.id : lead.interestedPackageId,
+                        ...(registeredAt ? { createdAt: registeredAt } : {})
                     }
                 });
             }
@@ -3098,7 +3223,8 @@ async function importCustomers(req, res, next) {
                         onboardStatus: (row.onboardStatus || row['Onboard Status'] || 'fully_onboarded').toString().trim().toLowerCase(),
                         isRechargeable: row.isRechargeable !== undefined ? Boolean(row.isRechargeable) : true,
                         isFree: Boolean(row.isFree),
-                        ispId: ispId || 1
+                        ispId: ispId || 1,
+                        createdAt: registeredAt || new Date()
                     }
                 });
 
@@ -3127,6 +3253,9 @@ async function importCustomers(req, res, next) {
                         customerTypeId: customerTypeId || customer.customerTypeId,
                         status: (row.status || customer.status).toString().trim().toLowerCase(),
                         onboardStatus: 'fully_onboarded',
+                        ...(panNo ? { panNo } : {}),
+                        ...(idNumber && !idNumber.startsWith('ID-') ? { idNumber } : {}),
+                        ...(registeredAt ? { createdAt: registeredAt } : {}),
                         updatedAt: new Date()
                     }
                 });
@@ -3242,12 +3371,14 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
-            const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'];
-            const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'];
+            const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'] || row['Plan Start'] || row['Start Date'];
+            const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'] || row['Plan End'] || row['End Date'];
 
-            const planStart = rawPlanStart ? atPlanBoundary(new Date(rawPlanStart)) : atPlanBoundary(new Date());
-            let planEnd = rawPlanEnd ? atPlanBoundary(new Date(rawPlanEnd)) : computeExpiryFromBase(planStart, durationStr);
+            const parsedPlanStart = parseAnyDate(rawPlanStart);
+            const parsedPlanEnd = parseAnyDate(rawPlanEnd);
+
+            const planStart = parsedPlanStart ? atPlanBoundary(parsedPlanStart) : atPlanBoundary(new Date());
+            let planEnd = parsedPlanEnd ? atPlanBoundary(parsedPlanEnd) : computeExpiryFromBase(planStart, durationStr);
 
             if (isNaN(planEnd.getTime())) {
                 planEnd = computeExpiryFromBase(planStart, '1 Month');
@@ -3259,6 +3390,8 @@ async function importCustomers(req, res, next) {
                     where: { customerId: customer.id }
                 });
 
+                const isCustomerActive = (row.status || customer.status).toString().trim().toLowerCase() === 'active';
+
                 if (subscription) {
                     subscription = await prisma.CustomerSubscription.update({
                         where: { id: subscription.id },
@@ -3266,7 +3399,7 @@ async function importCustomers(req, res, next) {
                             package: packagePrice.id,
                             planStart,
                             planEnd,
-                            isActive: true,
+                            isActive: isCustomerActive,
                             isTrial: false,
                             isInvoicing: true,
                             updatedAt: new Date()
@@ -3279,7 +3412,7 @@ async function importCustomers(req, res, next) {
                             package: packagePrice.id,
                             planStart,
                             planEnd,
-                            isActive: true,
+                            isActive: isCustomerActive,
                             isTrial: false,
                             isInvoicing: true
                         }
@@ -3288,29 +3421,60 @@ async function importCustomers(req, res, next) {
 
                 try {
                     const orderTotal = packagePrice.initialTotalWithTax || packagePrice.price || 0;
-                    const order = await prisma.CustomerOrderManagement.create({
-                        data: {
-                            customerId: customer.id,
-                            subscriptionId: subscription.id,
-                            package: packagePrice.id,
-                            orderDate: new Date(),
-                            packageStart: planStart,
-                            packageEnd: planEnd,
-                            totalAmount: orderTotal,
-                            isPaid: true,
-                            isActive: true,
-                            isDeleted: false
-                        }
+                    const existingOrder = await prisma.CustomerOrderManagement.findFirst({
+                        where: { customerId: customer.id, subscriptionId: subscription.id, isDeleted: false },
+                        orderBy: { id: 'desc' }
                     });
 
-                    await prisma.OrderDetail.create({
-                        data: {
-                            orderId: order.id,
-                            itemName: packagePrice.packageName || 'Internet Subscription',
-                            referenceId: packagePrice.referenceId || null,
-                            itemPrice: packagePrice.price || 0
+                    if (existingOrder) {
+                        await prisma.CustomerOrderManagement.update({
+                            where: { id: existingOrder.id },
+                            data: {
+                                package: packagePrice.id,
+                                packageStart: planStart,
+                                packageEnd: planEnd,
+                                totalAmount: orderTotal,
+                                updatedAt: new Date()
+                            }
+                        });
+                        const existingDetail = await prisma.OrderDetail.findFirst({
+                            where: { orderId: existingOrder.id }
+                        });
+                        if (existingDetail) {
+                            await prisma.OrderDetail.update({
+                                where: { id: existingDetail.id },
+                                data: {
+                                    itemName: packagePrice.packageName || 'Internet Subscription',
+                                    referenceId: packagePrice.referenceId || null,
+                                    itemPrice: packagePrice.price || 0
+                                }
+                            });
                         }
-                    });
+                    } else {
+                        const order = await prisma.CustomerOrderManagement.create({
+                            data: {
+                                customerId: customer.id,
+                                subscriptionId: subscription.id,
+                                package: packagePrice.id,
+                                orderDate: new Date(),
+                                packageStart: planStart,
+                                packageEnd: planEnd,
+                                totalAmount: orderTotal,
+                                isPaid: true,
+                                isActive: true,
+                                isDeleted: false
+                            }
+                        });
+
+                        await prisma.OrderDetail.create({
+                            data: {
+                                orderId: order.id,
+                                itemName: packagePrice.packageName || 'Internet Subscription',
+                                referenceId: packagePrice.referenceId || null,
+                                itemPrice: packagePrice.price || 0
+                            }
+                        });
+                    }
                 } catch (ordErr) {
                     console.warn(`[CUSTOMER IMPORT] Order record note for row ${rowNumber}:`, ordErr.message);
                 }

@@ -2,8 +2,104 @@
  * Date Helper Utility
  */
 
+/**
+ * Robust date parser supporting:
+ * - Date objects
+ * - Excel date serial numbers (integers e.g. 46115, float timestamps)
+ * - UNIX timestamps (in ms or seconds)
+ * - Date strings: YYYY-MM-DD, DD-MM-YYYY, MM-DD-YYYY, M/D/YY, D/M/YY
+ * - ISO strings, text date formats
+ * - Nepali BS dates if applicable
+ */
+function parseAnyDate(val) {
+  if (val === undefined || val === null || val === '') return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+
+  // 1. Numeric Excel Serial (e.g. 46115, '46115')
+  const num = Number(val);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    // Excel serial to JS date: 25569 is days between 1900-01-01 and 1970-01-01
+    const utcDays = num - 25569;
+    const utcValue = utcDays * 86400;
+    const dateInfo = new Date(utcValue * 1000);
+    const fractionalDay = num - Math.floor(num) + 0.0000001;
+    const totalSeconds = Math.floor(86400 * fractionalDay);
+    const seconds = totalSeconds % 60;
+    const hours = Math.floor(totalSeconds / (60 * 60));
+    const minutes = Math.floor(totalSeconds / 60) % 60;
+    return new Date(Date.UTC(dateInfo.getUTCFullYear(), dateInfo.getUTCMonth(), dateInfo.getUTCDate(), hours, minutes, seconds));
+  }
+
+  if (!isNaN(num) && num >= 1000000000000) { // millisecond timestamp
+    const d = new Date(num);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (!isNaN(num) && num >= 1000000000 && num < 1000000000000) { // second timestamp
+    const d = new Date(num * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const s = String(val).trim();
+  if (!s) return null;
+
+  // 2. Custom Regex Matching for D/M/Y, M/D/Y, Y/M/D with 2 or 4 digit years
+  const match = s.match(/^(\d{1,4})[-/.\s](\d{1,2})[-/.\s](\d{1,4})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+  if (match) {
+    let [, p1, p2, p3, hh, mm, ss] = match;
+    let v1 = parseInt(p1, 10);
+    let v2 = parseInt(p2, 10);
+    let v3 = parseInt(p3, 10);
+    let hour = hh ? parseInt(hh, 10) : 0;
+    let minute = mm ? parseInt(mm, 10) : 0;
+    let second = ss ? parseInt(ss, 10) : 0;
+
+    let year, month, day;
+
+    if (v1 > 1000) {
+      // YYYY-MM-DD
+      year = v1;
+      month = v2 - 1;
+      day = v3;
+    } else if (v3 > 1000 || (p3.length === 2 || v3 < 100)) {
+      year = v3 < 100 ? (v3 < 50 ? 2000 + v3 : 1900 + v3) : v3;
+      if (v1 > 12 && v2 <= 12) {
+        // DD/MM/YYYY
+        day = v1;
+        month = v2 - 1;
+      } else if (v2 > 12 && v1 <= 12) {
+        // MM/DD/YYYY
+        month = v1 - 1;
+        day = v2;
+      } else {
+        // Default to MM/DD/YYYY (standard US / Excel export)
+        month = v1 - 1;
+        day = v2;
+      }
+    } else {
+      year = v3;
+      month = v1 - 1;
+      day = v2;
+    }
+
+    const res = new Date(Date.UTC(year, month, day, hour, minute, second));
+    if (!isNaN(res.getTime())) return res;
+  }
+
+  // 3. Fallback standard Date
+  const standardDate = new Date(s);
+  if (!isNaN(standardDate.getTime())) {
+    if (standardDate.getFullYear() < 1970 && standardDate.getFullYear() >= 1900) {
+      standardDate.setFullYear(standardDate.getFullYear() + 100);
+    }
+    return standardDate;
+  }
+
+  return null;
+}
+
 function setNepalMidnight(dateInput) {
-  const d = dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput || Date.now());
+  const parsed = parseAnyDate(dateInput);
+  const d = parsed || (dateInput instanceof Date ? new Date(dateInput) : new Date(dateInput || Date.now()));
   if (isNaN(d.getTime())) return d;
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kathmandu',
@@ -173,6 +269,7 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
 }
 
 module.exports = {
+  parseAnyDate,
   computeExpiryFromBase,
   convertToNepaliDate,
   atPlanBoundary,
