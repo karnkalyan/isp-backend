@@ -2905,8 +2905,7 @@ async function importCustomers(req, res, next) {
                 if (!customerTypeCache.has(tKey)) {
                     let ct = await prisma.CustomerType.findFirst({
                         where: {
-                            name: { contains: typeName },
-                            isDeleted: false
+                            name: { contains: typeName }
                         }
                     });
                     if (!ct) {
