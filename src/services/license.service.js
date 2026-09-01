@@ -559,6 +559,24 @@ function licenseGuard(prisma) {
       return next();
     }
 
+    // If client supplied an access token, check if it's expired or invalid.
+    // If expired, let the authentication middleware handle it and return 401 Unauthorized
+    // so that the frontend can seamlessly refresh the access token via /auth/refresh!
+    const authHeader = req.headers.authorization;
+    const token = req.cookies?.access_token || (authHeader && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null);
+
+    if (token && process.env.ACCESS_SECRET) {
+      try {
+        jwt.verify(token, process.env.ACCESS_SECRET);
+      } catch (err) {
+        if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
+          return next();
+        }
+      }
+    }
+
     const ispId = extractIspIdFromReq(req);
     req.ispId = ispId;
 
