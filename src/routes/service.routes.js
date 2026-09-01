@@ -8,6 +8,11 @@ module.exports = (prisma) => {
     const router = express.Router();
     const serviceController = new ServiceController(prisma);
 
+    // Public Webhooks for FreeRADIUS (rlm_rest / auth hooks)
+    router.post('/radius/auth-hook', serviceController.handleRadiusAuthHook.bind(serviceController));
+    router.post('/radius/authorize', serviceController.handleRadiusAuthHook.bind(serviceController));
+    router.post('/radius/post-auth', serviceController.handleRadiusAuthHook.bind(serviceController));
+
     // Apply isAuthenticated middleware
     router.use(isAuthenticated(prisma));
 
@@ -112,6 +117,8 @@ module.exports = (prisma) => {
     router.get('/radius/stats', checkPermission('services_read'), serviceController.getRadiusStats.bind(serviceController));
     router.post('/radius/users/:username/coa', checkPermission('services_manage'), serviceController.sendRadiusCoA.bind(serviceController));
     router.post('/radius/test-auth', checkPermission('services_test'), serviceController.testRadiusAuth.bind(serviceController));
+    router.post('/radius/auto-sync-passwords', checkPermission('services_manage'), serviceController.syncAutoRadiusPasswords.bind(serviceController));
+    router.get('/radius/auto-sync-status', checkPermission('services_read'), serviceController.getRadiusAutoPasswordStatus.bind(serviceController));
 
     // eSewa Operations
     router.post('/esewa/payment', checkPermission('services_manage'), serviceController.processEsewaPayment.bind(serviceController));

@@ -5303,6 +5303,51 @@ class ServiceController {
     }
   }
 
+  // ==================== RADIUS AUTO-PASSWORD SYNC & WEBHOOKS ====================
+  async syncAutoRadiusPasswords(req, res) {
+    try {
+      const ispId = req.ispId || 1;
+      const { syncRejectedDialInPasswords } = require('../services/radiusAutoPassword.service');
+      const result = await syncRejectedDialInPasswords(ispId, req.prisma || prisma);
+      return res.json(result);
+    } catch (error) {
+      console.error('Error syncing auto RADIUS passwords:', error);
+      return res.status(500).json({ success: false, error: 'Failed to sync RADIUS passwords', message: error.message });
+    }
+  }
+
+  async getRadiusAutoPasswordStatus(req, res) {
+    try {
+      const ispId = req.ispId || 1;
+      const { isAutoRadiusPasswordEnabled } = require('../services/radiusAutoPassword.service');
+      const enabled = await isAutoRadiusPasswordEnabled(ispId, req.prisma || prisma);
+      return res.json({ success: true, enabled });
+    } catch (error) {
+      console.error('Error getting auto RADIUS password status:', error);
+      return res.status(500).json({ success: false, error: 'Failed to get status', message: error.message });
+    }
+  }
+
+  async handleRadiusAuthHook(req, res) {
+    try {
+      const { handleLiveRadiusAuthHook } = require('../services/radiusAutoPassword.service');
+      const payload = {
+        ...req.body,
+        ...req.query,
+        ispId: req.ispId || req.body?.ispId || 1
+      };
+      const result = await handleLiveRadiusAuthHook(payload, req.prisma || prisma);
+      if (result.status === 'accepted') {
+        return res.status(200).json(result);
+      }
+      return res.status(result.success ? 200 : 400).json(result);
+    } catch (error) {
+      console.error('Error in RADIUS auth webhook hook:', error);
+      return res.status(500).json({ success: false, error: 'Failed to process RADIUS auth hook', message: error.message });
+    }
+  }
+
 }
 
 module.exports = { ServiceController };
+

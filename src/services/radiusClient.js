@@ -787,6 +787,49 @@ class RadiusClient {
   }
 
   /**
+   * Update User Password in FreeRadius (radcheck)
+   */
+  async updateUserPassword(username, newPassword) {
+    if (!username || !newPassword) {
+      throw new Error('Username and new password are required');
+    }
+
+    try {
+      const radcheckEntries = await this.getRadcheckByUsername(username).catch(() => []);
+      const passwordEntries = (Array.isArray(radcheckEntries) ? radcheckEntries : []).filter(
+        entry => ['cleartext-password', 'user-password', 'md5-password'].includes(String(entry.attribute || '').toLowerCase())
+      );
+
+      if (passwordEntries.length > 0) {
+        for (const entry of passwordEntries) {
+          await this.updateRadcheck(entry.id, {
+            attribute: 'Cleartext-Password',
+            op: ':=',
+            value: String(newPassword)
+          });
+        }
+        console.log(`[RADIUS] Updated existing password radcheck for ${username}`);
+      } else {
+        await this.createRadcheck({
+          username,
+          attribute: 'Cleartext-Password',
+          op: ':=',
+          value: String(newPassword)
+        });
+        console.log(`[RADIUS] Created new password radcheck for ${username}`);
+      }
+
+      return {
+        success: true,
+        message: `Password for ${username} updated in FreeRADIUS successfully`
+      };
+    } catch (error) {
+      console.error(`Error updating RADIUS password for ${username}:`, error);
+      throw new Error(`Failed to update RADIUS password: ${error.message}`);
+    }
+  }
+
+  /**
    * Update User Group in Radius (radusergroup)
    */
   async updateUserGroup(username, groupname) {

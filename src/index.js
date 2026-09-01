@@ -287,6 +287,9 @@ server.listen(PORT, '0.0.0.0', () => {
     runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message));
     const lifecycleTimer = setInterval(() => runCustomerLifecycle(prisma).catch(error => console.error('[CUSTOMER LIFECYCLE]', error.message)), 6 * 60 * 60 * 1000);
     lifecycleTimer.unref();
+
+    const { startAutoRadiusPasswordPoller } = require('./services/radiusAutoPassword.service');
+    startAutoRadiusPasswordPoller(prisma, 15000);
 });
 
 // Graceful shutdown
