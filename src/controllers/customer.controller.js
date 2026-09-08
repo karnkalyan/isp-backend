@@ -2251,7 +2251,10 @@ async function listCustomers(req, res, next) {
       oltPort,
       subBranchId,
       branchId: queryBranchId,
-      area
+      area,
+      packageId,
+      planId,
+      connectionType
     } = req.query;
 
     const branchFilter = await getBranchFilter(req);
@@ -2260,8 +2263,8 @@ async function listCustomers(req, res, next) {
       ispId: req.ispId,
       ...(branchFilter || {})
     };
-    if (status) where.status = status;
-    if (onboardStatus) where.onboardStatus = onboardStatus;
+    if (status && status !== 'all') where.status = status;
+    if (onboardStatus && onboardStatus !== 'all') where.onboardStatus = onboardStatus;
 
     // Extra filters for SMS campaign targeting
     // Only apply query-provided branchId if branchFilter didn't already set one (i.e. admin/global users)
@@ -2269,17 +2272,22 @@ async function listCustomers(req, res, next) {
       where.branchId = parseInt(queryBranchId);
     }
     if (subBranchId && subBranchId !== 'all') where.subBranchId = parseInt(subBranchId);
-    if (oltId && oltId !== 'all') {
-      where.serviceDetails = {
-        some: {
-          oltId: parseInt(oltId),
-          ...(oltPort && oltPort !== 'all' ? { oltPort: String(oltPort) } : {}),
-          ...(splitterId && splitterId !== 'all' ? { splitterId: parseInt(splitterId) } : {})
-        }
-      };
-    } else if (splitterId && splitterId !== 'all') {
-      where.serviceDetails = { some: { splitterId: parseInt(splitterId) } };
+
+    const serviceDetailWhere = {};
+    if (connectionType && connectionType !== 'all') {
+      serviceDetailWhere.connectionType = connectionType;
     }
+    if (oltId && oltId !== 'all') {
+      serviceDetailWhere.oltId = parseInt(oltId);
+      if (oltPort && oltPort !== 'all') serviceDetailWhere.oltPort = String(oltPort);
+      if (splitterId && splitterId !== 'all') serviceDetailWhere.splitterId = parseInt(splitterId);
+    } else if (splitterId && splitterId !== 'all') {
+      serviceDetailWhere.splitterId = parseInt(splitterId);
+    }
+    if (Object.keys(serviceDetailWhere).length > 0) {
+      where.serviceDetails = { some: serviceDetailWhere };
+    }
+
     if (area) {
       const areas = String(area).split(',').map(s => s.trim()).filter(Boolean);
       if (areas.length > 0) {
@@ -2295,17 +2303,51 @@ async function listCustomers(req, res, next) {
       }
     }
 
-    if (search) {
-      where.OR = [
-        { lead: { firstName: { contains: search } } },
-        { lead: { lastName: { contains: search } } },
-        { lead: { email: { contains: search } } },
-        { lead: { phoneNumber: { contains: search } } },
-        { lead: { secondaryContactNumber: { contains: search } } },
-        { portalUser: { email: { contains: search } } },
-        { connectionUsers: { some: { username: { contains: search }, isDeleted: false } } },
-        { customerUniqueId: { contains: search } }
+    const andConditions = [];
+
+    if (search && String(search).trim()) {
+      const q = String(search).trim();
+      const parts = q.split(/\s+/);
+      const orList = [
+        { lead: { firstName: { contains: q } } },
+        { lead: { lastName: { contains: q } } },
+        { lead: { email: { contains: q } } },
+        { lead: { phoneNumber: { contains: q } } },
+        { lead: { secondaryContactNumber: { contains: q } } },
+        { portalUser: { email: { contains: q } } },
+        { connectionUsers: { some: { username: { contains: q }, isDeleted: false } } },
+        { customerUniqueId: { contains: q } },
+        { idNumber: { contains: q } },
+        { panNo: { contains: q } }
       ];
+      if (parts.length > 1) {
+        orList.push({
+          AND: [
+            { lead: { firstName: { contains: parts[0] } } },
+            { lead: { lastName: { contains: parts.slice(1).join(' ') } } }
+          ]
+        });
+      }
+      andConditions.push({ OR: orList });
+    }
+
+    const targetPkg = packageId || planId;
+    if (targetPkg && targetPkg !== 'all') {
+      const parsedPkgId = parseInt(targetPkg);
+      if (!isNaN(parsedPkgId)) {
+        andConditions.push({
+          OR: [
+            { subscribedPkgId: parsedPkgId },
+            { assignedPkg: parsedPkgId },
+            { packagePrice: { id: parsedPkgId } },
+            { customerSubscriptions: { some: { package: parsedPkgId, isActive: true } } }
+          ]
+        });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const fetchAll = String(limit).toLowerCase() === 'all';
