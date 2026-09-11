@@ -3054,7 +3054,10 @@ async function deleteCustomer(req, res, next) {
 
     const existing = await req.prisma.customer.findUnique({
       where: { id },
-      include: { lead: true }
+      include: {
+        lead: true,
+        serviceDetails: true
+      }
     });
     if (!existing || existing.isDeleted || existing.ispId !== req.ispId) {
       return res.status(404).json({ error: "Customer not found" });
@@ -3071,6 +3074,77 @@ async function deleteCustomer(req, res, next) {
       where: { customerId: id },
       select: { id: true, deviceType: true, brand: true, model: true, serialNumber: true, macAddress: true, ponSerial: true }
     });
+
+    // Attempt to delete ONT from physical OLT prior to database deletion
+    const oltId = Number(existing.serviceDetails?.[0]?.oltId || existing.oltId);
+    for (const device of customerDevices) {
+      const isOnt = String(device.deviceType || '').toUpperCase() === 'ONT' || Boolean(device.ponSerial);
+      if (isOnt) {
+        try {
+          const printedSerial = String(device.ponSerial || device.serialNumber || '').trim().toUpperCase();
+          const encodedSerial = /^[0-9A-F]{16}$/.test(printedSerial)
+            ? printedSerial
+            : printedSerial.length >= 8
+              ? [...printedSerial.slice(0, 4)].map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase() + printedSerial.slice(4)
+              : printedSerial;
+          const serialCandidates = [...new Set([printedSerial, encodedSerial].filter(Boolean))];
+
+          let ontRecord = null;
+          if (oltId) {
+            ontRecord = await req.prisma.oNT.findFirst({
+              where: { oltId, isDeleted: false, serialNumber: { in: serialCandidates } },
+              include: { ontDetails: true }
+            });
+          }
+          if (!ontRecord && serialCandidates.length > 0) {
+            ontRecord = await req.prisma.oNT.findFirst({
+              where: { isDeleted: false, serialNumber: { in: serialCandidates } },
+              include: { ontDetails: true }
+            });
+          }
+
+          if (ontRecord) {
+            const targetOltId = ontRecord.oltId || oltId;
+            const oltDevice = await req.prisma.oLT.findFirst({
+              where: { id: targetOltId, ispId: req.ispId, isDeleted: false }
+            });
+
+            if (oltDevice) {
+              const [frame, slot, port] = String(ontRecord.servicePort || '').split('/').map(Number);
+              const ontIdNum = Number(ontRecord.ontId);
+              if (![frame, slot, port, ontIdNum].some(val => !Number.isInteger(val) || val < 0)) {
+                const rawServicePorts = ontRecord.ontDetails?.servicePorts;
+                const servicePortRows = Array.isArray(rawServicePorts) ? rawServicePorts : [];
+                const servicePortIndices = servicePortRows
+                  .map(row => Number(row?.index ?? row?.servicePortIndex ?? row?.service_port))
+                  .filter(value => Number.isInteger(value) && value >= 0);
+
+                const driver = getDriver(oltDevice);
+                try {
+                  await driver.connect();
+                  await driver.deleteOnt({
+                    frame,
+                    slot,
+                    port,
+                    ont_id: ontIdNum,
+                    serial: printedSerial,
+                    service_port_indices: servicePortIndices
+                  });
+                } catch (driverErr) {
+                  console.warn(`[deleteCustomer] Warning: Could not delete ONT from physical OLT: ${driverErr.message}`);
+                } finally {
+                  if (driver.ssh) {
+                    try { driver.ssh.close(); } catch (closeErr) {}
+                  }
+                }
+              }
+            }
+          }
+        } catch (deviceOltErr) {
+          console.warn(`[deleteCustomer] Warning during OLT device teardown: ${deviceOltErr.message}`);
+        }
+      }
+    }
 
     await req.prisma.$transaction(async (tx) => {
       // 1. Automatically release assigned inventory items
@@ -3093,7 +3167,7 @@ async function deleteCustomer(req, res, next) {
             toEntityId: item.branchId,
             entityType: item.branchId ? 'BRANCH' : 'HEAD_OFFICE',
             actionByUserId: req.user.id,
-            note: `Released automatically via customer deletion/reversion`
+            note: `Unassigned: customer deleted`
           }
         });
       }
@@ -3104,16 +3178,19 @@ async function deleteCustomer(req, res, next) {
           where: { id: device.id }
         });
 
-        if (device.serialNumber) {
-          const ont = await tx.oNT.findFirst({
-            where: { serialNumber: device.serialNumber }
+        const printedSerial = String(device.ponSerial || device.serialNumber || '').trim().toUpperCase();
+        const encodedSerial = /^[0-9A-F]{16}$/.test(printedSerial)
+          ? printedSerial
+          : printedSerial.length >= 8
+            ? [...printedSerial.slice(0, 4)].map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase() + printedSerial.slice(4)
+            : printedSerial;
+        const serialCandidates = [...new Set([printedSerial, encodedSerial, device.serialNumber, device.ponSerial].filter(Boolean))];
+
+        if (serialCandidates.length > 0) {
+          await tx.oNT.updateMany({
+            where: { serialNumber: { in: serialCandidates } },
+            data: { isDeleted: true, status: 'unassigned', updatedAt: new Date() }
           });
-          if (ont) {
-            await tx.oNT.update({
-              where: { id: ont.id },
-              data: { isDeleted: true, updatedAt: new Date() }
-            });
-          }
         }
 
         const tr069Serials = [...new Set([device.serialNumber, device.ponSerial || device.serialNumber].filter(Boolean))];
