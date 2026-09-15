@@ -39,8 +39,11 @@ function parseAnyDate(val) {
     return isNaN(d.getTime()) ? null : d;
   }
 
-  const s = String(val).trim();
+  let s = String(val).trim();
   if (!s) return null;
+
+  // Clean ordinal suffixes: "15th Jul 2030" -> "15 Jul 2030", "3rd Dec 2013" -> "3 Dec 2013"
+  s = s.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1');
 
   // 2. Custom Regex Matching for D/M/Y, M/D/Y, Y/M/D with 2 or 4 digit years
   const match = s.match(/^(\d{1,4})[-/.\s](\d{1,2})[-/.\s](\d{1,4})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
@@ -268,9 +271,75 @@ function convertToNepaliDate(dateStringOrObject, format = 'YYYY-MM-DD') {
   }
 }
 
+/**
+ * Compute start date from expiry date by subtracting duration.
+ * E.g. Expiration: 2030-07-15, Duration: "1 Month" -> 2030-06-15
+ */
+function computeStartFromExpiry(expiryDateInput, durationString) {
+  const parsedExpiry = parseAnyDate(expiryDateInput);
+  if (!parsedExpiry || isNaN(parsedExpiry.getTime())) return null;
+
+  const date = new Date(parsedExpiry);
+  let s = String(durationString || '1 Month').trim().toLowerCase()
+    .replace(/\u00A0/g, ' ')
+    .replace(/–|—/g, '-')
+    .replace(/\s+/g, ' ');
+
+  const isoMatch = s.match(/^p\s*(\d+)\s*([dmy])$/i);
+  if (isoMatch) {
+    const v = parseInt(isoMatch[1], 10);
+    const u = isoMatch[2].toLowerCase();
+    if (u === 'd') date.setDate(date.getDate() - v);
+    else if (u === 'm') date.setMonth(date.getMonth() - v);
+    else if (u === 'y') date.setFullYear(date.getFullYear() - v);
+    return setNepalMidnight(date);
+  }
+
+  const re = /(\d+)\s*(?:-?\s*)?(d(?:ays?)?|day|m(?:o(?:nths?)?)?|mo|month(?:s)?|months?|y(?:ears?|r)?|yr|year(?:s)?)/i;
+  const m = s.match(re);
+
+  if (!m) {
+    const anyNum = s.match(/(\d+)/);
+    if (anyNum) {
+      date.setMonth(date.getMonth() - parseInt(anyNum[1], 10));
+      return setNepalMidnight(date);
+    }
+    date.setMonth(date.getMonth() - 1);
+    return setNepalMidnight(date);
+  }
+
+  const value = parseInt(m[1], 10);
+  let unit = m[2].toLowerCase();
+
+  if (unit.startsWith('d')) unit = 'day';
+  else if (unit.startsWith('m')) unit = 'month';
+  else if (unit.startsWith('y') || unit === 'yr') unit = 'year';
+
+  if (unit === 'day') date.setDate(date.getDate() - value);
+  else if (unit === 'month') date.setMonth(date.getMonth() - value);
+  else if (unit === 'year') date.setFullYear(date.getFullYear() - value);
+
+  return setNepalMidnight(date);
+}
+
+/**
+ * Normalize raw duration to standard string (e.g. 1 -> "1 Month", 3 -> "3 Months", 12 -> "12 Months")
+ */
+function normalizeDurationString(rawDuration) {
+  if (rawDuration === undefined || rawDuration === null || rawDuration === '') return '1 Month';
+  const str = String(rawDuration).trim();
+  if (/^\d+$/.test(str)) {
+    const n = parseInt(str, 10);
+    return n === 1 ? '1 Month' : `${n} Months`;
+  }
+  return str;
+}
+
 module.exports = {
   parseAnyDate,
   computeExpiryFromBase,
+  computeStartFromExpiry,
+  normalizeDurationString,
   convertToNepaliDate,
   atPlanBoundary,
   getDeductibleRenewalBase

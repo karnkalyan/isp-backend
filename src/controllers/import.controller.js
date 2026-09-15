@@ -2,7 +2,7 @@ const xlsx = require('xlsx');
 const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
-const { computeExpiryFromBase, atPlanBoundary, parseAnyDate } = require('../utils/dateHelper');
+const { computeExpiryFromBase, computeStartFromExpiry, normalizeDurationString, atPlanBoundary, parseAnyDate } = require('../utils/dateHelper');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 
 /**
@@ -27,7 +27,7 @@ function splitFullName(fullName) {
         return { firstName: 'Customer', middleName: null, lastName: 'User' };
     }
     if (parts.length === 1) {
-        return { firstName: parts[0], middleName: null, lastName: 'User' };
+        return { firstName: parts[0], middleName: null, lastName: '' };
     }
     if (parts.length === 2) {
         return { firstName: parts[0], middleName: null, lastName: parts[1] };
@@ -2812,7 +2812,7 @@ async function importCustomers(req, res, next) {
         let firstName = (lead?.firstName || row.firstName || row.first_name || row['First Name'] || '').toString().trim();
         let middleName = (lead?.middleName || row.middleName || row.middle_name || row['Middle Name'] || '').toString().trim() || null;
         let lastName = (lead?.lastName || row.lastName || row.last_name || row['Last Name'] || '').toString().trim();
-        const fullName = (row.name || row.fullName || row.customerName || row['Full Name'] || row['Customer Name'] || '').toString().trim();
+        const fullName = (row.name || row.Name || row.fullName || row['Full Name'] || row.customerName || row['Customer Name'] || '').toString().trim();
 
         if (!firstName && !lastName && fullName) {
             const split = splitFullName(fullName);
@@ -2826,17 +2826,24 @@ async function importCustomers(req, res, next) {
             lastName = `${rowNumber}`;
         }
 
-        const phone = (lead?.phoneNumber || row.phoneNumber || row.phone || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
+        const phone = (lead?.phoneNumber || row.phoneNumber || row.phone || row.Mobile || row.mobile || row.contact || row['Phone Number'] || row['Mobile'] || '').toString().trim();
         const altPhone = (lead?.secondaryContactNumber || row.alternativePhone || row.altPhone || row['Alternative Phone Number'] || row['Secondary Contact Number'] || '').toString().trim();
-        const rawEmail = (lead?.email || row.email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
+        const rawEmail = (lead?.email || row.email || row.Email || row['Email'] || row['Email Address'] || '').toString().trim().toLowerCase();
         const cleanEmail = rawEmail || null;
 
         const panNo = (row.panNo || row.pan || row.panNumber || row['PAN No'] || row['PAN Number'] || row['PAN'] || '').toString().trim() || null;
-        const idNumber = (row.idNumber || row.citizenshipNo || row.citizenshipNumber || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || `ID-${phone || Date.now() + i}`).toString().trim();
+        const customCode = (row.customerCode || row['Customer Code'] || row.customerUniqueId || row.customerId || row['Customer ID'] || row['Customer Id'] || '').toString().trim();
+        const idNumber = (row.idNumber || customCode || row.citizenshipNo || row.citizenshipNumber || row['Citizenship Number'] || row['ID Number'] || row['Citizenship'] || (phone ? `ID-${phone}` : `ID-${Date.now() + i}`)).toString().trim();
 
         try {
-            const branchName = (row.branch || row.branchName || row['Branch Name'] || row.HeadBranch || '').toString().trim();
-            const subBranchName = (row.subBranch || row.subBranchName || row['Sub-Branch Name'] || '').toString().trim();
+            const orgName = (row.organization || row.Organization || row['Organization'] || '').toString().trim();
+            let branchName = (row.branch || row.Branch || row.branchName || row['Branch Name'] || row.HeadBranch || orgName || '').toString().trim();
+            let subBranchName = (row.subBranch || row.subBranchName || row['Sub-Branch Name'] || '').toString().trim();
+
+            if (orgName && branchName && orgName.toLowerCase() !== branchName.toLowerCase() && !subBranchName) {
+                subBranchName = branchName;
+                branchName = orgName;
+            }
 
             let branchId = row.branchId ? Number(row.branchId) : (lead?.branchId || null);
             let subBranchId = row.subBranchId ? Number(row.subBranchId) : (lead?.subBranchId || null);
@@ -2922,8 +2929,9 @@ async function importCustomers(req, res, next) {
                 customerTypeId = customerTypeCache.get(tKey);
             }
 
-            const durationStr = (row.duration || row.packageDuration || row['Duration'] || '1 Month').toString().trim();
-            const pkgName = (row.packageName || row.package || row.plan || row.planName || row['Package Name'] || row['Plan Name'] || row['Internet Plan'] || row.planCode || '').toString().trim();
+            const rawDuration = (row.duration || row.Duration || row.packageDuration || row.period || row.Period || row['Period'] || row['Duration'] || '1 Month').toString().trim();
+            const durationStr = normalizeDurationString(rawDuration);
+            const pkgName = (row.packageName || row.package || row.Package || row.plan || row.planName || row['Package'] || row['Package Name'] || row['Plan Name'] || row['Internet Plan'] || row.planCode || '').toString().trim();
             let packagePrice = null;
 
             if (pkgName) {
@@ -3050,8 +3058,8 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            const rawUsername = (row.username || row.radiusUsername || row.pppoeUsername || row['PPPoE Username'] || row['Radius Username'] || row['Username'] || '').toString().trim();
-            const rawPassword = (row.password || row.radiusPassword || row.pppoePassword || row['PPPoE Password'] || row['Radius Password'] || row['Password'] || '').toString().trim();
+            const rawUsername = (row.username || row.Username || row.radiusUsername || row.pppoeUsername || row['PPPoE Username'] || row['Radius Username'] || row['Username'] || '').toString().trim();
+            const rawPassword = (row.password || row.Password || row.radiusPassword || row.pppoePassword || row['PPPoE Password'] || row['Radius Password'] || row['Password'] || '').toString().trim();
 
             let existingCustomer = null;
 
@@ -3065,7 +3073,7 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            const rawCustomId = (row.customerUniqueId || row.customerId || row['Customer ID'] || row['Customer Id'] || '').toString().trim();
+            const rawCustomId = (row.customerUniqueId || row.customerId || row.customerCode || row['Customer Code'] || row['Customer ID'] || row['Customer Id'] || '').toString().trim();
             if (!existingCustomer && rawCustomId) {
                 existingCustomer = await prisma.Customer.findFirst({
                     where: { customerUniqueId: rawCustomId, ...(ispId ? { ispId } : {}) }
@@ -3146,7 +3154,7 @@ async function importCustomers(req, res, next) {
                 }
             }
 
-            const rawRegisteredOn = row['Registered on'] || row['Registration Date'] || row.registeredOn || row.createdAt || row['Created At'];
+            const rawRegisteredOn = row['Registered On'] || row['Registered on'] || row['Registration Date'] || row.registeredOn || row.createdAt || row['Created At'];
             const registeredAt = parseAnyDate(rawRegisteredOn);
 
             const addressVal = (row.address || row['Address'] || '').toString().trim() || null;
@@ -3239,9 +3247,19 @@ async function importCustomers(req, res, next) {
                     ispId
                 );
 
+                let customerUniqueIdToUse = generatedUniqueId;
+                if (rawCustomId) {
+                    const alreadyTaken = await prisma.Customer.findFirst({
+                        where: { customerUniqueId: rawCustomId, ...(ispId ? { ispId } : {}) }
+                    });
+                    if (!alreadyTaken) {
+                        customerUniqueIdToUse = rawCustomId;
+                    }
+                }
+
                 customer = await prisma.Customer.update({
                     where: { id: customer.id },
-                    data: { customerUniqueId: generatedUniqueId }
+                    data: { customerUniqueId: customerUniqueIdToUse }
                 });
             } else {
                 customer = await prisma.Customer.update({
@@ -3372,12 +3390,21 @@ async function importCustomers(req, res, next) {
             }
 
             const rawPlanStart = row.planStart || row.startDate || row['Plan Start Date'] || row['Plan Start'] || row['Start Date'];
-            const rawPlanEnd = row.planEnd || row.endDate || row['Plan End Date'] || row.expiryDate || row['Expiry Date'] || row['Plan End'] || row['End Date'];
+            const rawPlanEnd = row.planEnd || row.endDate || row.expiration || row.Expiration || row['Expiration'] || row['Plan End Date'] || row.expiryDate || row['Expiry Date'] || row['Plan End'] || row['End Date'];
 
             const parsedPlanStart = parseAnyDate(rawPlanStart);
             const parsedPlanEnd = parseAnyDate(rawPlanEnd);
 
-            const planStart = parsedPlanStart ? atPlanBoundary(parsedPlanStart) : atPlanBoundary(new Date());
+            let planStart;
+            if (parsedPlanStart) {
+                planStart = atPlanBoundary(parsedPlanStart);
+            } else if (parsedPlanEnd) {
+                const computedStart = computeStartFromExpiry(parsedPlanEnd, durationStr);
+                planStart = computedStart ? atPlanBoundary(computedStart) : atPlanBoundary(new Date());
+            } else {
+                planStart = atPlanBoundary(new Date());
+            }
+
             let planEnd = parsedPlanEnd ? atPlanBoundary(parsedPlanEnd) : computeExpiryFromBase(planStart, durationStr);
 
             if (isNaN(planEnd.getTime())) {

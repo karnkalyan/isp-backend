@@ -53,7 +53,7 @@ async function createLead(req, res, next) {
     const leadData = {
       firstName: firstName || 'Unknown',
       lastName: lastName || 'Unknown',
-      email: email || `${Date.now()}@unknown.com`,
+      email: email ? email.trim() : null,
       phoneNumber: phoneNumber || '0000000000',
       source: source || 'other',
       status: status || 'new',

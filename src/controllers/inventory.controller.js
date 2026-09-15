@@ -699,8 +699,10 @@ async function bulkTransferItems(req, res, next) {
             return res.status(404).json({ error: 'One or more items not found or access denied' });
         }
 
+        const resolvedStatus = status || (toCustomerId ? 'ASSIGNED_TO_CUSTOMER' : (toUserId ? 'ASSIGNED_TO_USER' : (toBranchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK')));
+
         const updateData = {
-            status,
+            status: resolvedStatus,
             branchId: toBranchId ? Number(toBranchId) : null,
             userId: toUserId ? Number(toUserId) : null,
             customerId: toCustomerId ? Number(toCustomerId) : null,
@@ -719,16 +721,39 @@ async function bulkTransferItems(req, res, next) {
                 data: {
                     inventoryItemId: item.id,
                     fromStatus: item.status,
-                    toStatus: status,
+                    toStatus: resolvedStatus,
                     toEntityId,
                     entityType,
                     actionByUserId: req.user.id,
-                    note: note || 'Bulk Transfer'
+                    note: note || `Bulk Assignment to ${entityType.toLowerCase()}`
                 }
             })
         ]));
 
-        res.json({ message: 'Items transferred successfully', count: items.length });
+        if (toCustomerId) {
+            for (const item of items) {
+                try {
+                    await req.prisma.CustomerDevice.create({
+                        data: {
+                            customerId: Number(toCustomerId),
+                            deviceType: item.type || 'ONT',
+                            brand: item.name || 'Unknown',
+                            model: item.model || 'Unknown',
+                            serialNumber: item.serialNumber || '',
+                            macAddress: item.macAddress || '',
+                            ponSerial: item.ponSerialNumber || item.serialNumber || '',
+                            ponVendorIdIncluded: item.ponVendorIdIncluded !== false,
+                            provisioningStatus: 'PENDING',
+                            updatedAt: new Date()
+                        }
+                    });
+                } catch (devErr) {
+                    console.warn(`[BULK TRANSFER] Note creating customer device for item ${item.id}:`, devErr.message);
+                }
+            }
+        }
+
+        res.json({ message: 'Items assigned and transferred successfully', count: items.length });
     } catch (err) {
         next(err);
     }
