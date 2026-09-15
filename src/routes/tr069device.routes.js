@@ -12,7 +12,8 @@ const {
   unlinkLead,
   deleteDevice,
   getOltPowerBySerial,
-  refreshOltPowerBySerial
+  refreshOltPowerBySerial,
+  syncDeviceRadiusPassword
 } = require('../controllers/tr069device.controller');
 
 module.exports = (prisma) => {
@@ -35,6 +36,12 @@ module.exports = (prisma) => {
     '/:serialNumber/sync',
     checkPermission('services_manage'),
     syncDevice
+  );
+
+  router.post(
+    '/:serialNumber/sync-radius-password',
+    checkPermission('services_manage'),
+    syncDeviceRadiusPassword
   );
 
   // List all local devices

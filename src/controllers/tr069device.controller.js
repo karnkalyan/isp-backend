@@ -1,3 +1,4 @@
+const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { invalidateGenieACSResponseCache } = require('../lib/genieacsResponseCache');
@@ -28,22 +29,37 @@ async function syncDevices(req, res, next) {
       return res.status(400).json({ error: 'GenieACS service not configured' });
     }
 
-    // Fetch devices from GenieACS with enough WAN data to list IP and PPPoE username.
+    // Fetch devices from GenieACS with enough WAN data to list IP and PPPoE credentials.
     const devices = await genieClient.getDevices({
-      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,VirtualParameters'
+      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,Device.PPP,VirtualParameters'
     });
 
     if (!Array.isArray(devices)) {
       return res.status(500).json({ error: 'Invalid response from GenieACS' });
     }
 
+    const syncRadiusPassword = req.body?.syncRadiusPassword === true ||
+      req.query?.syncRadiusPassword === 'true' ||
+      req.body?.syncRadiusPassword === 'true';
+
     let created = 0;
     let updated = 0;
     let matchedBySerialCount = 0;
     let matchedByUsernameCount = 0;
     let createdRelationCount = 0;
+    let passwordsSyncedCount = 0;
+    let radiusPushedCount = 0;
     const syncedSerialNumbers = [];
     const syncStartedAt = new Date();
+
+    let radiusClient = null;
+    if (syncRadiusPassword) {
+      try {
+        radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+      } catch (err) {
+        console.warn('[TR069 Sync] FreeRADIUS client not configured for ISP:', err.message);
+      }
+    }
 
     const serialNumbersToSync = devices.map(d => d._deviceId?._SerialNumber).filter(Boolean);
     const customerDevices = serialNumbersToSync.length
@@ -52,7 +68,7 @@ async function syncDevices(req, res, next) {
           serialNumber: { in: serialNumbersToSync },
           customer: { ispId }
         },
-        include: { customer: { select: { id: true, leadId: true, customerUniqueId: true } } }
+        include: { customer: { select: { id: true, leadId: true, customerUniqueId: true, branchId: true, ispId: true } } }
       })
       : [];
 
@@ -62,20 +78,22 @@ async function syncDevices(req, res, next) {
         .map(cd => [cd.serialNumber, cd.customer])
     );
 
-    // Extract device metadata (including usernames and MACs)
+    // Extract device metadata (including usernames, passwords, and MACs)
     const deviceExtracts = devices.map(device => {
       const serialNumber = device._deviceId?._SerialNumber;
       if (!serialNumber) return null;
-      const username = extractAcsUsername(device);
+      const creds = extractAcsPppCredentials(device);
+      const username = creds.username || extractAcsUsername(device);
+      const password = creds.password || extractAcsPassword(device);
       const macAddress = extractAcsMacAddress(device);
-      return { device, serialNumber, username, macAddress };
+      return { device, serialNumber, username, password, macAddress };
     }).filter(Boolean);
 
     const candidateUsernames = deviceExtracts.map(d => d.username).filter(Boolean);
     const customerByUsername = await batchLookupCustomersByUsernames(req.prisma, ispId, candidateUsernames);
 
     for (const item of deviceExtracts) {
-      const { device, serialNumber, username, macAddress } = item;
+      const { device, serialNumber, username, password, macAddress } = item;
       const now = new Date();
       syncedSerialNumbers.push(serialNumber);
 
@@ -132,6 +150,22 @@ async function syncDevices(req, res, next) {
         });
       }
 
+      // 3. When requested or password available with matched user/customer, sync to ConnectionUser & FreeRADIUS
+      if (syncRadiusPassword && password && (matchedCustomer || username)) {
+        const radiusSyncResult = await syncCustomerRadiusPassword(req.prisma, ispId, {
+          customer: matchedCustomer,
+          username,
+          password,
+          radiusClient
+        });
+        if (radiusSyncResult?.cmsUpdated || radiusSyncResult?.cmsCreated) {
+          passwordsSyncedCount++;
+        }
+        if (radiusSyncResult?.radiusPushed) {
+          radiusPushedCount++;
+        }
+      }
+
       const deviceData = {
         serialNumber,
         oui: device._deviceId?._OUI || null,
@@ -149,7 +183,8 @@ async function syncDevices(req, res, next) {
           username: username || null,
           matchedBy: matchedBy || null,
           customerId: matchedCustomer?.id || null,
-          customerUniqueId: matchedCustomer?.customerUniqueId || null
+          customerUniqueId: matchedCustomer?.customerUniqueId || null,
+          hasPppPassword: !!password
         }),
         ispId: ispId,
         isActive: true,
@@ -194,9 +229,14 @@ async function syncDevices(req, res, next) {
       })
       : { count: 0 };
 
+    let message = `Device sync completed (${matchedByUsernameCount} auto-linked by username, ${createdRelationCount} customer device relations created)`;
+    if (syncRadiusPassword) {
+      message += `, ${passwordsSyncedCount} CMS passwords synced, ${radiusPushedCount} pushed to FreeRADIUS`;
+    }
+
     return res.json({
       success: true,
-      message: `Device sync completed (${matchedByUsernameCount} auto-linked by username, ${createdRelationCount} customer device relations created)`,
+      message,
       stats: {
         total: devices.length,
         created,
@@ -204,7 +244,9 @@ async function syncDevices(req, res, next) {
         removed: staleResult.count,
         matchedBySerial: matchedBySerialCount,
         matchedByUsername: matchedByUsernameCount,
-        relationsCreated: createdRelationCount
+        relationsCreated: createdRelationCount,
+        passwordsSynced: passwordsSyncedCount,
+        radiusPushed: radiusPushedCount
       }
     });
   } catch (err) {
@@ -221,14 +263,20 @@ async function syncDevice(req, res, next) {
     const localDevice = await req.prisma.tr069Device.findFirst({ where: { serialNumber, ispId: req.ispId, isDeleted: false } });
     if (!localDevice) return res.status(404).json({ error: 'TR-069 device is not linked to this ISP' });
 
+    const syncRadiusPassword = req.body?.syncRadiusPassword === true ||
+      req.query?.syncRadiusPassword === 'true' ||
+      req.body?.syncRadiusPassword === 'true';
+
     const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, req.ispId);
     const device = await genieClient.getDeviceBySerial(serialNumber, {
-      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,VirtualParameters'
+      projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,Device.PPP,VirtualParameters'
     });
     if (!device) return res.status(404).json({ error: 'Device was not found in ACS' });
 
     const oldNotes = parseDeviceNotes(localDevice.notes);
-    const username = extractAcsUsername(device) || oldNotes.username || null;
+    const creds = extractAcsPppCredentials(device);
+    const username = creds.username || extractAcsUsername(device) || oldNotes.username || null;
+    const password = req.body?.password || creds.password || extractAcsPassword(device) || null;
     const macAddress = extractAcsMacAddress(device) || localDevice.macAddress || null;
     const ipAddress = extractFirstWanValue(device, 'WANIPConnection', 'ExternalIPAddress') || extractFirstWanValue(device, 'WANPPPConnection', 'ExternalIPAddress');
 
@@ -237,7 +285,7 @@ async function syncDevice(req, res, next) {
 
     const cd = await req.prisma.customerDevice.findFirst({
       where: { serialNumber, customer: { ispId: req.ispId } },
-      include: { customer: { select: { id: true, leadId: true, customerUniqueId: true } } }
+      include: { customer: { select: { id: true, leadId: true, customerUniqueId: true, branchId: true, ispId: true } } }
     });
 
     if (cd?.customer) {
@@ -270,6 +318,15 @@ async function syncDevice(req, res, next) {
       }
     }
 
+    let radiusSyncResult = null;
+    if (syncRadiusPassword && password && (matchedCustomer || username)) {
+      radiusSyncResult = await syncCustomerRadiusPassword(req.prisma, req.ispId, {
+        customer: matchedCustomer,
+        username,
+        password
+      });
+    }
+
     const resolvedLeadId = matchedCustomer?.leadId || localDevice.leadId || null;
 
     const updated = await req.prisma.tr069Device.update({
@@ -291,7 +348,8 @@ async function syncDevice(req, res, next) {
           username: username || oldNotes.username || null,
           matchedBy: matchedBy || oldNotes.matchedBy || null,
           customerId: matchedCustomer?.id || oldNotes.customerId || null,
-          customerUniqueId: matchedCustomer?.customerUniqueId || oldNotes.customerUniqueId || null
+          customerUniqueId: matchedCustomer?.customerUniqueId || oldNotes.customerUniqueId || null,
+          hasPppPassword: !!password
         }),
         leadId: resolvedLeadId,
         isActive: true,
@@ -299,13 +357,134 @@ async function syncDevice(req, res, next) {
       }
     });
     invalidateGenieACSResponseCache(req.ispId, serialNumber);
+
+    let message = `ACS device ${serialNumber} synchronized${matchedBy === 'username' ? ` and linked to customer by username "${username}"` : ''}`;
+    if (radiusSyncResult?.success) {
+      message += ` (PPP password synced to CMS and FreeRADIUS)`;
+    }
+
     return res.json({
       success: true,
-      message: `ACS device ${serialNumber} synchronized${matchedBy === 'username' ? ` and linked to customer by username "${username}"` : ''}`,
-      data: updated
+      message,
+      data: updated,
+      radiusSync: radiusSyncResult
     });
   } catch (err) {
     console.error('TR069 device sync error:', err);
+    return next(err);
+  }
+}
+
+// Directly sync PPP credentials from ACS for a single device to CMS ConnectionUser and FreeRADIUS
+async function syncDeviceRadiusPassword(req, res, next) {
+  try {
+    const serialNumber = String(req.params.serialNumber || '').trim();
+    if (!serialNumber) return res.status(400).json({ error: 'Serial number is required' });
+
+    const localDevice = await req.prisma.tr069Device.findFirst({
+      where: { serialNumber, ispId: req.ispId, isDeleted: false }
+    });
+    if (!localDevice) {
+      return res.status(404).json({ error: 'TR-069 device is not linked to this ISP' });
+    }
+
+    let username = req.body?.username ? String(req.body.username).trim() : null;
+    let password = req.body?.password ? String(req.body.password).trim() : null;
+
+    // If credentials not provided in body, fetch live from GenieACS
+    if (!username || !password || password === 'N/A') {
+      const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, req.ispId);
+      const device = await genieClient.getDeviceBySerial(serialNumber, {
+        projection: '_id,_deviceId,_lastInform,InternetGatewayDevice.DeviceInfo,InternetGatewayDevice.WANDevice,Device.PPP,VirtualParameters'
+      });
+
+      if (device) {
+        const creds = extractAcsPppCredentials(device);
+        if (!username) username = creds.username || extractAcsUsername(device);
+        if (!password || password === 'N/A') password = creds.password || extractAcsPassword(device);
+      }
+    }
+
+    if (!username || username === 'N/A') {
+      const notes = parseDeviceNotes(localDevice.notes);
+      username = notes.username || null;
+    }
+
+    if (!username || !password || password === 'N/A') {
+      return res.status(400).json({
+        error: `Could not retrieve PPP username and password for device ${serialNumber}. Make sure the device has WAN PPP credentials configured in GenieACS.`
+      });
+    }
+
+    // Match customer
+    let matchedCustomer = null;
+    const cd = await req.prisma.customerDevice.findFirst({
+      where: { serialNumber, customer: { ispId: req.ispId } },
+      include: { customer: { select: { id: true, leadId: true, customerUniqueId: true, branchId: true, ispId: true } } }
+    });
+
+    if (cd?.customer) {
+      matchedCustomer = cd.customer;
+    } else {
+      matchedCustomer = await findCustomerByUsernameSingle(req.prisma, req.ispId, username);
+    }
+
+    // Perform sync to CMS ConnectionUser and FreeRADIUS
+    const result = await syncCustomerRadiusPassword(req.prisma, req.ispId, {
+      customer: matchedCustomer,
+      username,
+      password
+    });
+
+    if (matchedCustomer) {
+      await linkDeviceToCustomer(req.prisma, {
+        customerId: matchedCustomer.id,
+        serialNumber,
+        macAddress: localDevice.macAddress,
+        deviceType: (localDevice.productClass || '').toLowerCase().includes('router') ? 'ROUTER' : 'ONT',
+        brand: localDevice.manufacturer,
+        model: localDevice.modelName || localDevice.productClass,
+        username
+      });
+      await linkInventoryItemToCustomer(req.prisma, {
+        ispId: req.ispId,
+        customerId: matchedCustomer.id,
+        serialNumber,
+        macAddress: localDevice.macAddress
+      });
+    }
+
+    // Update local device notes with username and status
+    const oldNotes = parseDeviceNotes(localDevice.notes);
+    await req.prisma.tr069Device.update({
+      where: { id: localDevice.id },
+      data: {
+        notes: JSON.stringify({
+          ...oldNotes,
+          username,
+          matchedBy: matchedCustomer ? (oldNotes.matchedBy || 'username') : null,
+          customerId: matchedCustomer?.id || oldNotes.customerId || null,
+          customerUniqueId: matchedCustomer?.customerUniqueId || oldNotes.customerUniqueId || null,
+          hasPppPassword: true
+        }),
+        ...(matchedCustomer?.leadId ? { leadId: matchedCustomer.leadId } : {}),
+        updatedAt: new Date()
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: `PPP password for "${username}" successfully updated in CMS Connection User and pushed to FreeRADIUS service`,
+      data: {
+        serialNumber,
+        username,
+        customerId: matchedCustomer?.id || null,
+        customerUniqueId: matchedCustomer?.customerUniqueId || null,
+        ...result
+      }
+    });
+  } catch (err) {
+    console.error('TR069 syncDeviceRadiusPassword error:', err);
     return next(err);
   }
 }
@@ -1177,6 +1356,93 @@ function extractAcsUsername(device) {
   return null;
 }
 
+function extractAcsPassword(device) {
+  if (!device || typeof device !== 'object') return null;
+
+  // 1. Check TR-098 WANPPPConnection Password & variants
+  const passwordKeys = ['Password', 'X_CMS_Password', 'X_CT-COM_Password'];
+  for (const key of passwordKeys) {
+    const pppPassword = extractFirstWanValue(device, 'WANPPPConnection', key);
+    if (pppPassword && String(pppPassword).trim() && String(pppPassword).trim() !== 'null' && String(pppPassword).trim() !== 'undefined') {
+      return String(pppPassword).trim();
+    }
+  }
+
+  // 2. Check VirtualParameters
+  const vpCandidates = [
+    extractValue(device, 'VirtualParameters.pppoePassword'),
+    extractValue(device, 'VirtualParameters.password'),
+    extractValue(device, 'VirtualParameters.Password'),
+    extractValue(device, 'VirtualParameters.PPPPassword'),
+    extractValue(device, 'VirtualParameters.wanPassword'),
+    extractValue(device, 'VirtualParameters.customerPassword')
+  ];
+  for (const vp of vpCandidates) {
+    if (vp && String(vp).trim() && String(vp).trim() !== 'null' && String(vp).trim() !== 'undefined') {
+      return String(vp).trim();
+    }
+  }
+
+  // 3. Check TR-181 Device.PPP.Interface.*.Password
+  const tr181Candidates = [
+    extractValue(device, 'Device.PPP.Interface.1.Password'),
+    extractValue(device, 'Device.PPP.Interface.2.Password'),
+    extractValue(device, 'Device.PPP.Interface.3.Password'),
+    extractValue(device, 'Device.PPP.Interface.4.Password')
+  ];
+  for (const cand of tr181Candidates) {
+    if (cand && String(cand).trim() && String(cand).trim() !== 'null' && String(cand).trim() !== 'undefined') {
+      return String(cand).trim();
+    }
+  }
+
+  return null;
+}
+
+function extractAcsPppCredentials(device) {
+  if (!device || typeof device !== 'object') return { username: null, password: null };
+
+  let foundUsername = null;
+  let foundPassword = null;
+
+  const wanDevices = device?.InternetGatewayDevice?.WANDevice;
+  if (wanDevices && typeof wanDevices === 'object') {
+    for (const wanDevice of Object.values(wanDevices)) {
+      if (!wanDevice || typeof wanDevice !== 'object') continue;
+      const connectionDevices = wanDevice?.WANConnectionDevice;
+      if (!connectionDevices || typeof connectionDevices !== 'object') continue;
+
+      for (const connectionDevice of Object.values(connectionDevices)) {
+        if (!connectionDevice || typeof connectionDevice !== 'object') continue;
+        const pppConns = connectionDevice?.WANPPPConnection;
+        if (!pppConns || typeof pppConns !== 'object') continue;
+
+        for (const conn of Object.values(pppConns)) {
+          if (!conn || typeof conn !== 'object') continue;
+
+          const u = readGenieValue(conn.Username);
+          const p = readGenieValue(conn.Password) ||
+                    readGenieValue(conn.X_CMS_Password) ||
+                    readGenieValue(conn.X_CT-COM_Password);
+
+          const cleanU = u && String(u).trim() && String(u).trim() !== 'null' && String(u).trim() !== 'undefined' ? String(u).trim() : null;
+          const cleanP = p && String(p).trim() && String(p).trim() !== 'null' && String(p).trim() !== 'undefined' ? String(p).trim() : null;
+
+          if (cleanU && cleanP) {
+            return { username: cleanU, password: cleanP };
+          }
+          if (cleanU && !foundUsername) foundUsername = cleanU;
+          if (cleanP && !foundPassword) foundPassword = cleanP;
+        }
+      }
+    }
+  }
+
+  const username = foundUsername || extractAcsUsername(device);
+  const password = foundPassword || extractAcsPassword(device);
+  return { username, password };
+}
+
 function extractAcsMacAddress(device) {
   if (!device || typeof device !== 'object') return null;
   const candidates = [
@@ -1225,7 +1491,8 @@ async function batchLookupCustomersByUsernames(prisma, ispId, rawUsernames) {
             id: true,
             leadId: true,
             customerUniqueId: true,
-            ispId: true
+            ispId: true,
+            branchId: true
           }
         }
       }
@@ -1258,7 +1525,8 @@ async function batchLookupCustomersByUsernames(prisma, ispId, rawUsernames) {
           id: true,
           leadId: true,
           customerUniqueId: true,
-          ispId: true
+          ispId: true,
+          branchId: true
         }
       });
 
@@ -1287,7 +1555,8 @@ async function batchLookupCustomersByUsernames(prisma, ispId, rawUsernames) {
               id: true,
               leadId: true,
               customerUniqueId: true,
-              ispId: true
+              ispId: true,
+              branchId: true
             }
           }
         }
@@ -1324,7 +1593,7 @@ async function batchLookupCustomersByUsernames(prisma, ispId, rawUsernames) {
         include: {
           customers: {
             where: { isDeleted: false, ispId },
-            select: { id: true, leadId: true, customerUniqueId: true, ispId: true },
+            select: { id: true, leadId: true, customerUniqueId: true, ispId: true, branchId: true },
             take: 1
           }
         }
@@ -1351,6 +1620,136 @@ async function findCustomerByUsernameSingle(prisma, ispId, username) {
   const clean = String(username).trim().toLowerCase();
   const noRealm = clean.includes('@') ? clean.split('@')[0].trim().toLowerCase() : clean;
   return map.get(clean) || map.get(noRealm) || null;
+}
+
+/**
+ * Insert or update password in CMS ConnectionUser and push to FreeRADIUS service
+ */
+async function syncCustomerRadiusPassword(prisma, ispId, { customer, username, password, radiusClient }) {
+  if (!username || !password) {
+    return { success: false, reason: 'Missing username or password' };
+  }
+
+  const cleanUser = String(username).trim();
+  const cleanPass = String(password).trim();
+  if (!cleanUser || !cleanPass || cleanPass === 'N/A' || cleanUser === 'N/A') {
+    return { success: false, reason: 'Invalid username or password' };
+  }
+
+  // 1. Resolve customer if not passed
+  let resolvedCustomer = customer;
+  if (!resolvedCustomer) {
+    resolvedCustomer = await findCustomerByUsernameSingle(prisma, ispId, cleanUser);
+  }
+
+  let connectionUser = null;
+  let cmsUpdated = false;
+  let cmsCreated = false;
+
+  try {
+    // 2. Look up existing ConnectionUser by unique username first, then fallback to customerId
+    const existingByUsername = await prisma.connectionUser.findUnique({
+      where: { username: cleanUser }
+    });
+
+    let existingByCustomer = null;
+    if (!existingByUsername && resolvedCustomer?.id) {
+      existingByCustomer = await prisma.connectionUser.findFirst({
+        where: { customerId: resolvedCustomer.id, isDeleted: false },
+        orderBy: { createdAt: 'desc' }
+      });
+    }
+
+    const existingConnUser = existingByUsername || existingByCustomer;
+    if (existingConnUser) {
+      connectionUser = await prisma.connectionUser.update({
+        where: { id: existingConnUser.id },
+        data: {
+          username: cleanUser,
+          password: cleanPass,
+          ...(resolvedCustomer?.id ? { customerId: resolvedCustomer.id } : {}),
+          ispId: ispId || existingConnUser.ispId,
+          branchId: resolvedCustomer?.branchId || existingConnUser.branchId,
+          isActive: true,
+          isDeleted: false,
+          updatedAt: new Date()
+        }
+      });
+      cmsUpdated = true;
+    } else if (resolvedCustomer?.id) {
+      connectionUser = await prisma.connectionUser.create({
+        data: {
+          customerId: resolvedCustomer.id,
+          username: cleanUser,
+          password: cleanPass,
+          ispId,
+          branchId: resolvedCustomer.branchId || null,
+          isActive: true,
+          isDeleted: false
+        }
+      });
+      cmsCreated = true;
+    }
+  } catch (err) {
+    console.warn(`[TR069 Sync] Failed to insert/update ConnectionUser for ${cleanUser}:`, err.message);
+  }
+
+  // 3. Update Portal User password hash if customer exists
+  if (resolvedCustomer?.id) {
+    try {
+      const portalUser = await prisma.user.findFirst({
+        where: { customerId: resolvedCustomer.id }
+      });
+      if (portalUser) {
+        const passwordHash = await bcrypt.hash(cleanPass, 10);
+        await prisma.user.update({
+          where: { id: portalUser.id },
+          data: { passwordHash, updatedAt: new Date() }
+        });
+      }
+    } catch (e) {
+      console.warn(`[TR069 Sync] Could not sync portal user password for customer ${resolvedCustomer.id}:`, e.message);
+    }
+  }
+
+  // 4. Push to FreeRADIUS
+  let radiusPushed = false;
+  let radiusError = null;
+
+  try {
+    let client = radiusClient;
+    if (!client) {
+      client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId).catch(() => null);
+    }
+
+    if (client) {
+      await client.updateUserPassword(cleanUser, cleanPass);
+      radiusPushed = true;
+
+      // If username has domain/realm, also update without realm in RADIUS
+      if (cleanUser.includes('@')) {
+        const withoutRealm = cleanUser.split('@')[0].trim();
+        if (withoutRealm) {
+          await client.updateUserPassword(withoutRealm, cleanPass).catch(() => {});
+        }
+      }
+    } else {
+      radiusError = 'RADIUS service not configured for this ISP';
+    }
+  } catch (err) {
+    radiusError = err.message;
+    console.warn(`[TR069 Sync] FreeRADIUS update error for '${cleanUser}':`, err.message);
+  }
+
+  return {
+    success: cmsUpdated || cmsCreated || radiusPushed,
+    cmsUpdated,
+    cmsCreated,
+    radiusPushed,
+    radiusError,
+    username: cleanUser,
+    customerId: resolvedCustomer?.id || null
+  };
 }
 
 async function linkDeviceToCustomer(prisma, { customerId, serialNumber, macAddress, deviceType, brand, model, username }) {
@@ -1674,5 +2073,6 @@ module.exports = {
   unlinkLead,
   deleteDevice,
   getOltPowerBySerial,
-  refreshOltPowerBySerial
+  refreshOltPowerBySerial,
+  syncDeviceRadiusPassword
 };
