@@ -39,6 +39,9 @@ async function syncDevices(req, res, next) {
 
     let created = 0;
     let updated = 0;
+    let matchedBySerialCount = 0;
+    let matchedByUsernameCount = 0;
+    let createdRelationCount = 0;
     const syncedSerialNumbers = [];
     const syncStartedAt = new Date();
 
@@ -49,27 +52,85 @@ async function syncDevices(req, res, next) {
           serialNumber: { in: serialNumbersToSync },
           customer: { ispId }
         },
-        include: { customer: { select: { leadId: true } } }
+        include: { customer: { select: { id: true, leadId: true, customerUniqueId: true } } }
       })
       : [];
 
-    const leadIdBySerial = new Map(
+    const customerBySerial = new Map(
       customerDevices
-        .filter(cd => cd.serialNumber && cd.customer?.leadId)
-        .map(cd => [cd.serialNumber, cd.customer.leadId])
+        .filter(cd => cd.serialNumber && cd.customer)
+        .map(cd => [cd.serialNumber, cd.customer])
     );
 
-    for (const device of devices) {
+    // Extract device metadata (including usernames and MACs)
+    const deviceExtracts = devices.map(device => {
       const serialNumber = device._deviceId?._SerialNumber;
-      if (!serialNumber) continue;
+      if (!serialNumber) return null;
+      const username = extractAcsUsername(device);
+      const macAddress = extractAcsMacAddress(device);
+      return { device, serialNumber, username, macAddress };
+    }).filter(Boolean);
+
+    const candidateUsernames = deviceExtracts.map(d => d.username).filter(Boolean);
+    const customerByUsername = await batchLookupCustomersByUsernames(req.prisma, ispId, candidateUsernames);
+
+    for (const item of deviceExtracts) {
+      const { device, serialNumber, username, macAddress } = item;
       const now = new Date();
       syncedSerialNumbers.push(serialNumber);
-      const username = extractFirstWanValue(device, 'WANPPPConnection', 'Username');
+
       const ipAddress =
         extractFirstWanValue(device, 'WANIPConnection', 'ExternalIPAddress') ||
         extractFirstWanValue(device, 'WANPPPConnection', 'ExternalIPAddress');
 
-      const resolvedLeadId = leadIdBySerial.get(serialNumber) || null;
+      // 1. Try matching customer by serial number
+      let matchedCustomer = customerBySerial.get(serialNumber) || null;
+      let matchedBy = matchedCustomer ? 'serial' : null;
+
+      // 2. If not matched by serial, match by ACS username!
+      if (!matchedCustomer && username) {
+        const cleanUser = username.trim();
+        const noRealm = cleanUser.includes('@') ? cleanUser.split('@')[0].trim() : cleanUser;
+        matchedCustomer = customerByUsername.get(cleanUser.toLowerCase()) ||
+                          customerByUsername.get(noRealm.toLowerCase()) || null;
+        if (matchedCustomer) {
+          matchedBy = 'username';
+          matchedByUsernameCount++;
+        }
+      } else if (matchedCustomer) {
+        matchedBySerialCount++;
+      }
+
+      const resolvedLeadId = matchedCustomer?.leadId || null;
+
+      // When customer is matched (especially by username), ensure CustomerDevice relation exists and inventory is linked
+      if (matchedCustomer) {
+        const pClass = String(device._deviceId?._ProductClass || '').toLowerCase();
+        const mName = String(device._deviceId?._ModelName || '').toLowerCase();
+        const isRouter = pClass.includes('router') || mName.includes('router') || pClass.includes('mesh');
+        const deviceType = isRouter ? 'ROUTER' : 'ONT';
+
+        const relationCreated = await linkDeviceToCustomer(req.prisma, {
+          customerId: matchedCustomer.id,
+          serialNumber,
+          macAddress,
+          deviceType,
+          brand: device._deviceId?._Manufacturer || null,
+          model: device._deviceId?._ModelName || device._deviceId?._ProductClass || null,
+          username
+        });
+
+        if (relationCreated) {
+          createdRelationCount++;
+        }
+
+        await linkInventoryItemToCustomer(req.prisma, {
+          ispId,
+          customerId: matchedCustomer.id,
+          serialNumber,
+          macAddress
+        });
+      }
 
       const deviceData = {
         serialNumber,
@@ -83,7 +144,13 @@ async function syncDevices(req, res, next) {
         uptime: extractUptime(device),
         firmwareVersion: extractValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion'),
         ipAddress,
-        notes: JSON.stringify({ username: username || null }),
+        macAddress: macAddress || null,
+        notes: JSON.stringify({
+          username: username || null,
+          matchedBy: matchedBy || null,
+          customerId: matchedCustomer?.id || null,
+          customerUniqueId: matchedCustomer?.customerUniqueId || null
+        }),
         ispId: ispId,
         isActive: true,
         isDeleted: false,
@@ -98,7 +165,8 @@ async function syncDevices(req, res, next) {
       if (existing) {
         const updateData = {
           ...deviceData,
-          ...(existing.ispId !== ispId ? { leadId: null } : {})
+          ...(existing.ispId !== ispId ? { leadId: null } : {}),
+          ...(resolvedLeadId ? { leadId: resolvedLeadId } : (existing.leadId ? { leadId: existing.leadId } : {}))
         };
         await req.prisma.tr069Device.update({
           where: { serialNumber },
@@ -128,12 +196,15 @@ async function syncDevices(req, res, next) {
 
     return res.json({
       success: true,
-      message: 'Device sync completed',
+      message: `Device sync completed (${matchedByUsernameCount} auto-linked by username, ${createdRelationCount} customer device relations created)`,
       stats: {
         total: devices.length,
         created,
         updated,
-        removed: staleResult.count
+        removed: staleResult.count,
+        matchedBySerial: matchedBySerialCount,
+        matchedByUsername: matchedByUsernameCount,
+        relationsCreated: createdRelationCount
       }
     });
   } catch (err) {
@@ -157,8 +228,50 @@ async function syncDevice(req, res, next) {
     if (!device) return res.status(404).json({ error: 'Device was not found in ACS' });
 
     const oldNotes = parseDeviceNotes(localDevice.notes);
-    const username = extractFirstWanValue(device, 'WANPPPConnection', 'Username');
+    const username = extractAcsUsername(device) || oldNotes.username || null;
+    const macAddress = extractAcsMacAddress(device) || localDevice.macAddress || null;
     const ipAddress = extractFirstWanValue(device, 'WANIPConnection', 'ExternalIPAddress') || extractFirstWanValue(device, 'WANPPPConnection', 'ExternalIPAddress');
+
+    let matchedCustomer = null;
+    let matchedBy = null;
+
+    const cd = await req.prisma.customerDevice.findFirst({
+      where: { serialNumber, customer: { ispId: req.ispId } },
+      include: { customer: { select: { id: true, leadId: true, customerUniqueId: true } } }
+    });
+
+    if (cd?.customer) {
+      matchedCustomer = cd.customer;
+      matchedBy = 'serial';
+    } else if (username) {
+      matchedCustomer = await findCustomerByUsernameSingle(req.prisma, req.ispId, username);
+      if (matchedCustomer) {
+        matchedBy = 'username';
+        const pClass = String(device._deviceId?._ProductClass || '').toLowerCase();
+        const mName = String(device._deviceId?._ModelName || '').toLowerCase();
+        const isRouter = pClass.includes('router') || mName.includes('router') || pClass.includes('mesh');
+        const deviceType = isRouter ? 'ROUTER' : 'ONT';
+
+        await linkDeviceToCustomer(req.prisma, {
+          customerId: matchedCustomer.id,
+          serialNumber,
+          macAddress,
+          deviceType,
+          brand: device._deviceId?._Manufacturer || localDevice.manufacturer || null,
+          model: device._deviceId?._ModelName || device._deviceId?._ProductClass || localDevice.modelName || null,
+          username
+        });
+        await linkInventoryItemToCustomer(req.prisma, {
+          ispId: req.ispId,
+          customerId: matchedCustomer.id,
+          serialNumber,
+          macAddress
+        });
+      }
+    }
+
+    const resolvedLeadId = matchedCustomer?.leadId || localDevice.leadId || null;
+
     const updated = await req.prisma.tr069Device.update({
       where: { id: localDevice.id },
       data: {
@@ -172,13 +285,25 @@ async function syncDevice(req, res, next) {
         uptime: extractUptime(device),
         firmwareVersion: extractValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion') || localDevice.firmwareVersion,
         ipAddress: ipAddress || localDevice.ipAddress,
-        notes: JSON.stringify({ ...oldNotes, username: username || oldNotes.username || null }),
+        macAddress: macAddress || localDevice.macAddress,
+        notes: JSON.stringify({
+          ...oldNotes,
+          username: username || oldNotes.username || null,
+          matchedBy: matchedBy || oldNotes.matchedBy || null,
+          customerId: matchedCustomer?.id || oldNotes.customerId || null,
+          customerUniqueId: matchedCustomer?.customerUniqueId || oldNotes.customerUniqueId || null
+        }),
+        leadId: resolvedLeadId,
         isActive: true,
         updatedAt: new Date()
       }
     });
     invalidateGenieACSResponseCache(req.ispId, serialNumber);
-    return res.json({ success: true, message: `ACS device ${serialNumber} synchronized`, data: updated });
+    return res.json({
+      success: true,
+      message: `ACS device ${serialNumber} synchronized${matchedBy === 'username' ? ` and linked to customer by username "${username}"` : ''}`,
+      data: updated
+    });
   } catch (err) {
     console.error('TR069 device sync error:', err);
     return next(err);
@@ -266,7 +391,7 @@ async function listDevices(req, res, next) {
       req.prisma.tr069Device.count({ where })
     ]);
 
-    // Auto-link devices assigned to customers in inventory
+    // Auto-link devices assigned to customers in inventory or by username
     const serialsToCheck = devices.map(d => d.serialNumber).filter(Boolean);
     if (serialsToCheck.length > 0) {
       const customerDevices = await req.prisma.customerDevice.findMany({
@@ -276,26 +401,77 @@ async function listDevices(req, res, next) {
         },
         include: {
           customer: {
-            select: { leadId: true }
+            select: { id: true, leadId: true, customerUniqueId: true }
           }
         }
       });
 
-      const leadIdBySerial = new Map();
+      const customerBySerial = new Map();
       customerDevices.forEach(cd => {
-        if (cd.serialNumber && cd.customer?.leadId) {
-          leadIdBySerial.set(cd.serialNumber, cd.customer.leadId);
+        if (cd.serialNumber && cd.customer) {
+          customerBySerial.set(cd.serialNumber, cd.customer);
         }
       });
 
+      // Find devices without leadId but with username in notes
+      const unlinkedDevices = devices.filter(d => !customerBySerial.has(d.serialNumber) && !d.leadId);
+      const usernamesToCheck = unlinkedDevices
+        .map(d => parseDeviceNotes(d.notes).username)
+        .filter(Boolean);
+
+      let customerByUsername = new Map();
+      if (usernamesToCheck.length > 0) {
+        customerByUsername = await batchLookupCustomersByUsernames(req.prisma, req.ispId, usernamesToCheck);
+      }
+
       for (const d of devices) {
-        const matchingLeadId = leadIdBySerial.get(d.serialNumber);
-        if (matchingLeadId && d.leadId !== matchingLeadId) {
-          d.leadId = matchingLeadId;
+        let matchingCustomer = customerBySerial.get(d.serialNumber);
+        let matchedByUsername = false;
+
+        if (!matchingCustomer && !d.leadId) {
+          const u = parseDeviceNotes(d.notes).username;
+          if (u) {
+            const cleanU = u.trim();
+            const noRealm = cleanU.includes('@') ? cleanU.split('@')[0].trim() : cleanU;
+            matchingCustomer = customerByUsername.get(cleanU.toLowerCase()) ||
+                              customerByUsername.get(noRealm.toLowerCase()) || null;
+            if (matchingCustomer) matchedByUsername = true;
+          }
+        }
+
+        if (matchingCustomer && d.leadId !== matchingCustomer.leadId) {
+          d.leadId = matchingCustomer.leadId;
+          const oldNotes = parseDeviceNotes(d.notes);
           await req.prisma.tr069Device.update({
             where: { id: d.id },
-            data: { leadId: matchingLeadId }
+            data: {
+              leadId: matchingCustomer.leadId,
+              notes: JSON.stringify({
+                ...oldNotes,
+                matchedBy: matchedByUsername ? 'username' : 'serial',
+                customerId: matchingCustomer.id,
+                customerUniqueId: matchingCustomer.customerUniqueId || null
+              })
+            }
           }).catch(err => console.error(`Failed to auto-link TR-069 device ${d.serialNumber}:`, err));
+
+          if (matchedByUsername) {
+            await linkDeviceToCustomer(req.prisma, {
+              customerId: matchingCustomer.id,
+              serialNumber: d.serialNumber,
+              macAddress: d.macAddress,
+              deviceType: (d.productClass || '').toLowerCase().includes('router') ? 'ROUTER' : 'ONT',
+              brand: d.manufacturer,
+              model: d.modelName || d.productClass,
+              username: parseDeviceNotes(d.notes).username
+            });
+            await linkInventoryItemToCustomer(req.prisma, {
+              ispId: req.ispId,
+              customerId: matchingCustomer.id,
+              serialNumber: d.serialNumber,
+              macAddress: d.macAddress
+            });
+          }
         }
       }
     }
@@ -436,7 +612,8 @@ async function listDevices(req, res, next) {
         leadId: d.leadId,
         lead: d.leadId ? leadById.get(d.leadId) || null : null,
         oltRxPower: oltData?.oltRxPower || null,
-        oltName: oltData?.oltName || null
+        oltName: oltData?.oltName || null,
+        matchedBy: parseDeviceNotes(d.notes).matchedBy || (d.leadId ? 'assigned' : null)
       };
     });
 
@@ -510,17 +687,54 @@ async function getDeviceBySerial(req, res, next) {
       return res.status(404).json({ error: 'Device not found' });
     }
 
-    // Auto-link check on detail view
+    // Auto-link check on detail view: first by serial in customerDevice, then fallback to username
     if (!device.leadId) {
       const cd = await req.prisma.customerDevice.findFirst({
         where: { serialNumber, customer: { ispId: req.ispId } },
-        include: { customer: { select: { leadId: true } } }
+        include: { customer: { select: { id: true, leadId: true, customerUniqueId: true } } }
       });
-      if (cd?.customer?.leadId) {
-        device.leadId = cd.customer.leadId;
+      let matchedCustomer = cd?.customer || null;
+      let matchedBy = matchedCustomer ? 'serial' : null;
+
+      if (!matchedCustomer) {
+        const u = parseDeviceNotes(device.notes).username;
+        if (u) {
+          matchedCustomer = await findCustomerByUsernameSingle(req.prisma, req.ispId, u);
+          if (matchedCustomer) {
+            matchedBy = 'username';
+            await linkDeviceToCustomer(req.prisma, {
+              customerId: matchedCustomer.id,
+              serialNumber,
+              macAddress: device.macAddress,
+              deviceType: (device.productClass || '').toLowerCase().includes('router') ? 'ROUTER' : 'ONT',
+              brand: device.manufacturer,
+              model: device.modelName || device.productClass,
+              username: u
+            });
+            await linkInventoryItemToCustomer(req.prisma, {
+              ispId: req.ispId,
+              customerId: matchedCustomer.id,
+              serialNumber,
+              macAddress: device.macAddress
+            });
+          }
+        }
+      }
+
+      if (matchedCustomer?.leadId) {
+        device.leadId = matchedCustomer.leadId;
+        const oldNotes = parseDeviceNotes(device.notes);
         await req.prisma.tr069Device.update({
           where: { id: device.id },
-          data: { leadId: cd.customer.leadId }
+          data: {
+            leadId: matchedCustomer.leadId,
+            notes: JSON.stringify({
+              ...oldNotes,
+              matchedBy: matchedBy || oldNotes.matchedBy || null,
+              customerId: matchedCustomer.id,
+              customerUniqueId: matchedCustomer.customerUniqueId || null
+            })
+          }
         }).catch(err => console.error("Failed to auto-link device on detail view:", err));
       }
     }
@@ -923,6 +1137,300 @@ function readGenieValue(value) {
     return value._value == null ? null : String(value._value);
   }
   return value == null ? null : String(value);
+}
+
+function extractAcsUsername(device) {
+  if (!device || typeof device !== 'object') return null;
+
+  // 1. Check TR-098 WANPPPConnection Username
+  const pppUsername = extractFirstWanValue(device, 'WANPPPConnection', 'Username');
+  if (pppUsername && String(pppUsername).trim() && String(pppUsername).trim() !== 'null' && String(pppUsername).trim() !== 'undefined') {
+    return String(pppUsername).trim();
+  }
+
+  // 2. Check VirtualParameters
+  const vpCandidates = [
+    extractValue(device, 'VirtualParameters.pppoeUsername'),
+    extractValue(device, 'VirtualParameters.username'),
+    extractValue(device, 'VirtualParameters.Username'),
+    extractValue(device, 'VirtualParameters.PPPUsername'),
+    extractValue(device, 'VirtualParameters.wanUsername'),
+    extractValue(device, 'VirtualParameters.customerUsername')
+  ];
+  for (const vp of vpCandidates) {
+    if (vp && String(vp).trim() && String(vp).trim() !== 'null' && String(vp).trim() !== 'undefined') {
+      return String(vp).trim();
+    }
+  }
+
+  // 3. Check TR-181 Device.PPP.Interface.*.Username
+  const tr181Candidates = [
+    extractValue(device, 'Device.PPP.Interface.1.Username'),
+    extractValue(device, 'Device.PPP.Interface.2.Username')
+  ];
+  for (const cand of tr181Candidates) {
+    if (cand && String(cand).trim() && String(cand).trim() !== 'null' && String(cand).trim() !== 'undefined') {
+      return String(cand).trim();
+    }
+  }
+
+  return null;
+}
+
+function extractAcsMacAddress(device) {
+  if (!device || typeof device !== 'object') return null;
+  const candidates = [
+    extractValue(device, 'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress'),
+    extractFirstWanValue(device, 'WANIPConnection', 'MACAddress'),
+    extractFirstWanValue(device, 'WANPPPConnection', 'MACAddress'),
+    extractValue(device, 'VirtualParameters.mac'),
+    extractValue(device, 'VirtualParameters.macAddress'),
+    extractValue(device, 'VirtualParameters.MACAddress'),
+    extractValue(device, 'Device.Ethernet.Interface.1.MACAddress'),
+    extractValue(device, 'InternetGatewayDevice.DeviceInfo.MacAddress')
+  ];
+  for (const mac of candidates) {
+    if (mac && typeof mac === 'string' && mac.trim().length >= 11) {
+      return mac.trim();
+    }
+  }
+  return null;
+}
+
+async function batchLookupCustomersByUsernames(prisma, ispId, rawUsernames) {
+  const map = new Map();
+  if (!rawUsernames || rawUsernames.length === 0) return map;
+
+  const candidateUsernames = [...new Set(rawUsernames.map(u => String(u || '').trim()).filter(Boolean))];
+  if (candidateUsernames.length === 0) return map;
+
+  const candidateWithoutRealm = candidateUsernames
+    .filter(u => u.includes('@'))
+    .map(u => u.split('@')[0].trim())
+    .filter(Boolean);
+
+  const allQueries = [...new Set([...candidateUsernames, ...candidateWithoutRealm])];
+
+  try {
+    // 1. Match ConnectionUser
+    const connUsers = await prisma.connectionUser.findMany({
+      where: {
+        ispId,
+        isDeleted: false,
+        username: { in: allQueries }
+      },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            leadId: true,
+            customerUniqueId: true,
+            ispId: true
+          }
+        }
+      }
+    });
+
+    connUsers.forEach(cu => {
+      if (cu.customer && cu.username) {
+        const u = cu.username.trim();
+        map.set(u.toLowerCase(), cu.customer);
+        if (u.includes('@')) {
+          map.set(u.split('@')[0].trim().toLowerCase(), cu.customer);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('[TR069 Sync] Error querying connection users:', err.message);
+  }
+
+  // 2. Match Customer by customerUniqueId
+  const missingQueries1 = allQueries.filter(q => !map.has(q.toLowerCase()));
+  if (missingQueries1.length > 0) {
+    try {
+      const customersByCode = await prisma.customer.findMany({
+        where: {
+          ispId,
+          isDeleted: false,
+          customerUniqueId: { in: missingQueries1 }
+        },
+        select: {
+          id: true,
+          leadId: true,
+          customerUniqueId: true,
+          ispId: true
+        }
+      });
+
+      customersByCode.forEach(c => {
+        if (c.customerUniqueId) {
+          map.set(c.customerUniqueId.trim().toLowerCase(), c);
+        }
+      });
+    } catch (err) {
+      console.warn('[TR069 Sync] Error querying customers by customerUniqueId:', err.message);
+    }
+  }
+
+  // 3. Match CustomerSubscribedService by externalUsername
+  const missingQueries2 = allQueries.filter(q => !map.has(q.toLowerCase()));
+  if (missingQueries2.length > 0) {
+    try {
+      const subServices = await prisma.customerSubscribedService.findMany({
+        where: {
+          customer: { ispId, isDeleted: false },
+          externalUsername: { in: missingQueries2 }
+        },
+        include: {
+          customer: {
+            select: {
+              id: true,
+              leadId: true,
+              customerUniqueId: true,
+              ispId: true
+            }
+          }
+        }
+      });
+
+      subServices.forEach(ss => {
+        if (ss.customer && ss.externalUsername) {
+          const u = ss.externalUsername.trim();
+          map.set(u.toLowerCase(), ss.customer);
+          if (u.includes('@')) {
+            map.set(u.split('@')[0].trim().toLowerCase(), ss.customer);
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('[TR069 Sync] Error querying subscribed services:', err.message);
+    }
+  }
+
+  // 4. Match Lead by phoneNumber or email
+  const missingQueries3 = allQueries.filter(q => !map.has(q.toLowerCase()));
+  if (missingQueries3.length > 0) {
+    try {
+      const leads = await prisma.lead.findMany({
+        where: {
+          ispId,
+          isDeleted: false,
+          convertedToCustomer: true,
+          OR: [
+            { phoneNumber: { in: missingQueries3 } },
+            { email: { in: missingQueries3 } }
+          ]
+        },
+        include: {
+          customers: {
+            where: { isDeleted: false, ispId },
+            select: { id: true, leadId: true, customerUniqueId: true, ispId: true },
+            take: 1
+          }
+        }
+      });
+
+      leads.forEach(l => {
+        const cust = l.customers?.[0];
+        if (cust) {
+          if (l.phoneNumber) map.set(l.phoneNumber.trim().toLowerCase(), cust);
+          if (l.email) map.set(l.email.trim().toLowerCase(), cust);
+        }
+      });
+    } catch (err) {
+      console.warn('[TR069 Sync] Error querying leads by contact:', err.message);
+    }
+  }
+
+  return map;
+}
+
+async function findCustomerByUsernameSingle(prisma, ispId, username) {
+  if (!username) return null;
+  const map = await batchLookupCustomersByUsernames(prisma, ispId, [username]);
+  const clean = String(username).trim().toLowerCase();
+  const noRealm = clean.includes('@') ? clean.split('@')[0].trim().toLowerCase() : clean;
+  return map.get(clean) || map.get(noRealm) || null;
+}
+
+async function linkDeviceToCustomer(prisma, { customerId, serialNumber, macAddress, deviceType, brand, model, username }) {
+  if (!customerId || !serialNumber) return false;
+
+  const cleanSn = String(serialNumber).trim();
+  const cleanMac = macAddress && String(macAddress).trim() ? String(macAddress).trim() : null;
+
+  try {
+    const existing = await prisma.customerDevice.findFirst({
+      where: {
+        OR: [
+          { serialNumber: cleanSn },
+          ...(cleanMac ? [{ macAddress: cleanMac }] : [])
+        ]
+      }
+    });
+
+    if (existing) {
+      if (existing.customerId !== customerId) {
+        await prisma.customerDevice.update({
+          where: { id: existing.id },
+          data: {
+            customerId,
+            serialNumber: existing.serialNumber || cleanSn,
+            macAddress: existing.macAddress || cleanMac,
+            provisioningStatus: 'active',
+            updatedAt: new Date()
+          }
+        });
+        return true;
+      }
+      return false;
+    }
+
+    await prisma.customerDevice.create({
+      data: {
+        customerId,
+        deviceType: deviceType || 'ONT',
+        brand: brand || null,
+        model: model || null,
+        serialNumber: cleanSn,
+        macAddress: cleanMac,
+        provisioningStatus: 'active',
+        notes: username ? `Auto-linked from TR-069 sync via username: ${username}` : 'Auto-linked from TR-069 sync'
+      }
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[TR069 Sync] Failed to create/update CustomerDevice for ${cleanSn}:`, err.message);
+    return false;
+  }
+}
+
+async function linkInventoryItemToCustomer(prisma, { ispId, customerId, serialNumber, macAddress }) {
+  if (!customerId || (!serialNumber && !macAddress)) return false;
+  const cleanSn = serialNumber ? String(serialNumber).trim() : null;
+  const cleanMac = macAddress ? String(macAddress).trim() : null;
+
+  try {
+    const updated = await prisma.inventoryItem.updateMany({
+      where: {
+        ispId,
+        customerId: null,
+        OR: [
+          ...(cleanSn ? [{ serialNumber: cleanSn }] : []),
+          ...(cleanMac ? [{ macAddress: cleanMac }] : [])
+        ]
+      },
+      data: {
+        customerId,
+        status: 'ASSIGNED_TO_CUSTOMER',
+        assignedAt: new Date()
+      }
+    });
+    return updated.count > 0;
+  } catch (err) {
+    console.warn(`[TR069 Sync] Failed to update inventory for ${cleanSn}:`, err.message);
+    return false;
+  }
 }
 
 function extractRxPower(device) {
