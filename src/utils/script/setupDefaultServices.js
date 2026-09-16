@@ -23,6 +23,13 @@ const DEFAULT_SERVICES = [
         category: "PAYMENT",
         iconUrl: "/icons/esewa.svg"
     },
+    {
+        name: "External Payment",
+        code: "EXTERNAL_PAYMENT",
+        description: "External payment gateway & automated recharge push API",
+        category: "PAYMENT",
+        iconUrl: "/icons/external-payment.svg"
+    },
     // {
     //     name: "Khalti",
     //     code: "KHALTI",

@@ -14,6 +14,8 @@ module.exports = (prisma) => {
     router.post('/esewa/base64', auth, checkPermission('settings_update'), settingsController.generateEsewaBase64);
     router.get('/esewa/config', auth, checkPermission('settings_read'), settingsController.getEsewaConfiguration);
     router.put('/esewa/config', auth, checkPermission('settings_update'), settingsController.saveEsewaConfiguration);
+    router.get('/externalpayment/config', auth, checkPermission('settings_read'), settingsController.getExternalPaymentConfiguration);
+    router.put('/externalpayment/config', auth, checkPermission('settings_update'), settingsController.saveExternalPaymentConfiguration);
     router.post('/', auth, checkPermission('settings_update'), settingsController.updateSetting);
     router.post('/batch', auth, checkPermission('settings_update'), settingsController.batchUpdateSettings);
 

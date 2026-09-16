@@ -2026,6 +2026,33 @@ class ServiceController {
     }
   }
 
+  // External Payment Operations
+  async processExternalPayment(req, res) {
+    try {
+      const ispId = req.ispId;
+      const paymentData = req.body;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.EXTERNAL_PAYMENT, ispId);
+      const result = await client.processPayment(paymentData);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error processing External payment:', error);
+      return res.status(500).json({ success: false, error: 'Failed to process payment', message: error.message });
+    }
+  }
+
+  async verifyExternalPayment(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { transactionId } = req.params;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.EXTERNAL_PAYMENT, ispId);
+      const result = await client.verifyPayment(transactionId);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Error verifying External payment:', error);
+      return res.status(500).json({ success: false, error: 'Failed to verify payment', message: error.message });
+    }
+  }
+
   // In ServiceController.js, update provisionDefaultServices method:
   async provisionDefaultServices(req, res) {
     try {

@@ -10,6 +10,7 @@ const { KhaltiClient } = require('../../services/khalti.services');
 const { GenieACSClient } = require('../../services/genieacs.service');
 const { AakashSmsClient } = require('../../services/akashsms.service');
 const { SparrowSmsClient } = require('../../services/sparrowsms.service');
+const { ExternalPaymentClient } = require('../../services/externalPayment.service');
 const { SERVICE_CODES } = require('../serviceConstants');
 const prisma = require('../../../prisma/client');
 
@@ -63,6 +64,9 @@ class ServiceFactory {
 
                 case SERVICE_CODES.SPARROWSMS:
                     return await SparrowSmsClient.create(ispId);
+
+                case SERVICE_CODES.EXTERNAL_PAYMENT:
+                    return await ExternalPaymentClient.create(ispId);
 
                 // Add more service clients as needed
 
@@ -120,6 +124,9 @@ class ServiceFactory {
 
                 case SERVICE_CODES.SPARROWSMS:
                     return await SparrowSmsClient.getServiceStatus(ispId);
+
+                case SERVICE_CODES.EXTERNAL_PAYMENT:
+                    return await ExternalPaymentClient.getServiceStatus(ispId);
 
                 default:
                     return {
@@ -412,9 +419,9 @@ class ServiceFactory {
     static validateServiceConfig(serviceCode, config) {
         const errors = [];
         const integrationMode = String(config?.config?.integrationMode || config?.integrationMode || '').toUpperCase();
-        const isEsewaTokenBased = serviceCode === SERVICE_CODES.ESEWA && integrationMode === 'TOKEN_BASED';
+        const isTokenBased = (serviceCode === SERVICE_CODES.ESEWA || serviceCode === SERVICE_CODES.EXTERNAL_PAYMENT) && integrationMode === 'TOKEN_BASED';
 
-        if (!config.baseUrl && !isEsewaTokenBased) {
+        if (!config.baseUrl && !isTokenBased) {
             errors.push('baseUrl is required');
         }
 

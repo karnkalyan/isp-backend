@@ -19,7 +19,8 @@ module.exports = {
         GENIEACS: 'GENIEACS',
         AAKASHSMS: 'AAKASHSMS',
         SPARROWSMS: 'SPARROWSMS',
-        NEPURIX: 'NEPURIX'
+        NEPURIX: 'NEPURIX',
+        EXTERNAL_PAYMENT: 'EXTERNAL_PAYMENT'
     },
 
     SERVICE_CATEGORIES: {
@@ -67,6 +68,12 @@ module.exports = {
             { credentialType: 'api_key', key: 'public_key', label: 'Public Key', required: true },
             { credentialType: 'api_key', key: 'secret_key', label: 'Secret Key', isEncrypted: true, required: true },
             { credentialType: 'api_key', key: 'base_url', label: 'Base URL', required: true }
+        ],
+        EXTERNAL_PAYMENT: [
+            { credentialType: 'username_password', key: 'username', label: 'API Username', required: true },
+            { credentialType: 'username_password', key: 'password', label: 'API Password', isEncrypted: true, required: true },
+            { credentialType: 'api_key', key: 'api_key', label: 'API Key (Optional)', required: false },
+            { credentialType: 'api_key', key: 'base_url', label: 'Gateway URL (Optional)', required: false }
         ],
         NETTV: [
             { credentialType: 'api_key', key: 'api_key', label: 'API Key', required: true },
@@ -189,6 +196,12 @@ module.exports = {
             requiresBaseUrl: true,
             testEndpoint: '/merchant-transaction/'
         },
+        EXTERNAL_PAYMENT: {
+            defaultApiVersion: 'v1',
+            requiresBaseUrl: false,
+            integrationMode: 'TOKEN_BASED',
+            testEndpoint: '/api/externalpayment/inquiry/:request_id'
+        },
         GENIEACS: {
             defaultApiVersion: 'v1',
             requiresBaseUrl: true,
@@ -221,6 +234,7 @@ module.exports = {
         MIKROTIK: ['get_resources', 'get_interfaces', 'get_dhcp_leases', 'create_user', 'get_firewall_rules'],
         ESEWA: ['initiate_payment', 'verify_payment', 'get_transaction_status'],
         KHALTI: ['initiate_payment', 'verify_payment', 'lookup_transaction'],
+        EXTERNAL_PAYMENT: ['process_payment', 'verify_payment', 'inquiry', 'get_transaction_status'],
         GENIEACS: [
             'get_devices',
             'get_device_by_serial',

@@ -128,6 +128,10 @@ module.exports = (prisma) => {
     router.post('/khalti/payment', checkPermission('services_manage'), serviceController.processKhaltiPayment.bind(serviceController));
     router.get('/khalti/payment/verify/:token', checkPermission('services_read'), serviceController.verifyKhaltiPayment.bind(serviceController));
 
+    // External Payment Operations
+    router.post('/externalpayment/payment', checkPermission('services_manage'), serviceController.processExternalPayment.bind(serviceController));
+    router.get('/externalpayment/payment/verify/:transactionId', checkPermission('services_read'), serviceController.verifyExternalPayment.bind(serviceController));
+
 
 
     // ==================== GENIEACS OPERATIONS ====================
@@ -202,7 +206,8 @@ module.exports = (prisma) => {
                 YEASTAR: 'Available',
                 MIKROTIK: 'Available',
                 ESEWA: 'Available',
-                KHALTI: 'Available'
+                KHALTI: 'Available',
+                EXTERNAL_PAYMENT: 'Available'
             }
         });
     });
