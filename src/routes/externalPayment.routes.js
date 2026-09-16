@@ -50,5 +50,18 @@ module.exports = (prisma) => {
   // 7. Test recharge from frontend dashboard
   router.post('/test-recharge', isAuthenticated(prisma), checkPermission('services_manage'), processPayment);
 
+  // 8. Download Official Documentation PDF
+  router.get('/documentation/pdf', (req, res) => {
+    const fs = require('fs');
+    const path = require('path');
+    const pdfPath = path.resolve(__dirname, '../../../External_Payment_API_Documentation.pdf');
+    if (fs.existsSync(pdfPath)) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="External_Payment_API_Documentation.pdf"');
+      return fs.createReadStream(pdfPath).pipe(res);
+    }
+    return res.status(404).json({ error: 'Documentation PDF not found' });
+  });
+
   return router;
 };
