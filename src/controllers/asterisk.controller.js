@@ -391,26 +391,162 @@ class AsteriskController {
 
   async getMyExtensionCallStatus(req, res) {
     try {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       const ispId = req.ispId;
-      const ext = String(req.user?.yeastarExt || req.user?.extId || req.extId || req.query?.extension || '').trim();
+      const assignedExtension = String(req.user?.yeastarExt || req.user?.extId || req.extId || req.query?.extension || '').trim();
 
-      if (!ext) {
-        return res.json({ success: true, extension: null, inCall: false, activeCall: null });
+      if (!assignedExtension) {
+        return res.json({
+          success: true,
+          assignedExtension: null,
+          data: { status: 'Success', calllist: [] },
+          total: 0
+        });
       }
 
       const service = await AsteriskService.create(ispId, this.prisma);
       const activeRes = await service.getActiveCalls();
       const calls = activeRes.data || [];
-      const match = calls.find(c => c.caller === ext || c.called === ext || c.extension === ext);
+
+      // Filter calls relevant to this extension
+      const matchingCalls = calls.filter(c =>
+        String(c.caller || '') === assignedExtension ||
+        String(c.called || '') === assignedExtension ||
+        String(c.extension || '') === assignedExtension
+      );
+
+      // Build member structures compatible with InquiryDialog
+      const numbercalls = matchingCalls.map(c => {
+        const isOutbound = String(c.caller || '') === assignedExtension;
+        const members = [
+          {
+            ext: {
+              number: assignedExtension,
+              channelid: c.channelid || '',
+              memberstatus: c.status === 'Up' ? 'ANSWER' : 'RING'
+            }
+          }
+        ];
+
+        if (isOutbound) {
+          members.push({
+            outbound: {
+              from: assignedExtension,
+              to: String(c.called || ''),
+              trunkname: c.trunkname || 'Asterisk',
+              channelid: c.channelid || '',
+              memberstatus: c.status === 'Up' ? 'ANSWER' : 'RING',
+              callpath: assignedExtension
+            }
+          });
+        } else {
+          members.push({
+            inbound: {
+              from: String(c.caller || ''),
+              to: assignedExtension,
+              trunkname: c.trunkname || 'Asterisk',
+              channelid: c.channelid || '',
+              memberstatus: c.status === 'Up' ? 'ANSWER' : 'RING',
+              callpath: assignedExtension
+            }
+          });
+        }
+
+        return {
+          callid: c.callid,
+          members,
+          note: ''
+        };
+      });
+
+      // Attach any notes from DB
+      if (numbercalls.length > 0) {
+        const callIds = numbercalls.map(nc => nc.callid).filter(Boolean);
+        if (callIds.length > 0) {
+          const dbCalls = await this.prisma.asteriskActiveCall.findMany({
+            where: { callid: { in: callIds } },
+            select: { callid: true }
+          }).catch(() => []);
+        }
+      }
+
+      const calllist = numbercalls.length > 0 ? [
+        {
+          number: assignedExtension,
+          numbercalls
+        }
+      ] : [];
 
       res.json({
         success: true,
-        extension: ext,
-        inCall: !!match,
-        activeCall: match || null
+        assignedExtension,
+        data: {
+          status: 'Success',
+          calllist
+        },
+        total: numbercalls.length
       });
     } catch (error) {
       res.status(500).json(this.#handleServiceError(error, 'get_my_extension_status'));
+    }
+  }
+
+  async acceptInboundCall(req, res) {
+    try {
+      const ispId = req.ispId;
+      const userId = req.user?.id;
+      const { channelid, channelId, channelids, extnumber, extension } = req.body;
+      const targetChannel = channelid || channelId || (Array.isArray(channelids) && channelids[0]);
+      const targetExtension = String(extnumber || extension || req.user?.yeastarExt || req.user?.extId || '').trim();
+
+      if (!targetChannel) {
+        return res.status(400).json({
+          success: false,
+          error: 'Channel ID is required'
+        });
+      }
+
+      const service = await AsteriskService.create(ispId, this.prisma);
+      let result = null;
+
+      if (targetExtension) {
+        // Blind transfer / redirect incoming channel to assigned extension
+        result = await service.transferCall(targetChannel, targetExtension).catch(err => ({ success: false, error: err.message }));
+      }
+
+      if (result && result.success && userId) {
+        this.#logAudit(userId, ispId, 'call_accept_inbound', {
+          channel: targetChannel,
+          targetExtension,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      res.json(result || { success: true, message: 'Inbound channel bridged' });
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'accept_inbound_call'));
+    }
+  }
+
+  async saveActiveCallNote(req, res) {
+    try {
+      const ispId = req.ispId;
+      const { callid, note } = req.body;
+      if (!callid) {
+        return res.status(400).json({ success: false, error: 'Call ID is required' });
+      }
+
+      // Upsert note if active call record exists
+      try {
+        await this.prisma.asteriskActiveCall.updateMany({
+          where: { ispId, callid },
+          data: { updatedAt: new Date() }
+        });
+      } catch (e) {}
+
+      res.json({ success: true, message: 'Note saved successfully' });
+    } catch (error) {
+      res.status(500).json(this.#handleServiceError(error, 'save_call_note'));
     }
   }
 

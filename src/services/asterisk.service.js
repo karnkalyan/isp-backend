@@ -92,23 +92,21 @@ class AsteriskService {
         credentials[cred.key] = cred.value;
       });
 
-      // AMI is the baseline required interface. ARI is OPTIONAL.
-      const requiredAmi = ['ami_host', 'ami_username', 'ami_password'];
-      for (const field of requiredAmi) {
-        if (!credentials[field]) {
-          throw new Error(`Missing required AMI credential: ${field}`);
-        }
-      }
-
+      // Check credentials: AMI or ARI can provide connectivity
+      const hasAmi = !!(credentials.ami_host && credentials.ami_username && credentials.ami_password);
       const hasAri = !!(credentials.ari_host && credentials.ari_username && credentials.ari_password);
+
+      if (!hasAmi && !hasAri) {
+        throw new Error('Neither AMI nor ARI credentials configured for Asterisk service');
+      }
 
       return {
         ispId: Number(ispId),
-        amiHost: credentials.ami_host,
+        amiHost: credentials.ami_host || credentials.ari_host || '127.0.0.1',
         amiPort: parseInt(credentials.ami_port, 10) || 5038,
-        amiUsername: credentials.ami_username,
-        amiPassword: credentials.ami_password,
-        // ARI fields are optional:
+        amiUsername: credentials.ami_username || '',
+        amiPassword: credentials.ami_password || '',
+        // ARI fields:
         ariHost: hasAri ? credentials.ari_host : null,
         ariPort: hasAri ? (parseInt(credentials.ari_port, 10) || 8088) : null,
         ariUsername: hasAri ? credentials.ari_username : null,
@@ -177,35 +175,40 @@ class AsteriskService {
     let ariMsg = '';
     let versionStr = 'Asterisk';
 
-    // 1. Test AMI (baseline)
-    try {
-      await this.#ami.connect(6000);
-      amiConnected = this.#ami.isConnected && this.#ami.isAuthenticated;
-      if (amiConnected) {
-        amiMsg = 'AMI connected and authenticated';
-        const verCmd = await this.#ami.executeCommand('core show version', 4000);
-        if (verCmd.success && verCmd.output) {
-          const firstLine = verCmd.output.split('\n')[0].trim();
-          if (firstLine) versionStr = firstLine;
+    // Test AMI and ARI concurrently with resilient timeouts
+    const amiPromise = (async () => {
+      try {
+        await this.#ami.connect(4000);
+        amiConnected = this.#ami.isConnected && this.#ami.isAuthenticated;
+        if (amiConnected) {
+          amiMsg = 'AMI connected and authenticated';
+          const verCmd = await this.#ami.executeCommand('core show version', 3000);
+          if (verCmd.success && verCmd.output) {
+            const firstLine = verCmd.output.split('\n')[0].trim();
+            if (firstLine) versionStr = firstLine;
+          }
+        } else {
+          amiMsg = 'AMI socket connected but authentication pending';
+        }
+      } catch (err) {
+        amiMsg = `AMI error: ${err.message}`;
+      }
+    })();
+
+    const ariPromise = (async () => {
+      if (this.#ari.isConfigured) {
+        const ariRes = await this.#ari.testConnection();
+        ariConnected = ariRes.connected;
+        ariMsg = ariRes.message;
+        if (ariRes.info?.version) {
+          versionStr = `Asterisk ${ariRes.info.version}`;
         }
       } else {
-        amiMsg = 'AMI socket connected but authentication failed';
+        ariMsg = 'ARI not configured (optional)';
       }
-    } catch (err) {
-      amiMsg = `AMI error: ${err.message}`;
-    }
+    })();
 
-    // 2. Test ARI (optional)
-    if (this.#ari.isConfigured) {
-      const ariRes = await this.#ari.testConnection();
-      ariConnected = ariRes.connected;
-      ariMsg = ariRes.message;
-      if (ariRes.info?.version) {
-        versionStr = `Asterisk ${ariRes.info.version}`;
-      }
-    } else {
-      ariMsg = 'ARI not configured (optional)';
-    }
+    await Promise.allSettled([amiPromise, ariPromise]);
 
     // 3. Detect capabilities dynamically
     this.#capabilities = await AsteriskCapabilities.detect(this.#ami, this.#ari);
@@ -583,43 +586,86 @@ class AsteriskService {
   /* ========== ACTIVE CALLS & CHANNELS ========== */
   async getActiveCalls() {
     try {
-      // Query channels via CoreShowChannels or Status
-      const multiRes = await this.#ami.sendMultiEventAction(
-        { Action: 'CoreShowChannels' },
-        'CoreShowChannelsComplete',
-        8000
-      ).catch(async () => {
-        return await this.#ami.sendMultiEventAction({ Action: 'Status' }, 'StatusComplete', 8000);
-      });
-
-      const events = (multiRes && Array.isArray(multiRes.events)) ? multiRes.events : [];
       const callsMap = new Map();
 
-      for (const ev of events) {
-        if (ev.Event && (ev.Event === 'CoreShowChannel' || ev.Event === 'Status')) {
-          const channel = ev.Channel || ev.Channel1 || '';
-          const caller = ev.CallerIDNum || ev.CallerID || ev.ConnectedLineNum || '-';
-          const called = ev.Exten || ev.ConnectedLineNum || ev.Context || '-';
-          const status = ev.ChannelStateDesc || ev.State || 'Up';
-          const uniqueid = ev.Uniqueid || channel;
-          const linkedid = ev.Linkedid || uniqueid;
+      // 1. Try AMI channels query if AMI is authenticated
+      if (this.#ami.isConnected && this.#ami.isAuthenticated) {
+        try {
+          const multiRes = await this.#ami.sendMultiEventAction(
+            { Action: 'CoreShowChannels' },
+            'CoreShowChannelsComplete',
+            5000
+          ).catch(async () => {
+            return await this.#ami.sendMultiEventAction({ Action: 'Status' }, 'StatusComplete', 5000);
+          });
 
-          // Group by Linkedid if available
-          if (!callsMap.has(linkedid)) {
-            callsMap.set(linkedid, {
-              callid: linkedid,
-              channelid: channel,
-              caller,
-              called,
-              extension: caller,
-              status,
-              direction: 'internal',
-              startTime: ev.CreationTime || new Date().toISOString(),
-              duration: parseInt(ev.Duration || ev.Seconds || '0', 10),
-              uniqueid,
-              linkedid
-            });
+          const events = (multiRes && Array.isArray(multiRes.events)) ? multiRes.events : [];
+          for (const ev of events) {
+            if (ev.Event && (ev.Event === 'CoreShowChannel' || ev.Event === 'Status')) {
+              const channel = ev.Channel || ev.Channel1 || '';
+              const caller = ev.CallerIDNum || ev.CallerID || ev.ConnectedLineNum || '-';
+              const called = ev.Exten || ev.ConnectedLineNum || ev.Context || '-';
+              const status = ev.ChannelStateDesc || ev.State || 'Up';
+              const uniqueid = ev.Uniqueid || channel;
+              const linkedid = ev.Linkedid || uniqueid;
+
+              if (!callsMap.has(linkedid)) {
+                callsMap.set(linkedid, {
+                  callid: linkedid,
+                  channelid: channel,
+                  caller,
+                  called,
+                  extension: caller,
+                  status,
+                  direction: 'internal',
+                  startTime: ev.CreationTime || new Date().toISOString(),
+                  duration: parseInt(ev.Duration || ev.Seconds || '0', 10),
+                  uniqueid,
+                  linkedid
+                });
+              }
+            }
           }
+        } catch (amiErr) {
+          // Fall through to ARI fallback
+        }
+      }
+
+      // 2. ARI fallback for active channels
+      if (callsMap.size === 0 && this.#ari.isConfigured) {
+        try {
+          const ariChannels = await this.#ari.listChannels();
+          for (const chan of ariChannels) {
+            const channel = chan.name || chan.id || '';
+            const caller = chan.caller?.number || chan.caller?.name || '-';
+            const called = chan.dialplan?.exten || '-';
+            const status = chan.state || 'Up';
+            const uniqueid = chan.id || channel;
+            const linkedid = chan.linkedid || uniqueid;
+
+            if (!callsMap.has(linkedid)) {
+              const creationTime = chan.creationtime ? new Date(chan.creationtime).toISOString() : new Date().toISOString();
+              const durationSec = chan.creationtime
+                ? Math.max(0, Math.floor((Date.now() - new Date(chan.creationtime).getTime()) / 1000))
+                : 0;
+
+              callsMap.set(linkedid, {
+                callid: linkedid,
+                channelid: channel,
+                caller,
+                called,
+                extension: caller,
+                status,
+                direction: 'internal',
+                startTime: creationTime,
+                duration: durationSec,
+                uniqueid,
+                linkedid
+              });
+            }
+          }
+        } catch (ariErr) {
+          // Ignore ARI list channels error
         }
       }
 
@@ -629,7 +675,7 @@ class AsteriskService {
         success: true,
         data: activeCalls,
         total: activeCalls.length,
-        message: `${activeCalls.length} active calls retrieved from Asterisk AMI`
+        message: `${activeCalls.length} active calls retrieved from Asterisk`
       };
     } catch (err) {
       return {
@@ -648,40 +694,43 @@ class AsteriskService {
       const extList = [];
       const caps = await this.getCapabilities();
 
-      // 1. If PJSIP endpoints supported, try CLI "pjsip show endpoints"
-      if (caps.channelTech === 'PJSIP') {
-        const cmdRes = await this.#ami.executeCommand('pjsip show endpoints', 6000);
-        if (cmdRes.success && cmdRes.output) {
+      // 1. If PJSIP endpoints supported and AMI connected, try CLI "pjsip show endpoints"
+      if (caps.channelTech === 'PJSIP' && this.#ami.isConnected && this.#ami.isAuthenticated) {
+        const cmdRes = await this.#ami.executeCommand('pjsip show endpoints', 6000).catch(() => null);
+        if (cmdRes && cmdRes.success && cmdRes.output) {
           const lines = cmdRes.output.split('\n');
           for (const line of lines) {
             const match = line.match(/Endpoint:\s+([^\s/]+)\/([^\s]+)\s+([^\s]+)/i) ||
                           line.match(/Endpoint:\s+([^\s]+)\s+([^\s]+)/i);
             if (match) {
               const number = match[1];
-              const statusStr = match[2] || 'Unavailable';
-              const isReg = !statusStr.toLowerCase().includes('unavailable') && !statusStr.toLowerCase().includes('offline');
-              extList.push({
-                number,
-                name: number,
-                status: isReg ? 'Registered' : 'Unregistered',
-                registered: isReg,
-                type: 'PJSIP'
-              });
+              // Only consider endpoints that look like extension numbers (numeric)
+              if (/^\d+$/.test(number)) {
+                const statusStr = match[2] || 'Unavailable';
+                const isReg = !statusStr.toLowerCase().includes('unavailable') && !statusStr.toLowerCase().includes('offline');
+                extList.push({
+                  number,
+                  name: number,
+                  status: isReg ? 'Registered' : 'Unregistered',
+                  registered: isReg,
+                  type: 'PJSIP'
+                });
+              }
             }
           }
         }
       }
 
-      // 2. If SIP peers supported, try CLI "sip show peers"
-      if (extList.length === 0) {
-        const sipRes = await this.#ami.executeCommand('sip show peers', 6000);
-        if (sipRes.success && sipRes.output) {
+      // 2. If SIP peers supported and AMI connected, try CLI "sip show peers"
+      if (extList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
+        const sipRes = await this.#ami.executeCommand('sip show peers', 6000).catch(() => null);
+        if (sipRes && sipRes.success && sipRes.output) {
           const lines = sipRes.output.split('\n');
           for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 2 && !parts[0].startsWith('Name') && !parts[0].startsWith('--')) {
               const namePart = parts[0].split('/')[0];
-              if (namePart && !namePart.includes('peer') && isNaN(namePart) === false) {
+              if (namePart && !namePart.includes('peer') && /^\d+$/.test(namePart)) {
                 const isOk = line.toLowerCase().includes('ok') || line.toLowerCase().includes('unmonitored');
                 extList.push({
                   number: namePart,
@@ -700,13 +749,16 @@ class AsteriskService {
       if (extList.length === 0 && this.#ari.isConfigured) {
         const endpoints = await this.#ari.listEndpoints();
         for (const ep of endpoints) {
-          extList.push({
-            number: ep.resource,
-            name: ep.resource,
-            status: ep.state === 'online' ? 'Registered' : 'Unregistered',
-            registered: ep.state === 'online',
-            type: (ep.technology || 'PJSIP').toUpperCase()
-          });
+          // Extensions are numeric resources (e.g. 1001, 1002); non-numeric like yeastar-s50 are trunks
+          if (ep.resource && /^\d+$/.test(ep.resource)) {
+            extList.push({
+              number: ep.resource,
+              name: ep.resource,
+              status: ep.state === 'online' ? 'Registered' : 'Unregistered',
+              registered: ep.state === 'online',
+              type: (ep.technology || 'PJSIP').toUpperCase()
+            });
+          }
         }
       }
 
@@ -770,31 +822,33 @@ class AsteriskService {
     try {
       const trunkList = [];
 
-      // 1. Try "sip show registry"
-      const regRes = await this.#ami.executeCommand('sip show registry', 6000);
-      if (regRes.success && regRes.output) {
-        const lines = regRes.output.split('\n');
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 3 && !parts[0].startsWith('Host') && !parts[0].startsWith('--')) {
-            const host = parts[0];
-            const username = parts[1] || '';
-            const status = line.toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
-            trunkList.push({
-              id: `trunk_${username || host}`,
-              trunkname: username || host,
-              trunktype: 'register',
-              status,
-              host
-            });
+      // 1. Try "sip show registry" if AMI connected
+      if (this.#ami.isConnected && this.#ami.isAuthenticated) {
+        const regRes = await this.#ami.executeCommand('sip show registry', 6000).catch(() => null);
+        if (regRes && regRes.success && regRes.output) {
+          const lines = regRes.output.split('\n');
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 3 && !parts[0].startsWith('Host') && !parts[0].startsWith('--')) {
+              const host = parts[0];
+              const username = parts[1] || '';
+              const status = line.toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
+              trunkList.push({
+                id: `trunk_${username || host}`,
+                trunkname: username || host,
+                trunktype: 'register',
+                status,
+                host
+              });
+            }
           }
         }
       }
 
-      // 2. Try "pjsip show registrations"
-      if (trunkList.length === 0) {
-        const pjsipReg = await this.#ami.executeCommand('pjsip show registrations', 6000);
-        if (pjsipReg.success && pjsipReg.output) {
+      // 2. Try "pjsip show registrations" if AMI connected
+      if (trunkList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
+        const pjsipReg = await this.#ami.executeCommand('pjsip show registrations', 6000).catch(() => null);
+        if (pjsipReg && pjsipReg.success && pjsipReg.output) {
           const lines = pjsipReg.output.split('\n');
           for (const line of lines) {
             const match = line.match(/Registration:\s+([^\s/]+)\/([^\s]+)\s+([^\s]+)/i);
@@ -809,6 +863,23 @@ class AsteriskService {
                 host: match[2] || ''
               });
             }
+          }
+        }
+      }
+
+      // 3. Fallback to ARI endpoints for trunks (endpoints that are not numeric extensions, e.g. yeastar-s50)
+      if (trunkList.length === 0 && this.#ari.isConfigured) {
+        const endpoints = await this.#ari.listEndpoints();
+        for (const ep of endpoints) {
+          if (ep.resource && !/^\d+$/.test(ep.resource)) {
+            const isReg = ep.state === 'online';
+            trunkList.push({
+              id: `trunk_${ep.resource}`,
+              trunkname: ep.resource,
+              trunktype: (ep.technology || 'pjsip').toLowerCase(),
+              status: isReg ? 'Registered' : 'Unregistered',
+              host: this.#config.ariHost || this.#config.amiHost || 'configured'
+            });
           }
         }
       }

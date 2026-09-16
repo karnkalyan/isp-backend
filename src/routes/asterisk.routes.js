@@ -76,6 +76,12 @@ module.exports = (prisma) => {
   router.get('/calls/my-extension', checkPermission('asterisk_read'), (req, res) =>
     controller.getMyExtensionCallStatus(req, res));
 
+  router.post('/calls/accept-inbound', (req, res) =>
+    controller.acceptInboundCall(req, res));
+
+  router.post('/calls/active/note', checkPermission('asterisk_manage'), (req, res) =>
+    controller.saveActiveCallNote(req, res));
+
   router.get('/calls/active', checkPermission('asterisk_read'), (req, res) =>
     controller.getActiveCalls(req, res));
 

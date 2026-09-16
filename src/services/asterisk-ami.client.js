@@ -126,7 +126,9 @@ class AsteriskAmiClient extends EventEmitter {
     socket.on('error', (err) => {
       this.#isConnected = false;
       this.#isAuthenticated = false;
-      this.emit('error', err);
+      if (this.listenerCount('error') > 0) {
+        this.emit('error', err);
+      }
       if (this.#connectPromiseResolver) {
         this.#connectPromiseResolver(err, null);
         this.#connectPromiseResolver = null;
@@ -203,6 +205,17 @@ class AsteriskAmiClient extends EventEmitter {
 
   #handleData(chunk) {
     this.#buffer += chunk.toString('utf8');
+
+    // Handle Asterisk banner if present at start of buffer (which terminates with single \r\n)
+    if (this.#buffer.startsWith('Asterisk Call Manager')) {
+      const bannerEnd = this.#buffer.indexOf('\n');
+      if (bannerEnd !== -1) {
+        const banner = this.#buffer.slice(0, bannerEnd).trim();
+        this.#buffer = this.#buffer.slice(bannerEnd + 1);
+        this.emit('banner', banner);
+        this.#sendLogin();
+      }
+    }
 
     // Parse blocks separated by \r\n\r\n or \n\n
     let boundary = this.#buffer.indexOf('\r\n\r\n');
@@ -328,7 +341,9 @@ class AsteriskAmiClient extends EventEmitter {
       } else if (parsed.Response.toLowerCase() === 'error') {
         this.#isAuthenticated = false;
         const err = new Error(`AMI Authentication Failed: ${parsed.Message || 'Bad Secret or User'}`);
-        this.emit('error', err);
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', err);
+        }
         if (this.#connectPromiseResolver) {
           this.#connectPromiseResolver(err, null);
           this.#connectPromiseResolver = null;
