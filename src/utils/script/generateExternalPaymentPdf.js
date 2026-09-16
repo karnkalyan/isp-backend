@@ -261,13 +261,32 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==
   }
 }`);
 
-    drawSectionTitle('9. Frontend Access & URLs');
+    // ================= PAGE 4 =================
+    doc.addPage();
+    drawHeader(
+      'External Payment API - Access, Setup & Credentials',
+      'Credential Management, System Settings & Dashboard Access'
+    );
+
+    drawSectionTitle('9. ISP Credential Generation & Management');
+    drawText(
+      'Each ISP tenant can independently generate and customize their external payment API username and password. This ensures complete isolation between ISPs.'
+    );
+    drawTable([
+      ['Master Settings Tab', 'System Settings -> Master Settings -> External Payment tab.'],
+      ['Dedicated Portal', 'Services -> 3rd Party Services -> External Payment API Requests.'],
+      ['Credential Generator', 'Click "Generate Random Password" or enter a secure password and save.'],
+      ['Default Payment Mode', 'Configurable per ISP (default: EXTERNAL).'],
+      ['API Authentication', 'Supports HTTP Basic Auth (username:password), Bearer Token, or JSON body.']
+    ], [150, 365]);
+
+    drawSectionTitle('10. Frontend URLs & Live Recharge Tester');
     drawTable([
       ['Dashboard URL', 'https://cms.kisan.net.np/externalpayment'],
       ['Alternative URL', 'https://cms.kisan.net.np/services/externalpayment'],
-      ['Sidebar Menu', 'Services -> 3rd Party Services -> External Payment'],
-      ['Live Tester Tab', 'Allows operators to type username & duration to test live push recharges directly from the web interface.']
-    ], [130, 385]);
+      ['Sidebar Navigation', 'Services -> 3rd Party Services -> External Payment API Requests'],
+      ['Live Tester Tab', 'Allows operators to enter a username & duration to test live push recharges directly.']
+    ], [150, 365]);
 
     // Footer on all pages
     const range = doc.bufferedPageRange();
