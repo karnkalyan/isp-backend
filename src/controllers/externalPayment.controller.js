@@ -725,6 +725,49 @@ const processPayment = async (req, res) => {
 
   } catch (err) {
     console.error("External processPayment error:", err);
+    try {
+      if (lookupValue) {
+        let resolvedCust = null;
+        try {
+          resolvedCust = await prisma.customer.findFirst({
+            where: {
+              ispId: req.ispId || 1,
+              isDeleted: false,
+              OR: [
+                { customerUniqueId: String(lookupValue) },
+                { connectionUsers: { some: { username: String(lookupValue), isDeleted: false } } },
+                { lead: { phoneNumber: String(lookupValue) } }
+              ]
+            },
+            select: { id: true, customerUniqueId: true, branchId: true }
+          });
+        } catch (_) {}
+
+        if (resolvedCust) {
+          await prisma.externalPayment.create({
+            data: {
+              ispId: req.ispId || 1,
+              customerId: resolvedCust.id,
+              customerUniqueId: resolvedCust.customerUniqueId,
+              username: String(lookupValue),
+              requestId: String(lookupValue),
+              amount: Number(inputAmount || 0),
+              paymentMode: paymentMode,
+              status: 'FAILED',
+              transactionCode: transactionCode,
+              packageDuration: String(duration || '1 month'),
+              packageDetails: {
+                error: err.message || 'Payment processing failed',
+                code: err.code || 'UNKNOWN',
+                payload: req.body
+              },
+              branchId: resolvedCust.branchId || null
+            }
+          }).catch(e => console.warn('[ExternalPayment] Failed to save failed payment log:', e.message));
+        }
+      }
+    } catch (_) {}
+
     return res.status(err.statusCode || 500).json({
       response_code: err.code || 1,
       response_message: "Failed to process payment: " + (err.message || "Unknown error")
@@ -843,7 +886,7 @@ const listTransactions = async (req, res) => {
             id: true,
             customerUniqueId: true,
             lead: {
-              select: { firstName: true, middleName: true, lastName: true, phoneNumber: true }
+              select: { firstName: true, middleName: true, lastName: true, phoneNumber: true, email: true }
             }
           }
         }
@@ -860,6 +903,7 @@ const listTransactions = async (req, res) => {
       customerUniqueId: t.customerUniqueId,
       customerName: custName,
       customerPhone: t.customer?.lead?.phoneNumber || null,
+      customerEmail: t.customer?.lead?.email || null,
       amount: t.amount,
       paymentMode: t.paymentMode,
       status: t.status,
@@ -867,6 +911,7 @@ const listTransactions = async (req, res) => {
       referenceCode: t.referenceCode,
       packageDuration: t.packageDuration,
       packageDetails: t.packageDetails,
+      orderId: t.orderId || null,
       createdAt: t.createdAt,
       paidAt: t.paidAt
     };
