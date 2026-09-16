@@ -28,32 +28,69 @@ const externalPaymentAuth = async (req, res, next) => {
       }
 
       let decoded;
+      let isExternalToken = false;
       try {
         decoded = jwt.verify(token, EXTERNAL_PAYMENT_JWT_SECRET);
+        isExternalToken = true;
       } catch (err) {
+        // If external secret fails, check if it is a valid admin/system user JWT
+        if (process.env.ACCESS_SECRET) {
+          try {
+            const userPayload = jwt.verify(token, process.env.ACCESS_SECRET);
+            const user = await prisma.user.findUnique({
+              where: { id: userPayload.userId },
+              select: { id: true, ispId: true, isDeleted: true }
+            });
+            if (user && !user.isDeleted && user.ispId) {
+              const ispId = Number(user.ispId);
+              let config = await prisma.externalPaymentConfiguration.findUnique({ where: { ispId } });
+              if (!config) {
+                config = await prisma.externalPaymentConfiguration.create({
+                  data: {
+                    ispId,
+                    username: `external_isp_${ispId}`,
+                    passwordHash: await bcrypt.hash(`External@ISP#${ispId}!2025`, 10),
+                    apiKey: require('crypto').randomBytes(32).toString('hex'),
+                    authMethod: 'BEARER',
+                    defaultPaymentMode: 'EXTERNAL',
+                    isActive: true
+                  }
+                }).catch(() => null);
+              }
+              req.user = user;
+              req.externalPaymentConfig = config;
+              req.ispId = ispId;
+              return next();
+            }
+          } catch (accessErr) {
+            // Not a system user token either
+          }
+        }
         return res.status(401).json({ response_code: 1, response_message: `Invalid token: ${err.message}` });
       }
 
-      const ispId = Number(decoded.configId || headerIspId);
-      const tokenRecord = await prisma.externalPaymentToken.findFirst({
-        where: { token, configId: ispId, isRevoked: false }
-      });
+      if (isExternalToken) {
+        const ispId = Number(decoded.configId || headerIspId);
+        const tokenRecord = await prisma.externalPaymentToken.findFirst({
+          where: { token, configId: ispId, isRevoked: false }
+        });
 
-      if (!tokenRecord || tokenRecord.expiresAt < new Date()) {
-        return res.status(401).json({ response_code: 1, response_message: 'Token expired or revoked' });
+        if (!tokenRecord || tokenRecord.expiresAt < new Date()) {
+          return res.status(401).json({ response_code: 1, response_message: 'Token expired or revoked' });
+        }
+
+        const config = await prisma.externalPaymentConfiguration.findUnique({
+          where: { ispId }
+        });
+
+        if (!config || !config.isActive) {
+          return res.status(401).json({ response_code: 1, response_message: 'External payment configuration inactive' });
+        }
+
+        req.externalPaymentConfig = config;
+        req.ispId = ispId;
+        return next();
       }
-
-      const config = await prisma.externalPaymentConfiguration.findUnique({
-        where: { ispId }
-      });
-
-      if (!config || !config.isActive) {
-        return res.status(401).json({ response_code: 1, response_message: 'External payment configuration inactive' });
-      }
-
-      req.externalPaymentConfig = config;
-      req.ispId = ispId;
-      return next();
     }
 
     // 2. Check Basic Auth
@@ -123,8 +160,22 @@ const externalPaymentAuth = async (req, res, next) => {
     }
 
     // 5. If called from an authenticated session (e.g. frontend dashboard or internal user)
-    if (req.user && (req.user.ispId || req.ispId)) {
-      const ispId = Number(req.user.ispId || req.ispId);
+    let sessionUser = req.user;
+    if (!sessionUser && req.cookies?.access_token && process.env.ACCESS_SECRET) {
+      try {
+        const payload = jwt.verify(req.cookies.access_token, process.env.ACCESS_SECRET);
+        sessionUser = await prisma.user.findUnique({
+          where: { id: payload.userId },
+          select: { id: true, ispId: true, isDeleted: true }
+        });
+        if (sessionUser && !sessionUser.isDeleted) {
+          req.user = sessionUser;
+        }
+      } catch (e) {}
+    }
+
+    if ((req.user && (req.user.ispId || req.ispId)) || (sessionUser && sessionUser.ispId)) {
+      const ispId = Number(req.user?.ispId || sessionUser?.ispId || req.ispId);
       let config = await prisma.externalPaymentConfiguration.findUnique({
         where: { ispId }
       });

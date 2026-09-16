@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 
-function generatePdf(outputPath) {
+function generatePdf(outputPath, baseUrl = 'https://cms.arrownet.com.np') {
+  const hostUrl = String(baseUrl || 'https://cms.arrownet.com.np').replace(/\/+$/, '');
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'A4',
@@ -141,7 +142,7 @@ function generatePdf(outputPath) {
     );
 
     drawSubTitle('HTTP Request:');
-    drawCode(`GET https://cms.kisan.net.np/api/externalpayment/inquiry/karnkalyan
+    drawCode(`GET ${hostUrl}/api/externalpayment/inquiry/karnkalyan
 Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
 
     drawSubTitle('Success Response (JSON):');
@@ -176,7 +177,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
     );
 
     drawSubTitle('HTTP Request (cURL):');
-    drawCode(`curl -X POST "https://cms.kisan.net.np/api/externalpayment/payment" \\
+    drawCode(`curl -X POST "${hostUrl}/api/externalpayment/payment" \\
   -H "Content-Type: application/json" \\
   -u "external_isp_1:External@ISP#1!2025" \\
   -d '{
@@ -239,7 +240,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
       'Check status of any transaction to reconcile pending payments or confirm transaction execution.'
     );
     drawSubTitle('HTTP Request:');
-    drawCode(`POST https://cms.kisan.net.np/api/externalpayment/status
+    drawCode(`POST ${hostUrl}/api/externalpayment/status
 Content-Type: application/json
 Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==
 
@@ -282,8 +283,8 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==
 
     drawSectionTitle('10. Frontend URLs & Live Recharge Tester');
     drawTable([
-      ['Dashboard URL', 'https://cms.kisan.net.np/externalpayment'],
-      ['Alternative URL', 'https://cms.kisan.net.np/services/externalpayment'],
+      ['Dashboard URL', `${hostUrl}/externalpayment`],
+      ['Alternative URL', `${hostUrl}/services/externalpayment`],
       ['Sidebar Navigation', 'Services -> 3rd Party Services -> External Payment API Requests'],
       ['Live Tester Tab', 'Allows operators to enter a username & duration to test live push recharges directly.']
     ], [150, 365]);

@@ -51,16 +51,39 @@ module.exports = (prisma) => {
   router.post('/test-recharge', isAuthenticated(prisma), checkPermission('services_manage'), processPayment);
 
   // 8. Download Official Documentation PDF
-  router.get('/documentation/pdf', (req, res) => {
-    const fs = require('fs');
-    const path = require('path');
-    const pdfPath = path.resolve(__dirname, '../../../External_Payment_API_Documentation.pdf');
-    if (fs.existsSync(pdfPath)) {
+  router.get('/documentation/pdf', async (req, res) => {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
+      const { generatePdf } = require('../utils/script/generateExternalPaymentPdf');
+      const baseUrl = getRequestBaseUrl(req);
+      const tmpPdfPath = path.resolve(__dirname, `../../../External_Payment_API_Documentation_${Date.now()}.pdf`);
+
+      await generatePdf(tmpPdfPath, baseUrl);
+
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'attachment; filename="External_Payment_API_Documentation.pdf"');
-      return fs.createReadStream(pdfPath).pipe(res);
+      const stream = fs.createReadStream(tmpPdfPath);
+      stream.pipe(res);
+      stream.on('finish', () => {
+        fs.unlink(tmpPdfPath, () => {});
+      });
+      stream.on('error', (err) => {
+        fs.unlink(tmpPdfPath, () => {});
+      });
+    } catch (err) {
+      console.error('Error serving documentation PDF:', err);
+      const fs = require('fs');
+      const path = require('path');
+      const fallbackPdf = path.resolve(__dirname, '../../../External_Payment_API_Documentation.pdf');
+      if (fs.existsSync(fallbackPdf)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="External_Payment_API_Documentation.pdf"');
+        return fs.createReadStream(fallbackPdf).pipe(res);
+      }
+      return res.status(500).json({ error: 'Failed to generate documentation PDF: ' + err.message });
     }
-    return res.status(404).json({ error: 'Documentation PDF not found' });
   });
 
   return router;

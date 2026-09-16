@@ -450,9 +450,12 @@ class RadiusClient {
 
 
 
-  // Get all radcheck entries
-  async getRadcheck() {
-    return this.#apiRequest('get', '/api/radcheck');
+  // Get all radcheck entries (with optional limit & offset query support)
+  async getRadcheck(limit = 10000, offset = 0) {
+    const params = {};
+    if (limit) params.limit = limit;
+    if (offset) params.offset = offset;
+    return this.#apiRequest('get', '/api/radcheck', params);
   }
 
   // Get radcheck by ID
@@ -1012,7 +1015,8 @@ class RadiusClient {
   // List all users
   async listUsers(limit = 100, offset = 0) {
     try {
-      const radcheckEntries = await this.getRadcheck();
+      const fetchLimit = (!limit || limit <= 0) ? 50000 : Math.max(10000, Number(limit) + Number(offset));
+      const radcheckEntries = await this.getRadcheck(fetchLimit, 0);
 
       if (!Array.isArray(radcheckEntries)) {
         return {
@@ -1026,8 +1030,10 @@ class RadiusClient {
       // Extract unique usernames
       const uniqueUsernames = [...new Set(radcheckEntries.map(entry => entry.username))];
 
-      // Apply pagination
-      const paginatedUsernames = uniqueUsernames.slice(offset, offset + limit);
+      // Apply pagination (if limit is 0 or negative, return all)
+      const paginatedUsernames = (!limit || limit <= 0)
+        ? uniqueUsernames.slice(offset)
+        : uniqueUsernames.slice(offset, offset + limit);
 
       // Get user details for paginated users
       const usersWithDetails = await Promise.all(
@@ -1041,12 +1047,14 @@ class RadiusClient {
         }))
       );
 
+      const parsedLimit = (!limit || limit <= 0) ? uniqueUsernames.length : limit;
+
       return {
         users: usersWithDetails,
         total: uniqueUsernames.length,
-        limit,
+        limit: parsedLimit,
         offset,
-        hasMore: offset + limit < uniqueUsernames.length
+        hasMore: (!limit || limit <= 0) ? false : (offset + parsedLimit < uniqueUsernames.length)
       };
     } catch (error) {
       console.error('Error listing users:', error);
