@@ -1423,7 +1423,7 @@ function extractAcsPppCredentials(device) {
           const u = readGenieValue(conn.Username);
           const p = readGenieValue(conn.Password) ||
                     readGenieValue(conn.X_CMS_Password) ||
-                    readGenieValue(conn.X_CT-COM_Password);
+                    readGenieValue(conn['X_CT-COM_Password']);
 
           const cleanU = u && String(u).trim() && String(u).trim() !== 'null' && String(u).trim() !== 'undefined' ? String(u).trim() : null;
           const cleanP = p && String(p).trim() && String(p).trim() !== 'null' && String(p).trim() !== 'undefined' ? String(p).trim() : null;

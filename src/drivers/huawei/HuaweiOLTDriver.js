@@ -563,6 +563,10 @@ class HuaweiOLTDriver {
     async deleteOnt(data) {
         const { frame, slot, port, ont_id, service_port_indices = [] } = data;
 
+        if (frame === undefined || slot === undefined || port === undefined || ont_id === undefined) {
+            throw new Error(`Missing required parameters for ONT deletion: frame=${frame}, slot=${slot}, port=${port}, ont_id=${ont_id}`);
+        }
+
         return this.runSession(async (send) => {
             const boardType = await this.serviceBoardType(slot);
             const processLogs = { service_ports: [], ont_deletion: "", discovered_service_ports: [] };

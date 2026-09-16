@@ -4838,8 +4838,16 @@ async function reprovisionRadius(req, res, next) {
           data: { username, password }
         });
       } else {
-        await prisma.connectionUser.create({
-          data: {
+        await prisma.connectionUser.upsert({
+          where: { username },
+          update: {
+            password,
+            customerId,
+            branchId: customer.branchId,
+            ispId: req.ispId,
+            isDeleted: false
+          },
+          create: {
             customerId,
             username,
             password,

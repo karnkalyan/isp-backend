@@ -1495,9 +1495,9 @@ class ServiceController {
 
 
     } catch (error) {
-      console.error('Error getting Tshul customers:', error);
       const optional = this.#optionalServiceUnavailable(res, 'TSHUL', error);
       if (optional) return optional;
+      console.error('Error getting Tshul customers:', error);
       return res.status(500).json({ success: false, error: 'Failed to get customers', message: error.message });
     }
   }
