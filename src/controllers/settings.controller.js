@@ -3,7 +3,7 @@
  */
 function isSystemAdmin(req) {
     const role = String(req.user?.role || '').toLowerCase();
-    return role === 'administrator' || role === 'admin' || role.startsWith('global ');
+    return role === 'administrator' || role === 'admin' || role === 'isp_admin' || role === 'isp admin' || role === 'super admin' || role.startsWith('global');
 }
 
 const SENSITIVE_SETTING_KEYS = new Set([

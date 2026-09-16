@@ -134,7 +134,7 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   return date;
 }
 
-const getCustomerContext = async (req, lookupValue, packageId = null, desiredDuration = null) => {
+const getCustomerContext = async (req, lookupValue, packageId = null, desiredDuration = null, desiredPackageName = null) => {
   if (!lookupValue) {
     const error = new Error("Customer identifier (username / customer ID / phone / email) is required");
     error.code = "01";
@@ -222,7 +222,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     throw error;
   }
 
-  // If specific packageId requested, load it
+  // If specific packageId or packageName requested, resolve matching package under same plan
   if (packageId && Number(packageId) !== pkg.id) {
     const selectedPkg = await prisma.packagePrice.findFirst({
       where: {
@@ -250,12 +250,13 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     if (selectedPkg) {
       pkg = selectedPkg;
     }
-  } else if (desiredDuration && String(desiredDuration).toLowerCase() !== String(pkg.packageDuration).toLowerCase()) {
-    // If a duration was provided (e.g. "3 months", "1 year") search for a matching price under same speed plan
-    const matchingDurationPkg = await prisma.packagePrice.findFirst({
+  } else if (desiredPackageName && String(desiredPackageName).trim() !== '') {
+    // If specific packageName provided (e.g. "75Mbps - 12 Months", "75mb")
+    const cleanPkgName = String(desiredPackageName).trim();
+    const matchingPkg = await prisma.packagePrice.findFirst({
       where: {
         planId: pkg.planId,
-        packageDuration: { equals: String(desiredDuration).trim() },
+        packageName: { contains: cleanPkgName },
         isDeleted: false,
         isActive: true
       },
@@ -275,10 +276,44 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
       }
     });
 
+    if (matchingPkg) {
+      pkg = matchingPkg;
+    }
+  } else if (desiredDuration && String(desiredDuration).toLowerCase() !== String(pkg.packageDuration).toLowerCase()) {
+    // If a duration was provided (e.g. "3 months", "1 year") search for a matching price under same speed plan
+    const cleanDur = String(desiredDuration).trim().toLowerCase();
+    const allPlanPrices = await prisma.packagePrice.findMany({
+      where: {
+        planId: pkg.planId,
+        isDeleted: false,
+        isActive: true
+      },
+      select: {
+        id: true,
+        packageName: true,
+        price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
+        packageDuration: true,
+        referenceId: true,
+        planId: true,
+        oneTimeCharges: {
+          where: { isDeleted: false },
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+        }
+      }
+    });
+
+    const matchingDurationPkg = allPlanPrices.find(p => {
+      const pDur = String(p.packageDuration || '').trim().toLowerCase();
+      return pDur === cleanDur || pDur.replace(/\s+/g, '') === cleanDur.replace(/\s+/g, '');
+    });
+
     if (matchingDurationPkg) {
       pkg = matchingDurationPkg;
     }
   }
+  // Otherwise, if no duration or package is supplied, defaults exactly to active subscribed package!
 
   // Calculate Financials
   const isRechargeable = Boolean(customer.isRechargeable);
@@ -447,6 +482,7 @@ const processPayment = async (req, res) => {
   const paymentMode = String(req.body.payment_mode || req.body.paymentMode || req.externalPaymentConfig?.defaultPaymentMode || 'EXTERNAL').toUpperCase();
   const duration = req.body.duration || req.body.package_duration || req.body.packageDuration;
   const packageId = req.body.package_id || req.body.packageId;
+  const packageName = req.body.package_name || req.body.packageName || req.body.package;
   const inputAmount = req.body.amount !== undefined && req.body.amount !== null ? Number(req.body.amount) : null;
   const transactionCode = req.body.transaction_code || req.body.transactionCode || `EXT-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
@@ -459,7 +495,7 @@ const processPayment = async (req, res) => {
     }
 
     // 1. Get Customer Context (resolving customer, target package, duration, pricing)
-    const context = await getCustomerContext(req, lookupValue, packageId, duration);
+    const context = await getCustomerContext(req, lookupValue, packageId, duration, packageName);
     const {
       customer, pkg, totalAmount, aggregatedItems,
       fullName, otcItems, primaryConnectionUsername
