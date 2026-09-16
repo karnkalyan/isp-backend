@@ -592,10 +592,11 @@ class HuaweiOLTDriver {
             for (const index of indicesToDelete) {
                 const undoCmd = `undo service-port ${index}`;
                 const undoOutput = await send(undoCmd);
-                const failed = /\bfailure\s*:|\b(error|failed)\b/i.test(undoOutput);
+                const isNotFound = /does\s+not\s+exist|not\s+exist|nonexistent|can't\s+find/i.test(undoOutput);
+                const failed = !isNotFound && /\bfailure\s*:|\b(error|failed)\b/i.test(undoOutput);
                 processLogs.service_ports.push({
                     index,
-                    status: failed ? "Failed" : "Success",
+                    status: failed ? "Failed" : (isNotFound ? "AlreadyDeleted" : "Success"),
                     result: undoOutput.trim()
                 });
                 if (failed) {
@@ -608,7 +609,8 @@ class HuaweiOLTDriver {
                 const deleteOutput = await send(`ont delete ${port} ${ont_id}`);
                 processLogs.ont_deletion = deleteOutput.trim();
                 await send('quit');
-                if (/\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
+                const isNotFound = /does\s+not\s+exist|not\s+exist|nonexistent|can't\s+find/i.test(deleteOutput);
+                if (!isNotFound && /\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
                     throw new Error(`Failed to delete ONT ${ont_id}: ${deleteOutput.replace(/\s+/g, ' ').trim()}`);
                 }
                 return processLogs;
@@ -619,7 +621,8 @@ class HuaweiOLTDriver {
                 const deleteOutput = await send(`ont delete ${port} ${ont_id}`);
                 processLogs.ont_deletion = deleteOutput.trim();
                 await send('quit');
-                if (/\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
+                const isNotFound = /does\s+not\s+exist|not\s+exist|nonexistent|can't\s+find/i.test(deleteOutput);
+                if (!isNotFound && /\bfailure\s*:|\b(error|failed)\b/i.test(deleteOutput)) {
                     throw new Error(`Failed to delete ONT ${ont_id}: ${deleteOutput.replace(/\s+/g, ' ').trim()}`);
                 }
                 return processLogs;

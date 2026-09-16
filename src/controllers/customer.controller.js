@@ -4397,8 +4397,6 @@ async function deleteCustomerDevice(req, res, next) {
     let ont = null;
     if (String(device.deviceType || '').toUpperCase() === 'ONT') {
       const oltId = Number(device.customer?.serviceDetails?.[0]?.oltId || device.customer?.oltId);
-      if (!oltId) return res.status(409).json({ error: 'Cannot remove ONT: customer has no associated OLT' });
-
       const printedSerial = String(device.ponSerial || device.serialNumber || '').trim().toUpperCase();
       const encodedSerial = /^[0-9A-F]{16}$/.test(printedSerial)
         ? printedSerial
@@ -4406,38 +4404,58 @@ async function deleteCustomerDevice(req, res, next) {
           ? [...printedSerial.slice(0, 4)].map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('').toUpperCase() + printedSerial.slice(4)
           : printedSerial;
       const serialCandidates = [...new Set([printedSerial, encodedSerial].filter(Boolean))];
-      ont = await prisma.oNT.findFirst({
-        where: { oltId, isDeleted: false, serialNumber: { in: serialCandidates } },
-        include: { ontDetails: true }
-      });
-      if (!ont) return res.status(409).json({ error: `Cannot remove ONT: ${printedSerial || 'serial'} was not found in the synchronized OLT inventory` });
 
-      const [frame, slot, port] = String(ont.servicePort || '').split('/').map(Number);
-      const ontId = Number(ont.ontId);
-      if ([frame, slot, port, ontId].some(value => !Number.isInteger(value) || value < 0)) {
-        return res.status(409).json({ error: 'Cannot remove ONT: invalid frame/slot/port or ONT ID in OLT inventory' });
-      }
-      const rawServicePorts = ont.ontDetails?.servicePorts;
-      const servicePortRows = Array.isArray(rawServicePorts) ? rawServicePorts : [];
-      const servicePortIndices = servicePortRows
-        .map(row => Number(row?.index ?? row?.servicePortIndex ?? row?.service_port))
-        .filter(value => Number.isInteger(value) && value >= 0);
-      const oltDevice = await prisma.oLT.findFirst({ where: { id: oltId, ispId: req.ispId, isDeleted: false } });
-      if (!oltDevice) return res.status(404).json({ error: 'Associated OLT was not found' });
-
-      const driver = getDriver(oltDevice);
-      try {
-        await driver.connect();
-        oltDeletion = await driver.deleteOnt({
-          frame,
-          slot,
-          port,
-          ont_id: ontId,
-          serial: printedSerial,
-          service_port_indices: servicePortIndices
+      if (oltId) {
+        ont = await prisma.oNT.findFirst({
+          where: { oltId, isDeleted: false, serialNumber: { in: serialCandidates } },
+          include: { ontDetails: true }
         });
-      } finally {
-        if (driver.ssh) driver.ssh.close();
+
+        if (ont) {
+          const [frame, slot, port] = String(ont.servicePort || '').split('/').map(Number);
+          const ontId = Number(ont.ontId);
+          const rawServicePorts = ont.ontDetails?.servicePorts;
+          const servicePortRows = Array.isArray(rawServicePorts) ? rawServicePorts : [];
+          const servicePortIndices = servicePortRows
+            .map(row => Number(row?.index ?? row?.servicePortIndex ?? row?.service_port))
+            .filter(value => Number.isInteger(value) && value >= 0);
+
+          if ([frame, slot, port, ontId].every(value => Number.isInteger(value) && value >= 0)) {
+            const oltDevice = await prisma.oLT.findFirst({ where: { id: oltId, ispId: req.ispId, isDeleted: false } });
+            if (oltDevice) {
+              const driver = getDriver(oltDevice);
+              try {
+                await driver.connect();
+                oltDeletion = await driver.deleteOnt({
+                  frame,
+                  slot,
+                  port,
+                  ont_id: ontId,
+                  serial: printedSerial,
+                  service_port_indices: servicePortIndices
+                });
+              } catch (driverErr) {
+                console.warn(`[deleteCustomerDevice] OLT deletion failed or device already removed (${driverErr.message}). Continuing with local database and inventory cleanup.`);
+                oltDeletion = {
+                  skipped: true,
+                  warning: `OLT deletion skipped or device not on OLT: ${driverErr.message}`
+                };
+              } finally {
+                if (driver && driver.ssh) {
+                  try { driver.ssh.close(); } catch (e) {}
+                }
+              }
+            } else {
+              console.warn(`[deleteCustomerDevice] Associated OLT ${oltId} not found. Continuing with local cleanup.`);
+            }
+          } else {
+            console.warn(`[deleteCustomerDevice] Invalid frame/slot/port/ontId for ONT ${ont.id}. Continuing with local cleanup.`);
+          }
+        } else {
+          console.warn(`[deleteCustomerDevice] ONT serial ${printedSerial} not found in synchronized OLT inventory. Continuing with local cleanup.`);
+        }
+      } else {
+        console.warn(`[deleteCustomerDevice] Customer has no associated OLT. Continuing with local cleanup.`);
       }
     }
 
@@ -4459,18 +4477,33 @@ async function deleteCustomerDevice(req, res, next) {
         });
       }
 
-      const tr069Serials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean))];
+      // Unlink from TR069 device
+      const tr069Serials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean).map(s => String(s).trim()))];
       if (tr069Serials.length > 0) {
         await tx.tr069Device.updateMany({
-          where: { ispId: req.ispId, serialNumber: { in: tr069Serials } },
+          where: {
+            ispId: req.ispId,
+            OR: [
+              { serialNumber: { in: tr069Serials } },
+              { macAddress: device.macAddress ? String(device.macAddress).trim() : undefined }
+            ].filter(Boolean)
+          },
           data: { leadId: null, updatedAt: new Date() }
         });
       }
 
       // 2. Unassign corresponding InventoryItem if it exists and is assigned to this customer
-      if (device.serialNumber) {
+      const invSerials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean).map(s => String(s).trim()))];
+      for (const s of invSerials) {
         const invItem = await tx.InventoryItem.findFirst({
-          where: { serialNumber: device.serialNumber, customerId, ispId: req.ispId }
+          where: {
+            ispId: req.ispId,
+            OR: [
+              { serialNumber: s },
+              { ponSerialNumber: s }
+            ],
+            customerId
+          }
         });
         if (invItem) {
           const targetStatus = invItem.branchId ? 'ASSIGNED_TO_BRANCH' : 'IN_STOCK';
@@ -4490,14 +4523,16 @@ async function deleteCustomerDevice(req, res, next) {
               toStatus: targetStatus,
               toEntityId: invItem.branchId,
               entityType: invItem.branchId ? 'BRANCH' : 'HEAD_OFFICE',
-              actionByUserId: req.user.id,
-              note: `Unassigned via customer device deletion of serial: ${device.serialNumber}`
+              actionByUserId: req.user?.id || null,
+              note: `Unassigned via customer device deletion of serial: ${s}`
             }
           });
         }
       }
 
-      await logAudit(tx, req.user.id, 'CUSTOMER_DEVICE_DELETE', { customerId, deviceId, serialNumber: device.serialNumber }, req);
+      if (req.user?.id) {
+        await logAudit(tx, req.user.id, 'CUSTOMER_DEVICE_DELETE', { customerId, deviceId, serialNumber: device.serialNumber }, req);
+      }
     });
 
     return res.json({ success: true, message: 'Device deleted successfully', oltDeletion });
