@@ -60,6 +60,7 @@ const mcpRouter = require('./routes/mcp.routes');
 const taskLogger = require('./middlewares/taskLogger');
 const createRateLimit = require('./middlewares/rateLimit');
 const systemLogger = require('./middlewares/systemLogger');
+const ispResolver = require('./middlewares/ispResolver');
 const { installConsoleSystemLogger } = require('./utils/systemLogger');
 
 installConsoleSystemLogger(prisma);
@@ -130,6 +131,7 @@ app.use('/api/mcp', mcpRouter(prisma));
 
 app.use('/license', licenseRouter(prisma));
 app.use('/api/license', licenseRouter(prisma));
+app.use(ispResolver(prisma));
 app.use(licenseGuard(prisma));
 
 app.use('/users', usersRouter(prisma));
