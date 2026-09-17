@@ -555,6 +555,14 @@ const processPayment = async (req, res) => {
     }
     expiryDateObj.setHours(0, 0, 0, 0);
 
+    // Safety guard: ensure the renewed plan always expires in the future relative to today
+    const currentBoundary = atPlanBoundary(new Date());
+    if (expiryDateObj <= currentBoundary) {
+      console.warn(`[EXTERNAL PAYMENT RECHARGE] Calculated expiryDate ${expiryDateObj.toISOString()} was <= current boundary. Re-basing from current recharge date.`);
+      expiryDateObj.setTime(computeExpiryFromBase(currentBoundary, durationStr).getTime());
+      expiryDateObj.setHours(0, 0, 0, 0);
+    }
+
     const orderItemsData = buildPackageOrderItems(pkg, otcItems, customer.isFree);
 
     // 5. Billing Payment Method
@@ -602,6 +610,7 @@ const processPayment = async (req, res) => {
 
       // B. Update Subscription
       const updatedSubData = {
+        planStart: renewalBase,
         planEnd: expiryDateObj,
         isTrial: false,
         isInvoicing: true,
@@ -610,7 +619,6 @@ const processPayment = async (req, res) => {
         compensationDays: 0,
         adminExtensionDays: 0
       };
-      if (subscription.isTrial) updatedSubData.planStart = renewalBase;
       if (pkg.id !== subscription.package) {
         updatedSubData.package = pkg.id;
       }
@@ -651,7 +659,7 @@ const processPayment = async (req, res) => {
           customer: { connect: { id: customer.id } },
           subscription: { connect: { id: updatedSubscription.id } },
           packagePrice: { connect: { id: pkg.id } },
-          packageStart: renewalBase,
+          packageStart: updatedSubscription.planStart,
           packageEnd: updatedSubscription.planEnd,
           totalAmount: finalAmount,
           orderDate: new Date(),

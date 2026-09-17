@@ -161,20 +161,23 @@ async function extendSubscription(req, res, next) {
             if (!Number.isInteger(Number(days)) || Number(days) < 1 || Number(days) > maxGraceDays) return res.status(403).json({ error: `Extension must be between 1 and ${maxGraceDays} days.` });
         }
 
+        const isCurrentlyExpired = subscription.planEnd && new Date(subscription.planEnd) < new Date();
         let newPlanEnd;
         if (extendToDate) {
             newPlanEnd = atPlanBoundary(extendToDate);
         } else {
-            newPlanEnd = new Date(subscription.planEnd);
+            const baseDate = isCurrentlyExpired ? atPlanBoundary(new Date()) : new Date(subscription.planEnd);
+            newPlanEnd = new Date(baseDate);
             newPlanEnd.setDate(newPlanEnd.getDate() + Number(days));
             newPlanEnd = atPlanBoundary(newPlanEnd);
         }
 
-        if (isNaN(newPlanEnd.getTime()) || newPlanEnd <= new Date(subscription.planEnd)) {
+        const referenceDate = isCurrentlyExpired ? atPlanBoundary(new Date()) : new Date(subscription.planEnd);
+        if (isNaN(newPlanEnd.getTime()) || newPlanEnd <= referenceDate) {
             return res.status(400).json({ error: 'Extension must move the expiry date forward' });
         }
 
-        const extensionDays = Math.ceil((newPlanEnd - new Date(subscription.planEnd)) / (1000 * 60 * 60 * 24));
+        const extensionDays = Math.ceil((newPlanEnd - referenceDate) / (1000 * 60 * 60 * 24));
 
         await prisma.$transaction(async (tx) => {
             await tx.customerSubscription.update({

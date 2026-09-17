@@ -205,14 +205,36 @@ function atPlanBoundary(value = new Date()) {
 
 function getDeductibleRenewalBase(subscription, now = new Date()) {
   const currentBoundary = atPlanBoundary(now);
-  const planEnd = atPlanBoundary(subscription?.planEnd || currentBoundary);
-  const deductibleDays = Math.max(0, Number(subscription?.graceDaysBalance || 0))
-    + Math.max(0, Number(subscription?.adminExtensionDays || 0));
-
-  if (deductibleDays > 0) {
-    planEnd.setDate(planEnd.getDate() - deductibleDays);
-    return planEnd;
+  if (!subscription?.planEnd) {
+    return currentBoundary;
   }
+
+  const planEnd = atPlanBoundary(subscription.planEnd);
+  const deductibleDays = Math.max(0, Number(subscription.graceDaysBalance || 0))
+    + Math.max(0, Number(subscription.adminExtensionDays || 0));
+
+  // If customer had an extension (grace or admin extension)
+  if (deductibleDays > 0) {
+    // Start of the extension period:
+    const extensionStart = new Date(planEnd);
+    extensionStart.setDate(extensionStart.getDate() - deductibleDays);
+
+    // If extension is active/recent (planEnd is in the future or current):
+    // Renewal begins from when the extension started (extensionStart).
+    // An extension must never backdate further than a reasonable recent window (35 days).
+    if (planEnd >= currentBoundary) {
+      const earliestAllowed = atPlanBoundary(new Date(currentBoundary.getTime() - 35 * 86400000));
+      return extensionStart >= earliestAllowed ? extensionStart : currentBoundary;
+    }
+
+    // If the extension already expired in the past before today, that past extension has lapsed.
+    // Renewal for expired subscribers must start from the current recharge date (today)!
+    return currentBoundary;
+  }
+
+  // If no extension:
+  // If subscription is still active (planEnd >= currentBoundary), renew from planEnd.
+  // If subscription has expired in the past, renewal starts from current recharge date (today / currentBoundary)!
   return planEnd >= currentBoundary ? planEnd : currentBoundary;
 }
 
