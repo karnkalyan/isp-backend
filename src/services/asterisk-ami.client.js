@@ -217,27 +217,65 @@ class AsteriskAmiClient extends EventEmitter {
       }
     }
 
-    // Parse blocks separated by \r\n\r\n or \n\n
-    let boundary = this.#buffer.indexOf('\r\n\r\n');
-    let delimLen = 4;
-    if (boundary === -1) {
-      boundary = this.#buffer.indexOf('\n\n');
-      delimLen = 2;
-    }
+    // Process blocks in buffer
+    while (this.#buffer.length > 0) {
+      // Check if current buffer starts with or contains a Command "Response: Follows"
+      const lowerBuf = this.#buffer.toLowerCase();
+      const followsIdx = lowerBuf.indexOf('response: follows');
 
-    while (boundary !== -1) {
+      if (followsIdx !== -1 && followsIdx < 100) {
+        // Must wait until --END COMMAND-- is present
+        const endCmdIdx = this.#buffer.indexOf('--END COMMAND--');
+        if (endCmdIdx === -1) {
+          // Incomplete command output; wait for next TCP chunk
+          break;
+        }
+
+        // Find boundary after --END COMMAND--
+        let delimLen = 4;
+        let boundary = this.#buffer.indexOf('\r\n\r\n', endCmdIdx);
+        if (boundary === -1) {
+          delimLen = 2;
+          boundary = this.#buffer.indexOf('\n\n', endCmdIdx);
+        }
+        if (boundary === -1) {
+          delimLen = 2;
+          boundary = this.#buffer.indexOf('\r\n', endCmdIdx);
+        }
+        if (boundary === -1) {
+          delimLen = 1;
+          boundary = this.#buffer.indexOf('\n', endCmdIdx);
+        }
+
+        if (boundary !== -1) {
+          const block = this.#buffer.slice(0, boundary).trim();
+          this.#buffer = this.#buffer.slice(boundary + delimLen);
+          if (block) {
+            this.#processBlock(block);
+          }
+          continue;
+        } else {
+          break;
+        }
+      }
+
+      // Standard AMI block delimited by \r\n\r\n or \n\n
+      let boundary = this.#buffer.indexOf('\r\n\r\n');
+      let delimLen = 4;
+      if (boundary === -1) {
+        boundary = this.#buffer.indexOf('\n\n');
+        delimLen = 2;
+      }
+
+      if (boundary === -1) {
+        break; // Incomplete block, wait for more data
+      }
+
       const block = this.#buffer.slice(0, boundary).trim();
       this.#buffer = this.#buffer.slice(boundary + delimLen);
 
       if (block) {
         this.#processBlock(block);
-      }
-
-      boundary = this.#buffer.indexOf('\r\n\r\n');
-      delimLen = 4;
-      if (boundary === -1) {
-        boundary = this.#buffer.indexOf('\n\n');
-        delimLen = 2;
       }
     }
   }
@@ -253,18 +291,41 @@ class AsteriskAmiClient extends EventEmitter {
 
     const lines = block.split(/\r?\n/);
     const parsed = {};
-    let currentKey = null;
+    let isCommandFollows = false;
+    const commandOutputLines = [];
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.startsWith('--END COMMAND--')) {
+        continue;
+      }
+
+      if (isCommandFollows) {
+        commandOutputLines.push(line);
+        continue;
+      }
+
       const colonIdx = line.indexOf(':');
       if (colonIdx > 0) {
         const key = line.slice(0, colonIdx).trim();
         const value = line.slice(colonIdx + 1).trim();
         parsed[key] = value;
-        currentKey = key;
-      } else if (currentKey) {
-        // Multi-line continuation (e.g. output from Command action)
-        parsed[currentKey] = `${parsed[currentKey]}\n${line}`;
+
+        if (key.toLowerCase() === 'response' && value.toLowerCase() === 'follows') {
+          isCommandFollows = true;
+        }
+      } else if (parsed.ActionID) {
+        // Line without colon after header - command output line
+        commandOutputLines.push(line);
+      }
+    }
+
+    if (isCommandFollows || commandOutputLines.length > 0) {
+      const fullOutput = commandOutputLines.join('\n').trim();
+      parsed.output = fullOutput;
+      if (!parsed.Message) {
+        parsed.Message = fullOutput;
       }
     }
 
@@ -487,23 +548,28 @@ class AsteriskAmiClient extends EventEmitter {
     });
   }
 
+  #commandQueue = Promise.resolve();
+
   /**
    * Execute CLI command via AMI Action: Command
    */
   async executeCommand(command, timeoutMs = 8000) {
-    try {
-      const res = await this.sendAction({ Action: 'Command', Command: command }, timeoutMs);
-      return {
-        success: true,
-        output: res.output || res.Message || JSON.stringify(res)
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: err.message,
-        output: ''
-      };
-    }
+    return (this.#commandQueue = this.#commandQueue.catch(() => {}).then(async () => {
+      try {
+        const res = await this.sendAction({ Action: 'Command', Command: command }, timeoutMs);
+        const out = typeof res.output === 'string' ? res.output : (res.Message || '');
+        return {
+          success: true,
+          output: out
+        };
+      } catch (err) {
+        return {
+          success: false,
+          error: err.message,
+          output: ''
+        };
+      }
+    }));
   }
 }
 

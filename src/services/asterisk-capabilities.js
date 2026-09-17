@@ -20,7 +20,7 @@ class AsteriskCapabilities {
       conference: false,
       mute: false,
       hold: false,
-      channelTech: 'PJSIP', // Detected: PJSIP | SIP | DYNAMIC
+      channelTech: 'SIP', // Detected: SIP | PJSIP
       ami: true,
       ari: false,
       ariBridges: false,
@@ -76,17 +76,37 @@ class AsteriskCapabilities {
 
     // 2. Detect channel technology (PJSIP vs SIP)
     try {
-      const pjsipCheck = await amiClient.executeCommand('pjsip show endpoints', 4000);
-      if (pjsipCheck.success && !pjsipCheck.output.toLowerCase().includes('no such command')) {
-        caps.channelTech = 'PJSIP';
+      // Check version first: Asterisk 11, 10, 1.8 or Issabel PBX ONLY supports chan_sip
+      let versionStr = '';
+      const verCheck = await amiClient.executeCommand('core show version', 3000).catch(() => null);
+      if (verCheck && verCheck.success && verCheck.output) {
+        versionStr = String(verCheck.output).toLowerCase();
+      }
+
+      const isAsterisk11OrLegacy =
+        versionStr.includes('asterisk 11.') ||
+        versionStr.includes('asterisk 1.8') ||
+        versionStr.includes('asterisk 10.') ||
+        versionStr.includes('issabel');
+
+      if (isAsterisk11OrLegacy) {
+        caps.channelTech = 'SIP';
       } else {
-        const sipCheck = await amiClient.executeCommand('sip show peers', 4000);
-        if (sipCheck.success && !sipCheck.output.toLowerCase().includes('no such command')) {
+        const pjsipCheck = await amiClient.executeCommand('pjsip show endpoints', 3000).catch(() => null);
+        const pjsipOut = pjsipCheck?.output?.toLowerCase() || '';
+        if (
+          pjsipCheck &&
+          pjsipCheck.success &&
+          !pjsipOut.includes('no such command') &&
+          !pjsipOut.includes('command not found')
+        ) {
+          caps.channelTech = 'PJSIP';
+        } else {
           caps.channelTech = 'SIP';
         }
       }
     } catch (e) {
-      caps.channelTech = 'PJSIP';
+      caps.channelTech = 'SIP';
     }
 
     // 3. Detect ARI capabilities if ARI client is configured

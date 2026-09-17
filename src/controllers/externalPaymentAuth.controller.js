@@ -10,6 +10,7 @@ async function generateExternalPaymentTokens(prisma, configId) {
   const accessToken = jwt.sign(
     {
       configId: Number(configId),
+      ispId: Number(configId),
       type: 'access',
       service: 'EXTERNAL_PAYMENT',
       iat: Math.floor(Date.now() / 1000)
@@ -21,6 +22,7 @@ async function generateExternalPaymentTokens(prisma, configId) {
   const refreshToken = jwt.sign(
     {
       configId: Number(configId),
+      ispId: Number(configId),
       type: 'refresh',
       service: 'EXTERNAL_PAYMENT',
       iat: Math.floor(Date.now() / 1000)

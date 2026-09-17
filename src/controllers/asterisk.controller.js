@@ -38,7 +38,8 @@ class AsteriskController {
   async getDashboardStatus(req, res) {
     try {
       const ispId = req.ispId;
-      const status = await AsteriskService.getServiceStatus(ispId, this.prisma);
+      const force = req.query.force === 'true' || req.query.refresh === 'true';
+      const status = await AsteriskService.getServiceStatus(ispId, this.prisma, force);
       res.json({ success: true, ...status });
     } catch (error) {
       res.status(500).json(this.#handleServiceError(error, 'get_status'));

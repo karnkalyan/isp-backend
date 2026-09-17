@@ -249,9 +249,11 @@ async function getExternalPaymentConfiguration(req, res, next) {
                 select: { config: true, isActive: true, isEnabled: true }
             })
         ]);
+        const crypto = require('crypto');
         res.json({
+            ispId: req.ispId,
             enabled: Boolean(tokenConfig?.isActive),
-            username: tokenConfig?.username || `external_isp_${req.ispId}`,
+            username: tokenConfig?.username || `ext_isp${req.ispId}_${crypto.randomBytes(3).toString('hex')}`,
             passwordConfigured: Boolean(tokenConfig?.passwordHash),
             apiKeyConfigured: Boolean(tokenConfig?.apiKey),
             apiKey: tokenConfig?.apiKey || null,
@@ -267,8 +269,9 @@ async function saveExternalPaymentConfiguration(req, res, next) {
         if (!isSystemAdmin(req)) {
             return res.status(403).json({ error: 'Only system administrators can configure External Payment.' });
         }
+        const crypto = require('crypto');
         const { enabled = true, username, password, apiKey, authMethod = 'BEARER', defaultPaymentMode = 'EXTERNAL' } = req.body || {};
-        const cleanUsername = String(username || `external_isp_${req.ispId}`).trim();
+        const cleanUsername = String(username || `ext_isp${req.ispId}_${crypto.randomBytes(3).toString('hex')}`).trim();
         const existing = await req.prisma.externalPaymentConfiguration.findUnique({ where: { ispId: req.ispId } });
 
         const data = {
@@ -284,13 +287,14 @@ async function saveExternalPaymentConfiguration(req, res, next) {
             await req.prisma.externalPaymentConfiguration.update({ where: { ispId: req.ispId }, data });
         } else {
             if (!password) {
-                data.passwordHash = await bcrypt.hash(`External@ISP#${req.ispId}!2025`, 10);
+                data.passwordHash = await bcrypt.hash(`Ext#ISP${req.ispId}!${crypto.randomBytes(4).toString('hex')}`, 10);
             }
             await req.prisma.externalPaymentConfiguration.create({ data: { ispId: req.ispId, ...data } });
         }
 
         res.json({
             success: true,
+            ispId: req.ispId,
             enabled: Boolean(enabled),
             username: cleanUsername,
             authMethod: data.authMethod,

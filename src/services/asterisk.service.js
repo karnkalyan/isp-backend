@@ -13,10 +13,37 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');
  * - Real PBX actions for makeCall, hangup, transfer, monitor, whisper, barge, active calls, extensions & trunks.
  * - Completely removes mock fallbacks.
  */
+function formatAsteriskVersion(raw) {
+  if (!raw || typeof raw !== 'string') return 'Asterisk';
+  if (raw.startsWith('{')) {
+    try {
+      const obj = JSON.parse(raw);
+      for (const [k, v] of Object.entries(obj)) {
+        if (k.toLowerCase().includes('asterisk')) {
+          raw = `${k}: ${v}`;
+          break;
+        }
+        if (typeof v === 'string' && v.toLowerCase().includes('asterisk')) {
+          raw = v;
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+  const firstLine = raw.split('\n')[0].replace(/--END COMMAND--/g, '').trim();
+  const match = firstLine.match(/Asterisk\s+([^\s]+)\s+built\s+by\s+([^\s@]+)/i);
+  if (match) {
+    return `Asterisk ${match[1]} (${match[2]})`;
+  }
+  return firstLine || 'Asterisk';
+}
+
 class AsteriskService {
   static #serviceInstances = new Map();
   static #amiClients = new Map();
   static #activeListeners = new Map();
+  static #capabilitiesCache = new Map();
+  static #statusCache = new Map();
 
   #config = null;
   #prisma = null;
@@ -119,24 +146,30 @@ class AsteriskService {
     }
   }
 
-  static async getServiceStatus(ispId, prisma) {
+  static async getServiceStatus(ispId, prisma, force = false) {
     try {
-      const config = await this.getConfig(ispId, prisma);
-      const service = new AsteriskService(config, prisma);
-      const test = await service.testConnection();
+      const numericIspId = Number(ispId);
+      const cached = AsteriskService.#statusCache.get(numericIspId);
+      if (!force && cached && cached.expiresAt > Date.now()) {
+        return cached.data;
+      }
 
-      const listener = AsteriskService.#activeListeners.get(Number(ispId));
+      const config = await this.getConfig(numericIspId, prisma);
+      const service = new AsteriskService(config, prisma);
+      const test = await service.testConnection(force);
+
+      const listener = AsteriskService.#activeListeners.get(numericIspId);
       const listenerActive = listener ? listener.isConnected : false;
 
       const systemStatus = await prisma.asteriskSystemStatus.findUnique({
-        where: { ispId: Number(ispId) }
+        where: { ispId: numericIspId }
       });
 
       const controlEngine = (test.amiConnected && test.ariConnected)
         ? 'AMI+ARI'
         : (test.amiConnected ? 'AMI' : (test.ariConnected ? 'ARI' : 'Offline'));
 
-      return {
+      const result = {
         service: 'asterisk',
         enabled: true,
         configured: true,
@@ -155,6 +188,13 @@ class AsteriskService {
         version: test.version || systemStatus?.version || 'Asterisk',
         lastUpdated: new Date().toISOString()
       };
+
+      AsteriskService.#statusCache.set(numericIspId, {
+        data: result,
+        expiresAt: Date.now() + 15000 // 15 seconds cache
+      });
+
+      return result;
     } catch (error) {
       return {
         service: 'asterisk',
@@ -168,7 +208,7 @@ class AsteriskService {
   }
 
   /* ========== CONNECTION TEST & CAPABILITIES ========== */
-  async testConnection() {
+  async testConnection(forceCapabilities = false) {
     let amiConnected = false;
     let ariConnected = false;
     let amiMsg = '';
@@ -184,8 +224,7 @@ class AsteriskService {
           amiMsg = 'AMI connected and authenticated';
           const verCmd = await this.#ami.executeCommand('core show version', 3000);
           if (verCmd.success && verCmd.output) {
-            const firstLine = verCmd.output.split('\n')[0].trim();
-            if (firstLine) versionStr = firstLine;
+            versionStr = formatAsteriskVersion(verCmd.output);
           }
         } else {
           amiMsg = 'AMI socket connected but authentication pending';
@@ -210,8 +249,8 @@ class AsteriskService {
 
     await Promise.allSettled([amiPromise, ariPromise]);
 
-    // 3. Detect capabilities dynamically
-    this.#capabilities = await AsteriskCapabilities.detect(this.#ami, this.#ari);
+    // 3. Detect capabilities dynamically (cached)
+    this.#capabilities = await this.getCapabilities(forceCapabilities);
 
     return {
       connected: amiConnected || ariConnected,
@@ -225,11 +264,18 @@ class AsteriskService {
     };
   }
 
-  async getCapabilities() {
-    if (!this.#capabilities) {
-      this.#capabilities = await AsteriskCapabilities.detect(this.#ami, this.#ari);
+  async getCapabilities(forceRefresh = false) {
+    const cached = AsteriskService.#capabilitiesCache.get(this.#ispId);
+    if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+      return cached.caps;
     }
-    return this.#capabilities;
+    const caps = await AsteriskCapabilities.detect(this.#ami, this.#ari);
+    AsteriskService.#capabilitiesCache.set(this.#ispId, {
+      caps,
+      expiresAt: Date.now() + 60000 // 60s cache
+    });
+    this.#capabilities = caps;
+    return caps;
   }
 
   /* ========== CALL CONTROL ========== */
@@ -692,10 +738,75 @@ class AsteriskService {
   async listExtensions() {
     try {
       const extList = [];
+      const seenExtensions = new Set();
       const caps = await this.getCapabilities();
 
-      // 1. If PJSIP endpoints supported and AMI connected, try CLI "pjsip show endpoints"
-      if (caps.channelTech === 'PJSIP' && this.#ami.isConnected && this.#ami.isAuthenticated) {
+      // 1. Try native AMI Action: SIPpeers if AMI connected
+      if (this.#ami.isConnected && this.#ami.isAuthenticated) {
+        try {
+          const peerRes = await this.#ami.sendMultiEventAction(
+            { Action: 'SIPpeers' },
+            'PeerlistComplete',
+            5000
+          ).catch(() => null);
+
+          if (peerRes && Array.isArray(peerRes.events) && peerRes.events.length > 0) {
+            for (const ev of peerRes.events) {
+              if (ev.Event && ev.Event.toLowerCase() === 'peerentry') {
+                const objectName = String(ev.ObjectName || '').trim();
+                // Match numeric extension numbers (e.g. 1001, 201)
+                if (objectName && /^\d+$/.test(objectName) && !seenExtensions.has(objectName)) {
+                  seenExtensions.add(objectName);
+                  const statusStr = String(ev.Status || '').toLowerCase();
+                  const isOk = statusStr.includes('ok') || statusStr.includes('unmonitored') || statusStr.includes('reachable');
+                  extList.push({
+                    number: objectName,
+                    name: ev.Callerid || objectName,
+                    status: isOk ? 'Registered' : 'Unregistered',
+                    registered: isOk,
+                    type: 'SIP',
+                    host: ev.IPaddress && ev.IPaddress !== '-none-' ? ev.IPaddress : undefined,
+                    port: ev.IPport ? parseInt(ev.IPport, 10) : undefined
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2. If SIP peers still empty, try CLI "sip show peers"
+      if (extList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
+        const sipRes = await this.#ami.executeCommand('sip show peers', 6000).catch(() => null);
+        if (sipRes && sipRes.success && sipRes.output) {
+          const lines = sipRes.output.split('\n');
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('Name') || trimmed.startsWith('--') || trimmed.includes('sip peers')) {
+              continue;
+            }
+            const parts = trimmed.split(/\s+/);
+            if (parts.length >= 2) {
+              const namePart = parts[0].split('/')[0];
+              if (namePart && /^\d+$/.test(namePart) && !seenExtensions.has(namePart)) {
+                seenExtensions.add(namePart);
+                const isOk = trimmed.toLowerCase().includes('ok') || trimmed.toLowerCase().includes('unmonitored');
+                extList.push({
+                  number: namePart,
+                  name: namePart,
+                  status: isOk ? 'Registered' : 'Unregistered',
+                  registered: isOk,
+                  type: 'SIP',
+                  host: parts[1] && parts[1] !== '(Unspecified)' ? parts[1] : undefined
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // 3. If PJSIP endpoints supported, try CLI "pjsip show endpoints"
+      if (extList.length === 0 && caps.channelTech === 'PJSIP' && this.#ami.isConnected && this.#ami.isAuthenticated) {
         const cmdRes = await this.#ami.executeCommand('pjsip show endpoints', 6000).catch(() => null);
         if (cmdRes && cmdRes.success && cmdRes.output) {
           const lines = cmdRes.output.split('\n');
@@ -704,8 +815,8 @@ class AsteriskService {
                           line.match(/Endpoint:\s+([^\s]+)\s+([^\s]+)/i);
             if (match) {
               const number = match[1];
-              // Only consider endpoints that look like extension numbers (numeric)
-              if (/^\d+$/.test(number)) {
+              if (/^\d+$/.test(number) && !seenExtensions.has(number)) {
+                seenExtensions.add(number);
                 const statusStr = match[2] || 'Unavailable';
                 const isReg = !statusStr.toLowerCase().includes('unavailable') && !statusStr.toLowerCase().includes('offline');
                 extList.push({
@@ -721,42 +832,38 @@ class AsteriskService {
         }
       }
 
-      // 2. If SIP peers supported and AMI connected, try CLI "sip show peers"
-      if (extList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
-        const sipRes = await this.#ami.executeCommand('sip show peers', 6000).catch(() => null);
-        if (sipRes && sipRes.success && sipRes.output) {
-          const lines = sipRes.output.split('\n');
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 2 && !parts[0].startsWith('Name') && !parts[0].startsWith('--')) {
-              const namePart = parts[0].split('/')[0];
-              if (namePart && !namePart.includes('peer') && /^\d+$/.test(namePart)) {
-                const isOk = line.toLowerCase().includes('ok') || line.toLowerCase().includes('unmonitored');
-                extList.push({
-                  number: namePart,
-                  name: namePart,
-                  status: isOk ? 'Registered' : 'Unregistered',
-                  registered: isOk,
-                  type: 'SIP'
-                });
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Fallback to ARI endpoints if ARI is configured
+      // 4. Fallback to ARI endpoints if ARI is configured
       if (extList.length === 0 && this.#ari.isConfigured) {
-        const endpoints = await this.#ari.listEndpoints();
+        const endpoints = await this.#ari.listEndpoints().catch(() => []);
         for (const ep of endpoints) {
-          // Extensions are numeric resources (e.g. 1001, 1002); non-numeric like yeastar-s50 are trunks
-          if (ep.resource && /^\d+$/.test(ep.resource)) {
+          if (ep.resource && /^\d+$/.test(ep.resource) && !seenExtensions.has(ep.resource)) {
+            seenExtensions.add(ep.resource);
             extList.push({
               number: ep.resource,
               name: ep.resource,
               status: ep.state === 'online' ? 'Registered' : 'Unregistered',
               registered: ep.state === 'online',
               type: (ep.technology || 'PJSIP').toUpperCase()
+            });
+          }
+        }
+      }
+
+      // 5. Fallback to DB if live Asterisk returned 0
+      if (extList.length === 0 && this.#prisma) {
+        const dbExts = await this.#prisma.asteriskExtension.findMany({
+          where: { ispId: this.#ispId, isActive: true, isDeleted: false },
+          orderBy: { extensionNumber: 'asc' }
+        });
+        for (const ext of dbExts) {
+          if (!seenExtensions.has(ext.extensionNumber)) {
+            seenExtensions.add(ext.extensionNumber);
+            extList.push({
+              number: ext.extensionNumber,
+              name: ext.extensionName || ext.extensionNumber,
+              status: ext.status || 'Unregistered',
+              registered: ext.status === 'Registered',
+              type: ext.extensionType || 'SIP'
             });
           }
         }
@@ -821,31 +928,104 @@ class AsteriskService {
   async listTrunks() {
     try {
       const trunkList = [];
+      const seenTrunks = new Set();
 
-      // 1. Try "sip show registry" if AMI connected
+      // 1. Try native AMI Action: SIPshowregistry if AMI connected
       if (this.#ami.isConnected && this.#ami.isAuthenticated) {
+        try {
+          const regAction = await this.#ami.sendMultiEventAction(
+            { Action: 'SIPshowregistry' },
+            'RegistrationsComplete',
+            5000
+          ).catch(() => null);
+
+          if (regAction && Array.isArray(regAction.events) && regAction.events.length > 0) {
+            for (const ev of regAction.events) {
+              if (ev.Event && ev.Event.toLowerCase() === 'registryentry') {
+                const host = ev.Host || '';
+                const username = ev.Username || '';
+                const trunkKey = username || host;
+                if (trunkKey && !seenTrunks.has(trunkKey)) {
+                  seenTrunks.add(trunkKey);
+                  const state = String(ev.State || '').toLowerCase();
+                  const status = state.includes('registered') ? 'Registered' : 'Unregistered';
+                  trunkList.push({
+                    id: `trunk_${trunkKey}`,
+                    trunkname: trunkKey,
+                    trunktype: 'register',
+                    status,
+                    host
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2. Try CLI "sip show registry" if AMI connected
+      if (trunkList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
         const regRes = await this.#ami.executeCommand('sip show registry', 6000).catch(() => null);
         if (regRes && regRes.success && regRes.output) {
           const lines = regRes.output.split('\n');
           for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 3 && !parts[0].startsWith('Host') && !parts[0].startsWith('--')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('Host') || trimmed.startsWith('--') || trimmed.includes('registrations')) {
+              continue;
+            }
+            const parts = trimmed.split(/\s+/);
+            if (parts.length >= 3) {
               const host = parts[0];
               const username = parts[1] || '';
-              const status = line.toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
-              trunkList.push({
-                id: `trunk_${username || host}`,
-                trunkname: username || host,
-                trunktype: 'register',
-                status,
-                host
-              });
+              const trunkKey = username || host;
+              if (trunkKey && !seenTrunks.has(trunkKey)) {
+                seenTrunks.add(trunkKey);
+                const status = trimmed.toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
+                trunkList.push({
+                  id: `trunk_${trunkKey}`,
+                  trunkname: trunkKey,
+                  trunktype: 'register',
+                  status,
+                  host
+                });
+              }
             }
           }
         }
       }
 
-      // 2. Try "pjsip show registrations" if AMI connected
+      // 3. Extract non-numeric SIP peers as trunks (e.g. Issabel/FreePBX static trunks to providers or gateways)
+      if (this.#ami.isConnected && this.#ami.isAuthenticated) {
+        try {
+          const sipRes = await this.#ami.executeCommand('sip show peers', 6000).catch(() => null);
+          if (sipRes && sipRes.success && sipRes.output) {
+            const lines = sipRes.output.split('\n');
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('Name') || trimmed.startsWith('--') || trimmed.includes('sip peers')) {
+                continue;
+              }
+              const parts = trimmed.split(/\s+/);
+              if (parts.length >= 2) {
+                const namePart = parts[0].split('/')[0];
+                if (namePart && !/^\d+$/.test(namePart) && !namePart.toLowerCase().includes('peer') && !seenTrunks.has(namePart)) {
+                  seenTrunks.add(namePart);
+                  const isOk = trimmed.toLowerCase().includes('ok') || trimmed.toLowerCase().includes('unmonitored');
+                  trunkList.push({
+                    id: `trunk_${namePart}`,
+                    trunkname: namePart,
+                    trunktype: 'sip_peer',
+                    status: isOk ? 'Registered' : 'Unregistered',
+                    host: parts[1] && parts[1] !== '(Unspecified)' ? parts[1] : 'configured'
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 4. Try "pjsip show registrations" if AMI connected
       if (trunkList.length === 0 && this.#ami.isConnected && this.#ami.isAuthenticated) {
         const pjsipReg = await this.#ami.executeCommand('pjsip show registrations', 6000).catch(() => null);
         if (pjsipReg && pjsipReg.success && pjsipReg.output) {
@@ -854,24 +1034,28 @@ class AsteriskService {
             const match = line.match(/Registration:\s+([^\s/]+)\/([^\s]+)\s+([^\s]+)/i);
             if (match) {
               const regId = match[1];
-              const status = match[3].toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
-              trunkList.push({
-                id: `pjsip_${regId}`,
-                trunkname: regId,
-                trunktype: 'pjsip',
-                status,
-                host: match[2] || ''
-              });
+              if (!seenTrunks.has(regId)) {
+                seenTrunks.add(regId);
+                const status = match[3].toLowerCase().includes('registered') ? 'Registered' : 'Unregistered';
+                trunkList.push({
+                  id: `pjsip_${regId}`,
+                  trunkname: regId,
+                  trunktype: 'pjsip',
+                  status,
+                  host: match[2] || ''
+                });
+              }
             }
           }
         }
       }
 
-      // 3. Fallback to ARI endpoints for trunks (endpoints that are not numeric extensions, e.g. yeastar-s50)
+      // 5. Fallback to ARI endpoints for trunks
       if (trunkList.length === 0 && this.#ari.isConfigured) {
-        const endpoints = await this.#ari.listEndpoints();
+        const endpoints = await this.#ari.listEndpoints().catch(() => []);
         for (const ep of endpoints) {
-          if (ep.resource && !/^\d+$/.test(ep.resource)) {
+          if (ep.resource && !/^\d+$/.test(ep.resource) && !seenTrunks.has(ep.resource)) {
+            seenTrunks.add(ep.resource);
             const isReg = ep.state === 'online';
             trunkList.push({
               id: `trunk_${ep.resource}`,
@@ -879,6 +1063,26 @@ class AsteriskService {
               trunktype: (ep.technology || 'pjsip').toLowerCase(),
               status: isReg ? 'Registered' : 'Unregistered',
               host: this.#config.ariHost || this.#config.amiHost || 'configured'
+            });
+          }
+        }
+      }
+
+      // 6. Fallback to DB if live Asterisk returned 0
+      if (trunkList.length === 0 && this.#prisma) {
+        const dbTrunks = await this.#prisma.asteriskTrunk.findMany({
+          where: { ispId: this.#ispId, isActive: true, isDeleted: false },
+          orderBy: { trunkname: 'asc' }
+        });
+        for (const t of dbTrunks) {
+          if (!seenTrunks.has(t.trunkname)) {
+            seenTrunks.add(t.trunkname);
+            trunkList.push({
+              id: t.trunkId,
+              trunkname: t.trunkname,
+              trunktype: t.trunktype || 'sip',
+              status: t.status || 'Unregistered',
+              host: t.host || 'configured'
             });
           }
         }
