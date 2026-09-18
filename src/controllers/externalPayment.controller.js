@@ -461,6 +461,34 @@ const paymentInquiry = async (req, res) => {
 
   } catch (err) {
     console.error("External payment inquiry error:", err);
+    try {
+      const isUserNotFound = err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('customer not found');
+      if (requestId) {
+        await prisma.externalPayment.create({
+          data: {
+            ispId: req.ispId || 1,
+            customerId: null,
+            customerUniqueId: null,
+            username: String(requestId),
+            requestId: String(requestId),
+            amount: 0,
+            paymentMode: 'INQUIRY',
+            status: 'FAILED',
+            transactionCode: `INQ-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+            packageDuration: null,
+            packageDetails: {
+              error: err.message || 'Inquiry failed',
+              code: err.code || 'UNKNOWN',
+              reason: isUserNotFound ? 'No user found' : (err.message || 'Inquiry failed'),
+              type: 'INQUIRY',
+              payload: { params: req.params, body: req.body }
+            },
+            branchId: null
+          }
+        }).catch(e => console.warn('[ExternalPayment] Failed to save failed inquiry log:', e.message));
+      }
+    } catch (_) {}
+
     const statusCode = err.statusCode || 500;
     return res.status(statusCode).json({
       request_id: String(requestId || ""),
@@ -770,8 +798,8 @@ const processPayment = async (req, res) => {
   } catch (err) {
     console.error("External processPayment error:", err);
     try {
+      let resolvedCust = null;
       if (lookupValue) {
-        let resolvedCust = null;
         try {
           resolvedCust = await prisma.customer.findFirst({
             where: {
@@ -786,30 +814,32 @@ const processPayment = async (req, res) => {
             select: { id: true, customerUniqueId: true, branchId: true }
           });
         } catch (_) {}
-
-        if (resolvedCust) {
-          await prisma.externalPayment.create({
-            data: {
-              ispId: req.ispId || 1,
-              customerId: resolvedCust.id,
-              customerUniqueId: resolvedCust.customerUniqueId,
-              username: String(lookupValue),
-              requestId: String(lookupValue),
-              amount: Number(inputAmount || 0),
-              paymentMode: paymentMode,
-              status: 'FAILED',
-              transactionCode: transactionCode,
-              packageDuration: String(duration || '1 month'),
-              packageDetails: {
-                error: err.message || 'Payment processing failed',
-                code: err.code || 'UNKNOWN',
-                payload: req.body
-              },
-              branchId: resolvedCust.branchId || null
-            }
-          }).catch(e => console.warn('[ExternalPayment] Failed to save failed payment log:', e.message));
-        }
       }
+
+      const isNoUser = !resolvedCust || err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('customer not found');
+      const failureReason = isNoUser ? 'No user found' : (err.message || 'Payment processing failed');
+
+      await prisma.externalPayment.create({
+        data: {
+          ispId: req.ispId || 1,
+          customerId: resolvedCust ? resolvedCust.id : null,
+          customerUniqueId: resolvedCust ? resolvedCust.customerUniqueId : null,
+          username: lookupValue ? String(lookupValue) : null,
+          requestId: lookupValue ? String(lookupValue) : 'UNKNOWN',
+          amount: Number(inputAmount || 0),
+          paymentMode: paymentMode,
+          status: 'FAILED',
+          transactionCode: transactionCode,
+          packageDuration: String(duration || '1 month'),
+          packageDetails: {
+            error: err.message || 'Payment processing failed',
+            code: err.code || 'UNKNOWN',
+            reason: failureReason,
+            payload: req.body
+          },
+          branchId: resolvedCust ? (resolvedCust.branchId || null) : null
+        }
+      }).catch(e => console.warn('[ExternalPayment] Failed to save failed payment log:', e.message));
     } catch (_) {}
 
     return res.status(err.statusCode || 500).json({
@@ -939,12 +969,18 @@ const listTransactions = async (req, res) => {
   ]);
 
   const formattedTransactions = transactions.map(t => {
-    const custName = [t.customer?.lead?.firstName, t.customer?.lead?.middleName, t.customer?.lead?.lastName].filter(Boolean).join(' ') || 'Customer';
+    let custName = 'Customer';
+    if (t.customer) {
+      custName = [t.customer?.lead?.firstName, t.customer?.lead?.middleName, t.customer?.lead?.lastName].filter(Boolean).join(' ') || 'Customer';
+    } else if (t.status === 'FAILED') {
+      custName = t.packageDetails?.reason || 'No user found';
+    }
+
     return {
       id: t.id,
       requestId: t.requestId,
       username: t.username,
-      customerUniqueId: t.customerUniqueId,
+      customerUniqueId: t.customerUniqueId || (t.status === 'FAILED' ? 'N/A' : null),
       customerName: custName,
       customerPhone: t.customer?.lead?.phoneNumber || null,
       customerEmail: t.customer?.lead?.email || null,

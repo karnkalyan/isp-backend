@@ -1561,8 +1561,8 @@ model ESewaRefreshToken {
 model ExternalPayment {
   id               String    @id @default(cuid())
   ispId            Int
-  customerId       Int
-  customerUniqueId String    @db.VarChar(100)
+  customerId       Int?
+  customerUniqueId String?   @db.VarChar(100)
   username         String?   @db.VarChar(191)
   requestId        String    @db.VarChar(191)
   amount           Float
@@ -1577,7 +1577,7 @@ model ExternalPayment {
   paidAt           DateTime?
   branchId         Int?
   branch           Branch?   @relation(fields: [branchId], references: [id], map: "ext_payment_branch_fkey")
-  customer         Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "ext_payment_customer_fkey")
+  customer         Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade, map: "ext_payment_customer_fkey")
   isp              ISP       @relation(fields: [ispId], references: [id], onDelete: Cascade, map: "ext_payment_isp_fkey")
 
   @@index([requestId])
