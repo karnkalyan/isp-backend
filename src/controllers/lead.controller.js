@@ -413,7 +413,8 @@ async function getLeadById(req, res, next) {
             id: true,
             customerUniqueId: true,
             idNumber: true,
-            status: true
+            status: true,
+            isDeleted: true
           }
         }
       }
@@ -421,6 +422,20 @@ async function getLeadById(req, res, next) {
 
     if (!lead) {
       return res.status(404).json({ error: "Lead not found." });
+    }
+
+    // If customer was deleted (or no active customer exists), ensure lead is reverted to qualified so it can be re-onboarded
+    const hasActiveCustomer = lead.customers?.some(c => !c.isDeleted && c.status !== 'deleted');
+    if (!hasActiveCustomer && (lead.convertedToCustomer || lead.status === 'converted')) {
+      await req.prisma.lead.update({
+        where: { id: lead.id },
+        data: {
+          convertedToCustomer: false,
+          status: 'qualified'
+        }
+      });
+      lead.convertedToCustomer = false;
+      lead.status = 'qualified';
     }
 
     // Fetch SMS logs sent to this lead. Manual uploads can be logged as

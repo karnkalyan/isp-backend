@@ -902,8 +902,27 @@ async function createCustomer(req, res, next) {
       where: { id: Number(leadId), isDeleted: false, ispId: req.ispId },
     });
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
-    if (lead.convertedToCustomer) return res.status(409).json({ success: false, error: 'Lead already converted' });
-    if (lead.status !== 'qualified') {
+
+    // Check if an existing customer record exists for this lead (active or deleted)
+    const existingCustomerForLead = await prisma.customer.findFirst({
+      where: { leadId: Number(leadId), ispId: req.ispId }
+    });
+
+    if (existingCustomerForLead) {
+      if (!existingCustomerForLead.isDeleted) {
+        return res.status(409).json({ success: false, error: 'Customer already exists for this lead' });
+      }
+      // If customer was deleted, we allow reactivation/re-onboarding!
+    } else if (lead.convertedToCustomer) {
+      const activeCustomer = await prisma.customer.findFirst({
+        where: { leadId: Number(leadId), isDeleted: false }
+      });
+      if (activeCustomer) {
+        return res.status(409).json({ success: false, error: 'Lead already converted' });
+      }
+    }
+
+    if (lead.status !== 'qualified' && !existingCustomerForLead?.isDeleted) {
       return res.status(400).json({ success: false, error: 'Only qualified leads can be converted to customers' });
     }
 
@@ -941,27 +960,32 @@ async function createCustomer(req, res, next) {
 
     // Validate duplicate Mobile and Email based on CustomerType rules
     const targetTypeId = customerTypeId ? Number(customerTypeId) : null;
+    const cleanLeadPhone = (lead.phoneNumber && String(lead.phoneNumber).trim()) || null;
+    const cleanLeadEmail = (lead.email && String(lead.email).trim()) || null;
+
     if (targetTypeId) {
       const cType = await prisma.customerType.findUnique({
         where: { id: targetTypeId }
       });
       if (cType) {
-        if (cType.allowDuplicateMobile === false && lead.phoneNumber) {
+        if (cType.allowDuplicateMobile === false && cleanLeadPhone) {
           const dupMobile = await prisma.customer.findFirst({
             where: {
+              ...(existingCustomerForLead?.id ? { id: { not: existingCustomerForLead.id } } : {}),
               isDeleted: false,
-              lead: { phoneNumber: lead.phoneNumber }
+              lead: { phoneNumber: cleanLeadPhone }
             }
           });
           if (dupMobile) {
             return res.status(400).json({ success: false, error: 'Mobile number already exists for another customer. Duplication is disabled for this customer type.' });
           }
         }
-        if (cType.allowDuplicateEmail === false && lead.email) {
+        if (cType.allowDuplicateEmail === false && cleanLeadEmail) {
           const dupEmail = await prisma.customer.findFirst({
             where: {
+              ...(existingCustomerForLead?.id ? { id: { not: existingCustomerForLead.id } } : {}),
               isDeleted: false,
-              lead: { email: lead.email }
+              lead: { email: cleanLeadEmail }
             }
           });
           if (dupEmail) {
@@ -990,7 +1014,7 @@ async function createCustomer(req, res, next) {
     if (requestedLoginUsername) {
       const requestedLoginEmail = toCustomerLoginEmail(requestedLoginUsername);
       const existingLogin = await prisma.user.findUnique({ where: { email: requestedLoginEmail } });
-      if (existingLogin) {
+      if (existingLogin && (!existingCustomerForLead || existingLogin.customerId !== existingCustomerForLead.id)) {
         return res.status(409).json({
           success: false,
           error: 'Customer login username already exists',
@@ -1000,7 +1024,8 @@ async function createCustomer(req, res, next) {
     }
 
     // Data preparation
-    const finalPan = await generateUniquePAN(prisma, panNumber);
+    const panCandidate = panNumber || (existingCustomerForLead?.panNo ? existingCustomerForLead.panNo : null);
+    const finalPan = await generateUniquePAN(prisma, panCandidate);
     const membership = membershipId
       ? await prisma.membership.findFirst({ where: { id: Number(membershipId), ispId: req.ispId } })
       : null;
@@ -1022,33 +1047,55 @@ async function createCustomer(req, res, next) {
       const autoGenRadius = settingsObj.autoGenerateRadius === 'true';
       const autoGenLogin = settingsObj.autoGenerateCustomerLogin === 'true';
 
-      // 1. Create Customer
-      createdCustomer = await tx.customer.create({
-        data: {
-          lead: { connect: { id: lead.id } },
-          panNo: finalPan,
-          idNumber: idNumber.trim(),
-          ...(membershipId && { membership: { connect: { id: Number(membershipId) } } }),
-          ...(effectiveBranchId && { branch: { connect: { id: Number(effectiveBranchId) } } }),
-          ...(effectiveSubBranchId && { subBranch: { connect: { id: Number(effectiveSubBranchId) } } }),
-          ...(targetTypeId && { customerType: { connect: { id: targetTypeId } } }),
-          ...(req.ispId && { isp: { connect: { id: Number(req.ispId) } } }),
-          ...(installedById && { installedBy: { connect: { id: Number(installedById) } } }),
-          ...(existingISPId && { existingISP: { connect: { id: Number(existingISPId) } } }),
-          packagePrice: { connect: { id: subscribedPackage.id } },
-          subscribedPkg: { connect: { id: subscribedPackage.id } },
-          status: 'draft',
-          onboardStatus: 'pending',
-          isFree: parsedIsFree,
-        }
-      });
+      // 1. Create or Reactivate Customer
+      const customerPayload = {
+        panNo: finalPan,
+        idNumber: idNumber.trim(),
+        ...(membershipId ? { membership: { connect: { id: Number(membershipId) } } } : { membership: { disconnect: true } }),
+        ...(effectiveBranchId ? { branch: { connect: { id: Number(effectiveBranchId) } } } : {}),
+        ...(effectiveSubBranchId ? { subBranch: { connect: { id: Number(effectiveSubBranchId) } } } : {}),
+        ...(targetTypeId ? { customerType: { connect: { id: targetTypeId } } } : {}),
+        ...(req.ispId ? { isp: { connect: { id: Number(req.ispId) } } } : {}),
+        ...(installedById ? { installedBy: { connect: { id: Number(installedById) } } } : {}),
+        ...(existingISPId ? { existingISP: { connect: { id: Number(existingISPId) } } } : {}),
+        packagePrice: { connect: { id: subscribedPackage.id } },
+        subscribedPkg: { connect: { id: subscribedPackage.id } },
+        assignedPkg: subscribedPackage.id,
+        status: 'draft',
+        onboardStatus: 'pending',
+        isFree: parsedIsFree,
+        isDeleted: false,
+        updatedAt: new Date()
+      };
 
-      // 2. Generate unique customer ID
-      const customerUniqueId = await generateCustomerUniqueId(tx, createdCustomer.id, lead.firstName, lead.lastName, membershipCode, effectiveBranchId, effectiveSubBranchId, req.ispId);
-      createdCustomer = await tx.customer.update({
-        where: { id: createdCustomer.id },
-        data: { customerUniqueId },
-      });
+      if (existingCustomerForLead && existingCustomerForLead.isDeleted) {
+        createdCustomer = await tx.customer.update({
+          where: { id: existingCustomerForLead.id },
+          data: customerPayload
+        });
+      } else {
+        createdCustomer = await tx.customer.create({
+          data: {
+            lead: { connect: { id: lead.id } },
+            ...customerPayload
+          }
+        });
+      }
+
+      // 2. Generate unique customer ID (preserve if already exists, or generate)
+      let customerUniqueId = (existingCustomerForLead && existingCustomerForLead.customerUniqueId) || null;
+      if (!customerUniqueId) {
+        customerUniqueId = await generateCustomerUniqueId(tx, createdCustomer.id, lead.firstName, lead.lastName, membershipCode, effectiveBranchId, effectiveSubBranchId, req.ispId);
+        createdCustomer = await tx.customer.update({
+          where: { id: createdCustomer.id },
+          data: { customerUniqueId },
+        });
+      } else {
+        createdCustomer = await tx.customer.update({
+          where: { id: createdCustomer.id },
+          data: { customerUniqueId },
+        });
+      }
 
       // Populate finalWirelessCredentials
       finalWirelessCredentials.push(...parsedWirelessCredentials);
@@ -1075,28 +1122,47 @@ async function createCustomer(req, res, next) {
           });
           const existingLogin = await tx.user.findUnique({ where: { email: loginEmail } });
           if (existingLogin) {
-            throw new Error('Customer login username already exists');
+            if (existingCustomerForLead && existingLogin.customerId === existingCustomerForLead.id) {
+              await tx.user.update({
+                where: { id: existingLogin.id },
+                data: {
+                  status: 'active',
+                  passwordHash: await bcrypt.hash(loginPassword, 10),
+                  name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+                  branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                  updatedAt: new Date()
+                }
+              });
+              customerLogin = {
+                username: loginUsername,
+                loginEmail,
+                password: loginPassword,
+                generatedPassword: !String(customerLoginPassword || '').trim(),
+              };
+            } else {
+              throw new Error('Customer login username already exists');
+            }
+          } else {
+            await tx.user.create({
+              data: {
+                email: loginEmail,
+                passwordHash: await bcrypt.hash(loginPassword, 10),
+                name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+                roleId: customerRole.id,
+                status: 'active',
+                ispId: req.ispId ? Number(req.ispId) : null,
+                branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                customerId: createdCustomer.id,
+              },
+            });
+
+            customerLogin = {
+              username: loginUsername,
+              loginEmail,
+              password: loginPassword,
+              generatedPassword: !String(customerLoginPassword || '').trim(),
+            };
           }
-
-          await tx.user.create({
-            data: {
-              email: loginEmail,
-              passwordHash: await bcrypt.hash(loginPassword, 10),
-              name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
-              roleId: customerRole.id,
-              status: 'active',
-              ispId: req.ispId ? Number(req.ispId) : null,
-              branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
-              customerId: createdCustomer.id,
-            },
-          });
-
-          customerLogin = {
-            username: loginUsername,
-            loginEmail,
-            password: loginPassword,
-            generatedPassword: !String(customerLoginPassword || '').trim(),
-          };
         }
       }
 
@@ -1189,6 +1255,11 @@ async function createCustomer(req, res, next) {
 
       // 4. Create Service Connection – only store fields that exist in your schema
       if (Object.keys(parsedServiceConnection).length > 0) {
+        // Clean up previous deleted service connection if reactivating
+        await tx.customerServiceConnection.deleteMany({
+          where: { customerId: createdCustomer.id }
+        });
+
         await tx.customerServiceConnection.create({
           data: {
             customerId: createdCustomer.id,
@@ -1206,15 +1277,39 @@ async function createCustomer(req, res, next) {
       // 5. Connection Users
       for (const cu of finalWirelessCredentials) {
         if (cu.username && cu.password) {
-          await tx.connectionUser.create({
-            data: {
-              customerId: createdCustomer.id,
-              username: cu.username,
-              password: cu.password,
-              branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
-              ispId: req.ispId ? Number(req.ispId) : null,
-            },
+          const existingConnUser = await tx.connectionUser.findFirst({
+            where: { username: cu.username }
           });
+          if (existingConnUser) {
+            if (existingConnUser.customerId === createdCustomer.id || existingConnUser.isDeleted) {
+              await tx.connectionUser.update({
+                where: { id: existingConnUser.id },
+                data: {
+                  customerId: createdCustomer.id,
+                  password: cu.password,
+                  branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                  ispId: req.ispId ? Number(req.ispId) : null,
+                  isActive: true,
+                  isDeleted: false,
+                  updatedAt: new Date()
+                }
+              });
+            } else {
+              throw new Error(`Connection username "${cu.username}" already in use by another customer`);
+            }
+          } else {
+            await tx.connectionUser.create({
+              data: {
+                customerId: createdCustomer.id,
+                username: cu.username,
+                password: cu.password,
+                branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                ispId: req.ispId ? Number(req.ispId) : null,
+                isActive: true,
+                isDeleted: false,
+              },
+            });
+          }
         }
       }
 
@@ -1256,7 +1351,13 @@ async function createCustomer(req, res, next) {
       // 8. Update lead
       await tx.lead.update({
         where: { id: lead.id },
-        data: { status: 'converted', convertedToCustomer: true, convertedAt: new Date() },
+        data: {
+          isDeleted: false,
+          isActive: true,
+          status: 'converted',
+          convertedToCustomer: true,
+          convertedAt: new Date()
+        },
       });
 
       await logAudit(tx, req.user.id, 'CUSTOMER_CREATE', { id: createdCustomer.id, customerUniqueId: customerUniqueId, customerTypeId: targetTypeId }, req);
