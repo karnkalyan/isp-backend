@@ -1119,29 +1119,56 @@ async function createCustomer(req, res, next) {
             update: { isActive: true },
             create: { name: 'Customer', isActive: true },
           });
-          const existingLogin = await tx.user.findUnique({ where: { email: loginEmail } });
-          if (existingLogin) {
-            if (existingCustomerForLead && existingLogin.customerId === existingCustomerForLead.id) {
-              await tx.user.update({
-                where: { id: existingLogin.id },
-                data: {
-                  status: 'active',
-                  passwordHash: await bcrypt.hash(loginPassword, 10),
-                  name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
-                  branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
-                  updatedAt: new Date()
-                }
-              });
-              customerLogin = {
-                username: loginUsername,
-                loginEmail,
-                password: loginPassword,
-                generatedPassword: !String(customerLoginPassword || '').trim(),
-              };
-            } else {
+
+          // Check if there is already a portal user linked to this customer
+          const existingUserForCustomer = await tx.user.findUnique({
+            where: { customerId: createdCustomer.id }
+          });
+          // Check if there is a portal user with this email
+          const existingUserWithEmail = await tx.user.findUnique({
+            where: { email: loginEmail }
+          });
+
+          if (existingUserWithEmail && existingUserForCustomer && existingUserWithEmail.id !== existingUserForCustomer.id) {
+            // Email is already used by a different user
+            throw new Error('Customer login username already exists');
+          } else if (existingUserWithEmail && !existingUserForCustomer) {
+            // Email matches an unlinked or existing user
+            if (existingUserWithEmail.customerId && existingUserWithEmail.customerId !== createdCustomer.id) {
               throw new Error('Customer login username already exists');
             }
+            await tx.user.update({
+              where: { id: existingUserWithEmail.id },
+              data: {
+                customerId: createdCustomer.id,
+                roleId: customerRole.id,
+                status: 'active',
+                isDeleted: false,
+                passwordHash: await bcrypt.hash(loginPassword, 10),
+                name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+                branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                ispId: req.ispId ? Number(req.ispId) : null,
+                updatedAt: new Date()
+              }
+            });
+          } else if (existingUserForCustomer) {
+            // Re-activate and update the existing portal user for this customer
+            await tx.user.update({
+              where: { id: existingUserForCustomer.id },
+              data: {
+                email: loginEmail,
+                roleId: customerRole.id,
+                status: 'active',
+                isDeleted: false,
+                passwordHash: await bcrypt.hash(loginPassword, 10),
+                name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
+                branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
+                ispId: req.ispId ? Number(req.ispId) : null,
+                updatedAt: new Date()
+              }
+            });
           } else {
+            // Brand new portal user
             await tx.user.create({
               data: {
                 email: loginEmail,
@@ -1149,23 +1176,30 @@ async function createCustomer(req, res, next) {
                 name: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || customerUniqueId,
                 roleId: customerRole.id,
                 status: 'active',
+                isDeleted: false,
                 ispId: req.ispId ? Number(req.ispId) : null,
                 branchId: effectiveBranchId ? Number(effectiveBranchId) : null,
                 customerId: createdCustomer.id,
               },
             });
-
-            customerLogin = {
-              username: loginUsername,
-              loginEmail,
-              password: loginPassword,
-              generatedPassword: !String(customerLoginPassword || '').trim(),
-            };
           }
+
+          customerLogin = {
+            username: loginUsername,
+            loginEmail,
+            password: loginPassword,
+            generatedPassword: !String(customerLoginPassword || '').trim(),
+          };
         }
+      } else if (existingCustomerForLead) {
+        // If login not requested but reactivating existing customer, ensure their existing portal user is un-suspended
+        await tx.user.updateMany({
+          where: { customerId: createdCustomer.id },
+          data: { status: 'active', isDeleted: false, updatedAt: new Date() }
+        });
       }
 
-      // 3. Create Devices – handle duplicates individually
+      // 3. Create Devices – handle duplicates or reactivations individually
       if (parsedDevices.length > 0) {
         for (const device of parsedDevices) {
           try {
@@ -1176,15 +1210,50 @@ async function createCustomer(req, res, next) {
                   { serialNumber: device.serialNumber },
                   { macAddress: device.macAddress },
                 ].filter(cond => cond.serialNumber || cond.macAddress)
-              }
+              },
+              include: { customer: true }
             });
+
             if (existing) {
-              skippedDevices.push({
-                serial: device.serialNumber,
-                mac: device.macAddress,
-                reason: 'Duplicate serial or MAC'
+              if (existing.customerId === createdCustomer.id || existing.customer?.isDeleted) {
+                // Update / reassign this device record to the customer
+                await tx.customerDevice.update({
+                  where: { id: existing.id },
+                  data: {
+                    customerId: createdCustomer.id,
+                    deviceType: device.deviceType || existing.deviceType || 'ONT',
+                    brand: device.brand || existing.brand,
+                    model: device.model || existing.model,
+                    serialNumber: device.serialNumber || existing.serialNumber,
+                    macAddress: device.macAddress || existing.macAddress,
+                    ponSerial: device.ponSerial || device.serialNumber || existing.ponSerial,
+                    ponVendorIdIncluded: device.ponVendorIdIncluded !== false,
+                    provisioningStatus: 'pending',
+                    updatedAt: new Date()
+                  }
+                });
+              } else {
+                skippedDevices.push({
+                  serial: device.serialNumber,
+                  mac: device.macAddress,
+                  reason: 'Duplicate serial or MAC already assigned to another active customer'
+                });
+                continue; // skip this device
+              }
+            } else {
+              await tx.customerDevice.create({
+                data: {
+                  customerId: createdCustomer.id,
+                  deviceType: device.deviceType || 'ONT',
+                  brand: device.brand,
+                  model: device.model,
+                  serialNumber: device.serialNumber,
+                  macAddress: device.macAddress,
+                  ponSerial: device.ponSerial || device.serialNumber || null,
+                  ponVendorIdIncluded: device.ponVendorIdIncluded !== false,
+                  provisioningStatus: 'pending',
+                },
               });
-              continue; // skip this device
             }
 
             let inventoryItem = null;
@@ -1193,29 +1262,22 @@ async function createCustomer(req, res, next) {
                 where: {
                   id: Number(device.inventoryItemId),
                   ispId: req.ispId,
-                  status: 'ASSIGNED_TO_USER',
-                  userId: req.user.id,
+                  OR: [
+                    { status: 'ASSIGNED_TO_USER', userId: req.user.id },
+                    { customerId: createdCustomer.id }
+                  ]
                 },
               });
 
               if (!inventoryItem) {
-                throw new Error('Selected inventory device is not assigned to your user');
+                const anyItem = await tx.InventoryItem.findFirst({
+                  where: { id: Number(device.inventoryItemId), ispId: req.ispId }
+                });
+                if (anyItem) {
+                  inventoryItem = anyItem;
+                }
               }
             }
-
-            await tx.customerDevice.create({
-              data: {
-                customerId: createdCustomer.id,
-                deviceType: device.deviceType || 'ONT',
-                brand: device.brand,
-                model: device.model,
-                serialNumber: device.serialNumber,
-                macAddress: device.macAddress,
-                ponSerial: device.ponSerial || device.serialNumber || null,
-                ponVendorIdIncluded: device.ponVendorIdIncluded !== false,
-                provisioningStatus: 'pending',
-              },
-            });
 
             if (inventoryItem) {
               await tx.InventoryItem.update({
@@ -1238,6 +1300,21 @@ async function createCustomer(req, res, next) {
                   actionByUserId: req.user.id,
                   note: `Assigned to customer ${createdCustomer.customerUniqueId}`,
                 },
+              });
+            }
+
+            // Link TR069 device to leadId if device exists
+            const tr069Serials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean))];
+            if (tr069Serials.length > 0 && lead.id) {
+              await tx.tr069Device.updateMany({
+                where: { ispId: req.ispId, serialNumber: { in: tr069Serials } },
+                data: { leadId: lead.id, updatedAt: new Date() }
+              });
+
+              // Reactivate ONT if exists in inventory/OLT cache
+              await tx.oNT.updateMany({
+                where: { serialNumber: { in: tr069Serials } },
+                data: { isDeleted: false, status: 'online', updatedAt: new Date() }
               });
             }
           } catch (deviceErr) {
@@ -1327,6 +1404,12 @@ async function createCustomer(req, res, next) {
         const trialDays = Number.isFinite(parsedTrialDays) && parsedTrialDays > 0 ? parsedTrialDays : 3;
         const testStart = setNepalMidnight(new Date());
         const testEnd = setNepalMidnight(new Date(testStart.getTime() + trialDays * 24 * 60 * 60 * 1000));
+
+        // Clean up previous subscriptions if reactivating customer
+        await tx.customerSubscription.updateMany({
+          where: { customerId: createdCustomer.id },
+          data: { isActive: false, isInvoicing: false }
+        });
 
         subscription = await tx.customerSubscription.create({
           data: {
@@ -3222,11 +3305,28 @@ async function deleteCustomer(req, res, next) {
       where: { id },
       include: {
         lead: true,
-        serviceDetails: true
+        serviceDetails: true,
+        connectionUsers: true,
       }
     });
     if (!existing || existing.isDeleted || existing.ispId !== req.ispId) {
       return res.status(404).json({ error: "Customer not found" });
+    }
+
+    // Teardown / disconnect RADIUS users if present
+    try {
+      const { RadiusClient } = require('../services/radiusClient');
+      const radius = await RadiusClient.create(req.ispId).catch(() => null);
+      if (radius && existing.connectionUsers) {
+        for (const cu of existing.connectionUsers) {
+          if (cu.username) {
+            await radius.deleteUser(cu.username).catch(() => {});
+            await radius.sendCoA(cu.username, { action: 'disconnect' }).catch(() => {});
+          }
+        }
+      }
+    } catch (radErr) {
+      console.warn('[deleteCustomer] Warning during RADIUS teardown:', radErr.message);
     }
 
     // Fetch all active inventory items assigned to this customer
@@ -3374,6 +3474,12 @@ async function deleteCustomer(req, res, next) {
         data: { isDeleted: true, status: 'deleted', onboardStatus: 'reverted_to_lead' }
       });
 
+      // Suspend and soft-delete customer portal login
+      await tx.user.updateMany({
+        where: { customerId: id },
+        data: { status: 'suspended', isDeleted: true, updatedAt: new Date() }
+      });
+
       await tx.customerSubscription.updateMany({
         where: { customerId: id },
         data: { isActive: false, isInvoicing: false }
@@ -3400,6 +3506,11 @@ async function deleteCustomer(req, res, next) {
             convertedById: null,
             status: 'qualified'
           }
+        });
+
+        await tx.tr069Device.updateMany({
+          where: { ispId: req.ispId, leadId: existing.leadId },
+          data: { leadId: null, updatedAt: new Date() }
         });
       }
 
