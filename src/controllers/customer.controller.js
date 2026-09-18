@@ -4477,7 +4477,7 @@ async function deleteCustomerDevice(req, res, next) {
         });
       }
 
-      // Unlink from TR069 device
+      // Unlink and remove from TR069 device
       const tr069Serials = [...new Set([device.serialNumber, device.ponSerial].filter(Boolean).map(s => String(s).trim()))];
       if (tr069Serials.length > 0) {
         await tx.tr069Device.updateMany({
@@ -4485,11 +4485,31 @@ async function deleteCustomerDevice(req, res, next) {
             ispId: req.ispId,
             OR: [
               { serialNumber: { in: tr069Serials } },
-              { macAddress: device.macAddress ? String(device.macAddress).trim() : undefined }
+              device.macAddress ? { macAddress: String(device.macAddress).trim() } : undefined
             ].filter(Boolean)
           },
-          data: { leadId: null, updatedAt: new Date() }
+          data: {
+            isDeleted: true,
+            isActive: false,
+            leadId: null,
+            customerId: null,
+            updatedAt: new Date()
+          }
         });
+
+        // Also delete from GenieACS if present
+        try {
+          const genieClient = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, req.ispId).catch(() => null);
+          if (genieClient) {
+            for (const s of tr069Serials) {
+              await genieClient.deleteDevice(s).catch(err => {
+                console.warn(`[deleteCustomerDevice] Could not delete ${s} from GenieACS:`, err.message);
+              });
+            }
+          }
+        } catch (gErr) {
+          console.warn(`[deleteCustomerDevice] GenieACS deletion warning:`, gErr.message);
+        }
       }
 
       // 2. Unassign corresponding InventoryItem if it exists and is assigned to this customer

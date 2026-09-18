@@ -942,25 +942,37 @@ class GenieACSClient {
 
 
     async enableDisableWifiSSID(serialNumber, ssidIndex, operation) {
-
+        const boolVal = operation === true || operation === 'true' || operation === 1 || operation === '1';
         const task = {
             name: "setParameterValues",
             parameterValues: [
-                [`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${ssidIndex}.Enable`, operation, "xsd:string"]
+                [`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${ssidIndex}.Enable`, boolVal, "xsd:boolean"]
             ]
         };
         const response = await this.createTask(serialNumber, task);
 
+        if (response.status !== 'success') {
+            return `Failed to proceed operations`;
+        } else {
+            return `Operation has been successful`;
+        }
+    }
 
-        // console.log("SSID Response", response);
-
+    async setSSIDBroadcast(serialNumber, ssidIndex, enabled) {
+        const boolVal = enabled === true || enabled === 'true' || enabled === 1 || enabled === '1';
+        const task = {
+            name: "setParameterValues",
+            parameterValues: [
+                [`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${ssidIndex}.SSIDAdvertisementEnabled`, boolVal, "xsd:boolean"]
+            ]
+        };
+        const response = await this.createTask(serialNumber, task);
 
         if (response.status !== 'success') {
-            return `Failed to proceed operations`
+            return `Failed to proceed broadcast operations`;
         } else {
-            return `Operation has been successful`
+            return `Broadcast operation has been successful`;
         }
-
     }
 
     async configureWiFi(serialNumber, ssid, password) {
@@ -1019,6 +1031,21 @@ class GenieACSClient {
             name: "factoryReset"
         };
         return this.createTask(serialNumber, task);
+    }
+
+    async deleteDevice(serialNumber) {
+        try {
+            const device = await this.getDeviceBySerial(serialNumber, { projection: '_id' });
+            const deviceId = device?.id || device?._id;
+            if (deviceId) {
+                await this.client.delete(`/devices/${encodeURIComponent(deviceId)}`);
+                return { success: true, message: `Device ${deviceId} deleted from GenieACS` };
+            }
+            return { success: false, message: 'Device not found in GenieACS' };
+        } catch (error) {
+            console.warn(`[GenieACS] Failed to delete device ${serialNumber}: ${error.message}`);
+            return { success: false, message: error.message };
+        }
     }
 
     async getDeviceTasks(serialNumber, limit = 20) {

@@ -2782,7 +2782,11 @@ class ServiceController {
       });
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (error.message && error.message.includes('not found')) {
+        console.warn(`[GenieACS] Device ${serialNumber} not found: ${error.message}`);
+      } else {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -2957,7 +2961,11 @@ class ServiceController {
       return res.json(response);
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (error.message && error.message.includes('not found')) {
+        console.warn(`[GenieACS] Device ${serialNumber} not found: ${error.message}`);
+      } else {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -3050,7 +3058,11 @@ class ServiceController {
       return res.json(response);
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (error.message && error.message.includes('not found')) {
+        console.warn(`[GenieACS] Device ${serialNumber} not found: ${error.message}`);
+      } else {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -3128,8 +3140,32 @@ class ServiceController {
         ),
 
 
-        ssidList: await this.getSSIDDetails(device, serialNumber, client),
-
+        ssidList: await (async () => {
+          let ssids = await this.getSSIDDetails(device, serialNumber, client);
+          if (Array.isArray(ssids)) {
+            const customer = await this.findCustomerForSerial(serialNumber, req);
+            if (customer) {
+              ssids = await this.attachStoredWifiCredentials(customer, serialNumber, ssids);
+              await this.syncWifiCredentialsForCustomer(customer, serialNumber, ssids).catch(() => {});
+            } else {
+              const credentials = await this.prisma.customerWiFiCredential.findMany({
+                where: { serialNumber }
+              }).catch(() => []);
+              const byIndex = new Map(credentials.map((c) => [c.ssidIndex, c]));
+              ssids = ssids.map((ssid) => {
+                const idx = getSsidIndexFromInstance(ssid.instance, ssid.index);
+                const stored = byIndex.get(idx);
+                const password = stored?.password || '';
+                if (password && (!ssid.keyPassphrase || ssid.keyPassphrase === 'N/A' || ssid.keyPassphrase === '********')) {
+                  ssid.keyPassphrase = password;
+                  ssid.passwordSource = 'database';
+                }
+                return ssid;
+              });
+            }
+          }
+          return ssids;
+        })(),
 
       };
 
@@ -3139,7 +3175,9 @@ class ServiceController {
       });
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (!error.message?.includes('not found')) {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -3273,7 +3311,11 @@ class ServiceController {
       });
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (error.message && error.message.includes('not found')) {
+        console.warn(`[GenieACS] Device ${serialNumber} not found: ${error.message}`);
+      } else {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -3614,7 +3656,11 @@ class ServiceController {
       });
 
     } catch (error) {
-      console.error("Error getting GenieACS device:", error);
+      if (error.message && error.message.includes('not found')) {
+        console.warn(`[GenieACS] Device ${serialNumber} not found: ${error.message}`);
+      } else {
+        console.error("Error getting GenieACS device:", error);
+      }
       return this.sendGenieACSError(res, error, 'Failed to get device');
     }
   }
@@ -3801,11 +3847,42 @@ class ServiceController {
               `InternetGatewayDevice.LANDevice.${lanKey}.WLANConfiguration.${wlanKey}`
             );
 
+            // Fetch keyPassphrase from multiple possible TR-098 paths
+            let keyPassphrase = this.extractParameterValue(wlan, 'PreSharedKey.1.KeyPassphrase');
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'KeyPassphrase');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'X_CMS_KeyPassphrase');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'X_CT-COM_KeyPassphrase');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'PreSharedKey.1.PreSharedKey');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'PreSharedKey.KeyPassphrase');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'WPAKey');
+            }
+            if (!keyPassphrase || keyPassphrase === 'N/A') {
+              keyPassphrase = this.extractParameterValue(wlan, 'X_HW_KeyPassphrase');
+            }
+            if (keyPassphrase === 'N/A') {
+              keyPassphrase = '';
+            }
+
+            const rawAdv = this.extractParameterValue(wlan, 'SSIDAdvertisementEnabled');
+            const ssidAdvertisementEnabled = rawAdv === 'N/A' ? true : (rawAdv === true || rawAdv === 'true' || rawAdv === 1 || rawAdv === '1');
+
             ssids.push({
               source: 'TR-098',
               instance: `LANDevice.${lanKey}.WLANConfiguration.${wlanKey}`,
               ssid: this.extractParameterValue(wlan, 'SSID'),
               enable: this.extractParameterValue(wlan, 'Enable') === 'true' || this.extractParameterValue(wlan, 'Enable') === true,
+              ssidAdvertisementEnabled,
               status: this.extractParameterValue(wlan, 'Status'),
               channel: this.extractParameterValue(wlan, 'Channel'),
               radioEnabled: this.extractParameterValue(wlan, 'RadioEnabled'),
@@ -3816,7 +3893,7 @@ class ServiceController {
                 this.extractParameterValue(wlan, 'IEEE11iAuthenticationMode'),
               maxBitRate: this.extractParameterValue(wlan, 'MaxBitRate'),
               bssid: this.extractParameterValue(wlan, 'BSSID'),
-              keyPassphrase: this.extractParameterValue(wlan, 'KeyPassphrase'),
+              keyPassphrase,
               associatedDeviceCount: this.extractParameterValue(wlan, 'AssociatedDeviceNumberOfEntries'),
               stats: {
                 bytesSent: this.extractParameterValue(wlan, 'Stats.BytesSent'),
@@ -3845,12 +3922,15 @@ class ServiceController {
           }
 
           const allParams = this.extractAllParameters(ssidObj, `Device.WiFi.SSID.${ssidKey}`);
+          const rawAdv = this.extractParameterValue(ssidObj, 'SSIDAdvertisementEnabled');
+          const ssidAdvertisementEnabled = rawAdv === 'N/A' ? true : (rawAdv === true || rawAdv === 'true' || rawAdv === 1 || rawAdv === '1');
 
           ssids.push({
             source: 'TR-181',
             instance: `WiFi.SSID.${ssidKey}`,
             ssid: this.extractParameterValue(ssidObj, 'SSID'),
             enable: this.extractParameterValue(ssidObj, 'Enable') === 'true' || this.extractParameterValue(ssidObj, 'Enable') === true,
+            ssidAdvertisementEnabled,
             bssid: this.extractParameterValue(ssidObj, 'BSSID'),
             macAddress: this.extractParameterValue(ssidObj, 'MACAddress'),
             stats: {
@@ -3875,18 +3955,27 @@ class ServiceController {
           }
 
           const allParams = this.extractAllParameters(ap, `Device.WiFi.AccessPoint.${apKey}`);
+          const rawAdvAp = this.extractParameterValue(ap, 'SSIDAdvertisementEnabled');
+          const apSsidAdvertisementEnabled = rawAdvAp === 'N/A' ? true : (rawAdvAp === true || rawAdvAp === 'true' || rawAdvAp === 1 || rawAdvAp === '1');
+
+          let apKeyPassphrase = this.extractParameterValue(ap, 'Security.KeyPassphrase');
+          if (!apKeyPassphrase || apKeyPassphrase === 'N/A') {
+            apKeyPassphrase = this.extractParameterValue(ap, 'Security.PreSharedKey');
+          }
+          if (apKeyPassphrase === 'N/A') apKeyPassphrase = '';
 
           ssids.push({
             source: 'TR-181 (AP)',
             instance: `WiFi.AccessPoint.${apKey}`,
             enable: this.extractParameterValue(ap, 'Enable'),
+            ssidAdvertisementEnabled: apSsidAdvertisementEnabled,
             status: this.extractParameterValue(ap, 'Status'),
             channel: this.extractParameterValue(ap, 'Channel'),
             radioEnabled: this.extractParameterValue(ap, 'RadioEnabled'),
             security: {
               mode: this.extractParameterValue(ap, 'Security.ModeEnabled'),
               encryption: this.extractParameterValue(ap, 'Security.EncryptionMode'),
-              keyPassphrase: this.extractParameterValue(ap, 'Security.KeyPassphrase'),
+              keyPassphrase: apKeyPassphrase,
               rekeyInterval: this.extractParameterValue(ap, 'Security.RekeyingInterval')
             },
             ssidReference: this.extractParameterValue(ap, 'SSIDReference'),
@@ -4128,7 +4217,7 @@ class ServiceController {
     try {
       const ispId = req.ispId;
       const { serialNumber } = req.params;
-      const { ssidIndex, operation } = req.body;
+      const { ssidIndex, operation, action } = req.body;
 
       if (!ssidIndex || typeof operation !== 'boolean') {
         return res.status(400).json({
@@ -4138,9 +4227,13 @@ class ServiceController {
       }
 
       const client = await ServiceFactory.getClient(SERVICE_CODES.GENIEACS, ispId);
-      // Change this line in your controller:
-      const SSIDOperations = await client.enableDisableWifiSSID(serialNumber, ssidIndex, operation);
-      console.log("SSIDOperations", SSIDOperations)
+      let SSIDOperations;
+      if (action === 'broadcast') {
+        SSIDOperations = await client.setSSIDBroadcast(serialNumber, ssidIndex, operation);
+      } else {
+        SSIDOperations = await client.enableDisableWifiSSID(serialNumber, ssidIndex, operation);
+      }
+      console.log("SSIDOperations", SSIDOperations);
       return res.json({ success: true, data: { SSIDOperations } });
     } catch (error) {
       console.error('Error while performing operations:', error);

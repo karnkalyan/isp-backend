@@ -81,14 +81,29 @@ async function createLead(req, res, next) {
       }
     };
 
+    // Fetch duplicate settings
+    const dupSettings = await req.prisma.iSPSettings.findMany({
+      where: {
+        ispId: req.ispId ? Number(req.ispId) : undefined,
+        key: { in: ['allowDuplicateLeadPhone', 'allowDuplicateLeadEmail'] }
+      }
+    });
+    const allowDupPhone = dupSettings.find(s => s.key === 'allowDuplicateLeadPhone')?.value === 'true';
+    const allowDupEmail = dupSettings.find(s => s.key === 'allowDuplicateLeadEmail')?.value === 'true';
+
     // Check for existing lead with same email or phone number
-    if (email || phoneNumber) {
+    const dupConditions = [];
+    if (email && email.trim() && !allowDupEmail) {
+      dupConditions.push({ email: email.trim() });
+    }
+    if (phoneNumber && phoneNumber.trim() && !allowDupPhone) {
+      dupConditions.push({ phoneNumber: phoneNumber.trim() });
+    }
+
+    if (dupConditions.length > 0) {
       const existingLead = await req.prisma.lead.findFirst({
         where: {
-          OR: [
-            email ? { email } : {},
-            phoneNumber ? { phoneNumber } : {}
-          ],
+          OR: dupConditions,
           ispId: req.ispId ? Number(req.ispId) : null,
           isDeleted: false
         }
@@ -505,14 +520,29 @@ async function updateLead(req, res, next) {
       return res.status(404).json({ error: "Lead not found." });
     }
 
+    // Fetch duplicate settings
+    const dupSettings = await req.prisma.iSPSettings.findMany({
+      where: {
+        ispId: req.ispId ? Number(req.ispId) : undefined,
+        key: { in: ['allowDuplicateLeadPhone', 'allowDuplicateLeadEmail'] }
+      }
+    });
+    const allowDupPhone = dupSettings.find(s => s.key === 'allowDuplicateLeadPhone')?.value === 'true';
+    const allowDupEmail = dupSettings.find(s => s.key === 'allowDuplicateLeadEmail')?.value === 'true';
+
     // Check for duplicate email/phone when updating
-    if (email || phoneNumber) {
+    const dupConditions = [];
+    if (email && email.trim() && !allowDupEmail) {
+      dupConditions.push({ email: email.trim() });
+    }
+    if (phoneNumber && phoneNumber.trim() && !allowDupPhone) {
+      dupConditions.push({ phoneNumber: phoneNumber.trim() });
+    }
+
+    if (dupConditions.length > 0) {
       const duplicateLead = await req.prisma.lead.findFirst({
         where: {
-          OR: [
-            email ? { email } : {},
-            phoneNumber ? { phoneNumber } : {}
-          ],
+          OR: dupConditions,
           NOT: { id: id },
           ispId: req.ispId,
           isDeleted: false
@@ -547,7 +577,7 @@ async function updateLead(req, res, next) {
     if (firstName !== undefined) updateData.firstName = firstName;
     if (middleName !== undefined) updateData.middleName = middleName;
     if (lastName !== undefined) updateData.lastName = lastName;
-    if (email !== undefined) updateData.email = email;
+    if (email !== undefined) updateData.email = email && email.trim() ? email.trim() : null;
     if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
     if (secondaryContactNumber !== undefined) updateData.secondaryContactNumber = secondaryContactNumber;
     if (source !== undefined) updateData.source = source;
@@ -669,11 +699,28 @@ async function convertLeadToCustomer(req, res, next) {
       return res.status(404).json({ error: "Lead not found." });
     }
 
-    if (lead.convertedToCustomer) {
+    // Check if an existing customer for this lead or email exists (including soft-deleted)
+    const existingCustomerForLead = await req.prisma.customer.findFirst({
+      where: {
+        OR: [
+          { leadId: leadId },
+          lead.email ? { lead: { email: lead.email } } : null
+        ].filter(Boolean),
+        ispId: req.ispId
+      }
+    });
+
+    if (existingCustomerForLead) {
+      if (!existingCustomerForLead.isDeleted) {
+        return res.status(409).json({
+          error: "Customer with this email or lead already exists."
+        });
+      }
+    } else if (lead.convertedToCustomer) {
       return res.status(400).json({ error: "Lead already converted to customer." });
     }
 
-    // Check if customer with same email already exists
+    // Check if customer with same email already exists (active)
     if (lead.email) {
       const existingCustomer = await req.prisma.customer.findFirst({
         where: {
@@ -683,7 +730,7 @@ async function convertLeadToCustomer(req, res, next) {
         }
       });
 
-      if (existingCustomer) {
+      if (existingCustomer && (!existingCustomerForLead || existingCustomer.id !== existingCustomerForLead.id)) {
         return res.status(409).json({
           error: "Customer with this email already exists."
         });
@@ -725,10 +772,27 @@ async function convertLeadToCustomer(req, res, next) {
       subBranchId: lead.subBranchId || null
     };
 
-    // Start transaction
-    const [newCustomer, updatedLead] = await req.prisma.$transaction([
-      // Create customer
-      req.prisma.customer.create({
+    let customerOperation;
+    if (existingCustomerForLead && existingCustomerForLead.isDeleted) {
+      // Reactivate from deleted to active with updated values
+      customerOperation = req.prisma.customer.update({
+        where: { id: existingCustomerForLead.id },
+        data: {
+          ...customerData,
+          isDeleted: false,
+          status: 'active',
+          onboardStatus: 'active',
+          updatedAt: new Date()
+        },
+        include: {
+          packagePrice: true,
+          subscribedPkg: true,
+          membership: true,
+          lead: true
+        }
+      });
+    } else {
+      customerOperation = req.prisma.customer.create({
         data: customerData,
         include: {
           packagePrice: true,
@@ -736,7 +800,12 @@ async function convertLeadToCustomer(req, res, next) {
           membership: true,
           lead: true
         }
-      }),
+      });
+    }
+
+    // Start transaction
+    const [newCustomer, updatedLead] = await req.prisma.$transaction([
+      customerOperation,
 
       // Update lead conversion status
       req.prisma.lead.update({

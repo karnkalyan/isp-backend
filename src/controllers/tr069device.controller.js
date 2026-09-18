@@ -1822,7 +1822,7 @@ async function linkInventoryItemToCustomer(prisma, { ispId, customerId, serialNu
       data: {
         customerId,
         status: 'ASSIGNED_TO_CUSTOMER',
-        assignedAt: new Date()
+        updatedAt: new Date()
       }
     });
     return updated.count > 0;
