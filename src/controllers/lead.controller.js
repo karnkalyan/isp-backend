@@ -24,6 +24,8 @@ async function createLead(req, res, next) {
       street,
       district,
       province,
+      city,
+      zipCode,
       gender,
       age,
       fullAddress,
@@ -54,7 +56,7 @@ async function createLead(req, res, next) {
       firstName: firstName || 'Unknown',
       lastName: lastName || 'Unknown',
       email: email ? email.trim() : null,
-      phoneNumber: phoneNumber || '0000000000',
+      phoneNumber: phoneNumber ? phoneNumber.trim() : null,
       source: source || 'other',
       status: status || 'new',
       ispId: req.ispId ? Number(req.ispId) : null,
@@ -62,7 +64,7 @@ async function createLead(req, res, next) {
       subBranchId: subBranchId ? Number(subBranchId) : null,
       // Optional fields
       middleName: middleName || null,
-      secondaryContactNumber: secondaryContactNumber || null,
+      secondaryContactNumber: secondaryContactNumber ? secondaryContactNumber.trim() : null,
       memberShipId: memberShipId ? Number(memberShipId) : null,
       notes: notes || null,
       assignedUserId: assignedUserId ? Number(assignedUserId) : null,
@@ -73,6 +75,8 @@ async function createLead(req, res, next) {
       province: province || null,
       gender: gender || null,
       metadata: {
+        city: city ? city.trim() : null,
+        zipCode: zipCode ? zipCode.trim() : null,
         age: age || null,
         fullAddress: fullAddress || null,
         latitude: latitude || null,
@@ -500,6 +504,8 @@ async function updateLead(req, res, next) {
       street,
       district,
       province,
+      city,
+      zipCode,
       gender,
       age,
       fullAddress,
@@ -578,8 +584,8 @@ async function updateLead(req, res, next) {
     if (middleName !== undefined) updateData.middleName = middleName;
     if (lastName !== undefined) updateData.lastName = lastName;
     if (email !== undefined) updateData.email = email && email.trim() ? email.trim() : null;
-    if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
-    if (secondaryContactNumber !== undefined) updateData.secondaryContactNumber = secondaryContactNumber;
+    if (phoneNumber !== undefined) updateData.phoneNumber = (phoneNumber && phoneNumber.trim()) ? phoneNumber.trim() : null;
+    if (secondaryContactNumber !== undefined) updateData.secondaryContactNumber = (secondaryContactNumber && secondaryContactNumber.trim()) ? secondaryContactNumber.trim() : null;
     if (source !== undefined) updateData.source = source;
     if (status !== undefined) updateData.status = status;
     if (memberShipId !== undefined) updateData.memberShipId = memberShipId ? Number(memberShipId) : null;
@@ -595,6 +601,8 @@ async function updateLead(req, res, next) {
     if (gender !== undefined) updateData.gender = gender;
     updateData.metadata = {
       ...existingLead.metadata,
+      city: city !== undefined ? (city ? city.trim() : null) : existingLead.metadata?.city,
+      zipCode: zipCode !== undefined ? (zipCode ? zipCode.trim() : null) : existingLead.metadata?.zipCode,
       age: age !== undefined ? age : existingLead.metadata?.age,
       fullAddress: fullAddress !== undefined ? fullAddress : existingLead.metadata?.fullAddress,
       latitude: latitude !== undefined ? latitude : existingLead.metadata?.latitude,

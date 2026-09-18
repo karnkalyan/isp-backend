@@ -2420,10 +2420,10 @@ async function listCustomers(req, res, next) {
         secondaryContactNumber: c.lead?.secondaryContactNumber || null,
         gender: c.lead?.gender,
         street: c.lead?.street,
-        city: c.lead?.city,
+        city: meta?.city || null,
         district: c.lead?.district,
         state: c.lead?.province,
-        zipCode: c.lead?.zipCode,
+        zipCode: meta?.zipCode || null,
         address: c.lead?.address,
         convertedAt: c.lead?.convertedAt,
         source: c.lead?.source || null,
@@ -2562,6 +2562,7 @@ async function getCustomerById(req, res, next) {
     });
 
     // Flatten lead fields
+    const leadMeta = customer.lead?.metadata ? (typeof customer.lead.metadata === 'string' ? JSON.parse(customer.lead.metadata) : customer.lead.metadata) : null;
     const response = {
       ...enrichCustomerDocumentFields(customer),
       devices: enrichedDevices,
@@ -2576,10 +2577,10 @@ async function getCustomerById(req, res, next) {
       secondaryPhone: customer.lead?.secondaryContactNumber,
       gender: customer.lead?.gender,
       street: customer.lead?.street,
-      city: customer.lead?.city,
+      city: leadMeta?.city || customer.city || '',
       district: customer.lead?.district,
       state: customer.lead?.province,
-      zipCode: customer.lead?.zipCode,
+      zipCode: leadMeta?.zipCode || customer.zipCode || '',
       // Keep the source lead available to provisioning forms. Location data is
       // commonly stored in lead.metadata and was previously discarded here.
       lead: customer.lead,
@@ -2661,6 +2662,7 @@ async function getCustomerByPhoneNumber(req, res, next) {
     }
 
     // Flatten lead
+    const leadMeta = customer.lead?.metadata ? (typeof customer.lead.metadata === 'string' ? JSON.parse(customer.lead.metadata) : customer.lead.metadata) : null;
     const response = {
       ...enrichCustomerDocumentFields(customer),
       firstName: customer.lead?.firstName,
@@ -2671,10 +2673,10 @@ async function getCustomerByPhoneNumber(req, res, next) {
       secondaryPhone: customer.lead?.secondaryContactNumber,
       gender: customer.lead?.gender,
       street: customer.lead?.street,
-      city: customer.lead?.city,
+      city: leadMeta?.city || '',
       district: customer.lead?.district,
       state: customer.lead?.province,
-      zipCode: customer.lead?.zipCode,
+      zipCode: leadMeta?.zipCode || '',
       lead: undefined
     };
 
@@ -2704,8 +2706,8 @@ async function updateCustomer(req, res, next) {
     const {
       // Lead fields
       firstName, middleName, lastName,
-      email, phoneNumber, secondaryPhone, gender,
-      streetAddress, city, district, state, zipCode, lat, lon,
+      email, phoneNumber, secondaryPhone, secondaryContactNumber, gender,
+      streetAddress, street, city, district, state, province, zipCode, lat, lon,
 
       // Customer fields
       idNumber, panNumber,
@@ -2720,8 +2722,15 @@ async function updateCustomer(req, res, next) {
     } = req.body;
 
     const targetTypeId = customerTypeId !== undefined ? (customerTypeId ? Number(customerTypeId) : null) : existing.customerTypeId;
-    const checkPhone = phoneNumber !== undefined ? phoneNumber : existing.lead?.phoneNumber;
-    const checkEmail = email !== undefined ? email : existing.lead?.email;
+    
+    // Normalize phone, secondary phone, email to null if empty/whitespace
+    const cleanPhone = phoneNumber !== undefined ? (phoneNumber && String(phoneNumber).trim() ? String(phoneNumber).trim() : null) : undefined;
+    const cleanEmail = email !== undefined ? (email && String(email).trim() ? String(email).trim() : null) : undefined;
+    const rawSecondary = secondaryPhone !== undefined ? secondaryPhone : secondaryContactNumber;
+    const cleanSecondary = rawSecondary !== undefined ? (rawSecondary && String(rawSecondary).trim() ? String(rawSecondary).trim() : null) : undefined;
+
+    const checkPhone = cleanPhone !== undefined ? cleanPhone : existing.lead?.phoneNumber;
+    const checkEmail = cleanEmail !== undefined ? cleanEmail : existing.lead?.email;
 
     if (targetTypeId) {
       const cType = await req.prisma.customerType.findUnique({
@@ -2757,8 +2766,13 @@ async function updateCustomer(req, res, next) {
 
     // Build Customer update
     const customerUpdate = {};
-    if (idNumber !== undefined) customerUpdate.idNumber = idNumber;
-    if (panNumber !== undefined) customerUpdate.panNo = panNumber;
+    if (idNumber !== undefined) {
+      const trimmedId = idNumber ? String(idNumber).trim() : '';
+      customerUpdate.idNumber = trimmedId || existing.idNumber || String(id);
+    }
+    if (panNumber !== undefined) {
+      customerUpdate.panNo = (panNumber && String(panNumber).trim()) || null;
+    }
     if (status !== undefined) customerUpdate.status = status;
     if (onboardStatus !== undefined) customerUpdate.onboardStatus = onboardStatus;
     if (membershipId !== undefined) customerUpdate.membershipId = membershipId ? Number(membershipId) : null;
@@ -2793,20 +2807,66 @@ async function updateCustomer(req, res, next) {
 
     // Build Lead update
     const leadUpdate = {};
-    if (firstName !== undefined) leadUpdate.firstName = firstName;
-    if (middleName !== undefined) leadUpdate.middleName = middleName;
-    if (lastName !== undefined) leadUpdate.lastName = lastName;
-    if (email !== undefined) leadUpdate.email = email;
-    if (phoneNumber !== undefined) leadUpdate.phoneNumber = phoneNumber;
-    if (secondaryPhone !== undefined) leadUpdate.secondaryContactNumber = secondaryPhone;
-    if (gender !== undefined) leadUpdate.gender = gender;
-    if (streetAddress !== undefined) leadUpdate.street = streetAddress;
-    if (city !== undefined) leadUpdate.city = city;
-    if (district !== undefined) leadUpdate.district = district;
-    if (state !== undefined) leadUpdate.province = state;
-    if (zipCode !== undefined) leadUpdate.zipCode = zipCode;
-    if (lat !== undefined) leadUpdate.lat = lat ? Number(lat) : null;
-    if (lon !== undefined) leadUpdate.lon = lon ? Number(lon) : null;
+    if (firstName !== undefined) leadUpdate.firstName = (firstName && String(firstName).trim()) || null;
+    if (middleName !== undefined) leadUpdate.middleName = (middleName && String(middleName).trim()) || null;
+    if (lastName !== undefined) leadUpdate.lastName = (lastName && String(lastName).trim()) || null;
+    if (cleanEmail !== undefined) leadUpdate.email = cleanEmail;
+    if (cleanPhone !== undefined) leadUpdate.phoneNumber = cleanPhone;
+    if (cleanSecondary !== undefined) leadUpdate.secondaryContactNumber = cleanSecondary;
+    if (gender !== undefined) leadUpdate.gender = (gender && String(gender).trim()) || null;
+
+    const rawStreet = streetAddress !== undefined ? streetAddress : street;
+    const rawProvince = state !== undefined ? state : province;
+
+    if (rawStreet !== undefined) leadUpdate.street = (rawStreet && String(rawStreet).trim()) || null;
+    if (district !== undefined) leadUpdate.district = (district && String(district).trim()) || null;
+    if (rawProvince !== undefined) leadUpdate.province = (rawProvince && String(rawProvince).trim()) || null;
+
+    // city, zipCode, lat, lon belong in Lead.metadata (NOT direct columns on Lead)
+    let existingMeta = {};
+    try {
+      if (existing.lead?.metadata) {
+        existingMeta = typeof existing.lead.metadata === 'string'
+          ? JSON.parse(existing.lead.metadata)
+          : { ...existing.lead.metadata };
+      }
+    } catch (e) {
+      existingMeta = {};
+    }
+
+    let metaChanged = false;
+    if (city !== undefined) {
+      existingMeta.city = (city && String(city).trim()) || null;
+      metaChanged = true;
+    }
+    if (zipCode !== undefined) {
+      existingMeta.zipCode = (zipCode && String(zipCode).trim()) || null;
+      metaChanged = true;
+    }
+    if (lat !== undefined) {
+      existingMeta.lat = lat ? Number(lat) : null;
+      existingMeta.latitude = lat ? Number(lat) : null;
+      metaChanged = true;
+    }
+    if (lon !== undefined) {
+      existingMeta.lon = lon ? Number(lon) : null;
+      existingMeta.longitude = lon ? Number(lon) : null;
+      metaChanged = true;
+    }
+
+    if (metaChanged) {
+      leadUpdate.metadata = existingMeta;
+    }
+
+    // Update formatted address if any address component is changed
+    if (rawStreet !== undefined || city !== undefined || district !== undefined || rawProvince !== undefined) {
+      const curStreet = rawStreet !== undefined ? ((rawStreet && String(rawStreet).trim()) || null) : existing.lead?.street;
+      const curCity = city !== undefined ? ((city && String(city).trim()) || null) : existingMeta.city;
+      const curDistrict = district !== undefined ? ((district && String(district).trim()) || null) : existing.lead?.district;
+      const curProvince = rawProvince !== undefined ? ((rawProvince && String(rawProvince).trim()) || null) : existing.lead?.province;
+      const fullAddress = [curStreet, curCity, curDistrict, curProvince].filter(Boolean).join(', ');
+      leadUpdate.address = fullAddress || null;
+    }
 
     // Update Device (find first ONT device or create)
     if (deviceName !== undefined || deviceMac !== undefined || deviceBrand !== undefined || deviceSerial !== undefined || devicePonSerial !== undefined) {
@@ -3016,20 +3076,26 @@ async function updateCustomer(req, res, next) {
     });
 
     // Flatten response
+    const updatedMeta = updated?.lead?.metadata
+      ? (typeof updated.lead.metadata === 'string' ? JSON.parse(updated.lead.metadata) : updated.lead.metadata)
+      : {};
     const response = {
       ...updated,
-      firstName: updated.lead.firstName,
-      lastName: updated.lead.lastName,
-      middleName: updated.lead.middleName,
-      email: updated.lead.email,
-      phoneNumber: updated.lead.phoneNumber,
-      secondaryPhone: updated.lead.secondaryContactNumber,
-      gender: updated.lead.gender,
-      street: updated.lead.street,
-      city: updated.lead.city,
-      district: updated.lead.district,
-      state: updated.lead.province,
-      zipCode: updated.lead.zipCode,
+      firstName: updated?.lead?.firstName || '',
+      lastName: updated?.lead?.lastName || '',
+      middleName: updated?.lead?.middleName || '',
+      email: updated?.lead?.email || '',
+      phoneNumber: updated?.lead?.phoneNumber || '',
+      secondaryPhone: updated?.lead?.secondaryContactNumber || '',
+      secondaryContactNumber: updated?.lead?.secondaryContactNumber || '',
+      gender: updated?.lead?.gender || '',
+      street: updated?.lead?.street || '',
+      city: updatedMeta?.city || '',
+      district: updated?.lead?.district || '',
+      state: updated?.lead?.province || '',
+      province: updated?.lead?.province || '',
+      zipCode: updatedMeta?.zipCode || '',
+      address: updated?.lead?.address || '',
       lead: undefined
     };
 
