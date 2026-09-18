@@ -1060,7 +1060,6 @@ async function createCustomer(req, res, next) {
         ...(existingISPId ? { existingISP: { connect: { id: Number(existingISPId) } } } : {}),
         packagePrice: { connect: { id: subscribedPackage.id } },
         subscribedPkg: { connect: { id: subscribedPackage.id } },
-        assignedPkg: subscribedPackage.id,
         status: 'draft',
         onboardStatus: 'pending',
         isFree: parsedIsFree,
