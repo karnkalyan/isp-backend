@@ -134,9 +134,66 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   return date;
 }
 
-const getCustomerContext = async (req, lookupValue, packageId = null, desiredDuration = null, desiredPackageName = null) => {
+function buildCustomerLookupConditions(lookupValue, lookupType = 'all') {
+  const cleanLookup = String(lookupValue || '').trim();
+  if (!cleanLookup) return [];
+
+  const type = String(lookupType || 'all').toLowerCase().trim();
+  const digitsOnly = cleanLookup.replace(/\D/g, '');
+  const last10Digits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : null;
+  const parsedId = Number(cleanLookup);
+  const isNumeric = !Number.isNaN(parsedId) && String(parsedId) === cleanLookup;
+
+  const conditions = [];
+
+  const addPhoneConditions = (field) => {
+    conditions.push({ lead: { [field]: cleanLookup } });
+    if (digitsOnly && digitsOnly !== cleanLookup) {
+      conditions.push({ lead: { [field]: digitsOnly } });
+    }
+    if (last10Digits) {
+      conditions.push({ lead: { [field]: { endsWith: last10Digits } } });
+    }
+  };
+
+  if (type === 'email') {
+    conditions.push({ lead: { email: cleanLookup } });
+    conditions.push({ portalUser: { email: cleanLookup } });
+  } else if (type === 'phone' || type === 'phonenumber' || type === 'mobile') {
+    addPhoneConditions('phoneNumber');
+  } else if (type === 'secondary_phone' || type === 'secondary_number' || type === 'secondary') {
+    addPhoneConditions('secondaryContactNumber');
+  } else if (type === 'subscriber_user' || type === 'subscriber') {
+    conditions.push({ connectionUsers: { some: { username: cleanLookup, isDeleted: false } } });
+    conditions.push({ subscribedApps: { some: { externalUsername: cleanLookup } } });
+  } else if (type === 'username') {
+    conditions.push({ connectionUsers: { some: { username: cleanLookup, isDeleted: false } } });
+    conditions.push({ customerUniqueId: cleanLookup });
+  } else if (type === 'customer_id' || type === 'id') {
+    conditions.push({ customerUniqueId: cleanLookup });
+    if (isNumeric) {
+      conditions.push({ id: parsedId });
+    }
+  } else {
+    // 'all' / auto: Search across ALL options!
+    if (isNumeric) {
+      conditions.push({ id: parsedId });
+    }
+    conditions.push({ customerUniqueId: cleanLookup });
+    conditions.push({ connectionUsers: { some: { username: cleanLookup, isDeleted: false } } });
+    conditions.push({ subscribedApps: { some: { externalUsername: cleanLookup } } });
+    conditions.push({ lead: { email: cleanLookup } });
+    conditions.push({ portalUser: { email: cleanLookup } });
+    addPhoneConditions('phoneNumber');
+    addPhoneConditions('secondaryContactNumber');
+  }
+
+  return conditions;
+}
+
+const getCustomerContext = async (req, lookupValue, packageId = null, desiredDuration = null, desiredPackageName = null, lookupType = 'all') => {
   if (!lookupValue) {
-    const error = new Error("Customer identifier (username / customer ID / phone / email) is required");
+    const error = new Error("Customer identifier (username / email / subscriber user / phone / secondary number / customer ID) is required");
     error.code = "01";
     error.statusCode = 400;
     throw error;
@@ -145,18 +202,8 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
   const prisma = req.prisma || require('../../../backend/prisma/client');
   const cleanLookup = String(lookupValue).trim();
 
-  // Build OR conditions matching eSewa logic + connection username priority
-  const orConditions = [];
-  const parsedId = Number(cleanLookup);
-  if (!Number.isNaN(parsedId)) {
-    orConditions.push({ id: parsedId });
-  }
-  orConditions.push({ customerUniqueId: cleanLookup });
-  orConditions.push({ lead: { phoneNumber: cleanLookup } });
-  orConditions.push({ lead: { secondaryContactNumber: cleanLookup } });
-  orConditions.push({ lead: { email: cleanLookup } });
-  orConditions.push({ portalUser: { email: cleanLookup } });
-  orConditions.push({ connectionUsers: { some: { username: cleanLookup, isDeleted: false } } });
+  // Build OR conditions matching requested identifier type or all fields
+  const orConditions = buildCustomerLookupConditions(cleanLookup, lookupType);
 
   const customer = await prisma.customer.findFirst({
     where: {
@@ -171,6 +218,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
           middleName: true,
           lastName: true,
           phoneNumber: true,
+          secondaryContactNumber: true,
           email: true,
           status: true
         }
@@ -181,6 +229,10 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
       connectionUsers: {
         where: { isDeleted: false },
         select: { id: true, username: true, isActive: true }
+      },
+      subscribedApps: {
+        where: { status: "active" },
+        select: { externalUsername: true, service: { select: { serviceName: true } } }
       },
       customerSubscriptions: {
         where: { isActive: true },
@@ -208,7 +260,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
   });
 
   if (!customer) {
-    const error = new Error(`Customer not found for identifier: '${cleanLookup}'`);
+    const error = new Error(`Customer not found for ${lookupType !== 'all' ? lookupType : 'identifier'}: '${cleanLookup}'`);
     error.code = "02";
     error.statusCode = 404;
     throw error;
@@ -362,6 +414,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     .join(" ");
 
   const primaryConnectionUsername = customer.connectionUsers?.[0]?.username || cleanLookup;
+  const subscriberUsername = customer.subscribedApps?.[0]?.externalUsername || primaryConnectionUsername;
 
   return {
     customer,
@@ -372,7 +425,8 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     totalAmount,
     aggregatedItems,
     fullName,
-    primaryConnectionUsername
+    primaryConnectionUsername,
+    subscriberUsername
   };
 };
 
@@ -380,12 +434,53 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
  * Public Inquiry Handler (GET /inquiry/:request_id, POST /inquiry, GET /user/:username)
  */
 const paymentInquiry = async (req, res) => {
-  const requestId = req.params?.request_id || req.params?.username || req.body?.username || req.body?.customerId || req.body?.request_id;
+  const lookupType = req.query?.lookup_type || req.query?.type || req.body?.lookup_type || req.body?.lookupType || req.body?.searchBy || 'all';
+  let effectiveLookupType = lookupType;
+
+  let requestId = null;
+  if (req.body?.secondary_number || req.body?.secondaryNumber || req.body?.secondary_phone || req.body?.secondaryPhone || req.body?.secondaryContactNumber) {
+    requestId = req.body.secondary_number || req.body.secondaryNumber || req.body.secondary_phone || req.body.secondaryPhone || req.body.secondaryContactNumber;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'secondary_number';
+  } else if (req.body?.phone || req.body?.phoneNumber || req.body?.phonenumber || req.body?.phone_number || req.body?.mobile) {
+    requestId = req.body.phone || req.body.phoneNumber || req.body.phonenumber || req.body.phone_number || req.body.mobile;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'phone';
+  } else if (req.body?.email || req.body?.customer_email || req.body?.customerEmail) {
+    requestId = req.body.email || req.body.customer_email || req.body.customerEmail;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'email';
+  } else if (req.body?.subscriber_user || req.body?.subscriberUser || req.body?.subscriber_username || req.body?.subscriberUsername || req.body?.subscriber) {
+    requestId = req.body.subscriber_user || req.body.subscriberUser || req.body.subscriber_username || req.body.subscriberUsername || req.body.subscriber;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'subscriber_user';
+  } else if (req.query?.secondary_number || req.query?.secondaryNumber || req.query?.secondaryPhone) {
+    requestId = req.query.secondary_number || req.query.secondaryNumber || req.query.secondaryPhone;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'secondary_number';
+  } else if (req.query?.phone || req.query?.phoneNumber || req.query?.phonenumber) {
+    requestId = req.query.phone || req.query.phoneNumber || req.query.phonenumber;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'phone';
+  } else if (req.query?.email) {
+    requestId = req.query.email;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'email';
+  } else if (req.query?.subscriber_user || req.query?.subscriberUser) {
+    requestId = req.query.subscriber_user || req.query.subscriberUser;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'subscriber_user';
+  } else {
+    requestId = req.params?.request_id
+      || req.params?.username
+      || req.body?.username
+      || req.body?.customer_username
+      || req.body?.customerUniqueId
+      || req.body?.customerId
+      || req.body?.customer_id
+      || req.body?.request_id
+      || req.body?.identifier
+      || req.query?.username
+      || req.query?.identifier;
+  }
+
   const prisma = req.prisma || require('../../../backend/prisma/client');
 
   try {
-    const context = await getCustomerContext(req, requestId);
-    const { customer, pkg, totalAmount, fullName, primaryConnectionUsername } = context;
+    const context = await getCustomerContext(req, requestId, null, null, null, effectiveLookupType);
+    const { customer, pkg, totalAmount, fullName, primaryConnectionUsername, subscriberUsername } = context;
 
     // Fetch all online-enabled packages under same Speed Plan
     const dbPrices = await prisma.packagePrice.findMany({
@@ -441,7 +536,9 @@ const paymentInquiry = async (req, res) => {
         customer_unique_id: customer.customerUniqueId,
         customer_name: fullName,
         username: primaryConnectionUsername,
+        subscriber_username: subscriberUsername || primaryConnectionUsername,
         phone: customer.lead?.phoneNumber || null,
+        secondary_phone: customer.lead?.secondaryContactNumber || null,
         email: customer.lead?.email || customer.portalUser?.email || null,
         status: customer.status,
         expiry_date: customer.customerSubscriptions?.[0]?.planEnd
@@ -479,9 +576,10 @@ const paymentInquiry = async (req, res) => {
             packageDetails: {
               error: err.message || 'Inquiry failed',
               code: err.code || 'UNKNOWN',
-              reason: isUserNotFound ? 'No user found' : (err.message || 'Inquiry failed'),
+              reason: isUserNotFound ? `No user found (${effectiveLookupType}: ${requestId})` : (err.message || 'Inquiry failed'),
               type: 'INQUIRY',
-              payload: { params: req.params, body: req.body }
+              lookupType: effectiveLookupType,
+              payload: { params: req.params, body: req.body, query: req.query }
             },
             branchId: null
           }
@@ -505,8 +603,33 @@ const paymentInquiry = async (req, res) => {
 const processPayment = async (req, res) => {
   const prisma = req.prisma || require('../../../backend/prisma/client');
 
-  // Accept user identifiers flexibly (username, customer_username, request_id, customerId, etc.)
-  const lookupValue = req.body.username || req.body.customer_username || req.body.request_id || req.body.customerId || req.body.customer_id;
+  // Accept user identifiers flexibly (username, email, phone, secondary_number, subscriber_user, customerId, etc.)
+  const lookupType = req.body.lookup_type || req.body.lookupType || req.body.searchBy || req.query.lookup_type || req.query.type || 'all';
+  let effectiveLookupType = lookupType;
+
+  let lookupValue = null;
+  if (req.body.secondary_number || req.body.secondaryNumber || req.body.secondary_phone || req.body.secondaryPhone || req.body.secondaryContactNumber) {
+    lookupValue = req.body.secondary_number || req.body.secondaryNumber || req.body.secondary_phone || req.body.secondaryPhone || req.body.secondaryContactNumber;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'secondary_number';
+  } else if (req.body.phone || req.body.phoneNumber || req.body.phonenumber || req.body.phone_number || req.body.mobile) {
+    lookupValue = req.body.phone || req.body.phoneNumber || req.body.phonenumber || req.body.phone_number || req.body.mobile;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'phone';
+  } else if (req.body.email || req.body.customer_email || req.body.customerEmail) {
+    lookupValue = req.body.email || req.body.customer_email || req.body.customerEmail;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'email';
+  } else if (req.body.subscriber_user || req.body.subscriberUser || req.body.subscriber_username || req.body.subscriberUsername || req.body.subscriber) {
+    lookupValue = req.body.subscriber_user || req.body.subscriberUser || req.body.subscriber_username || req.body.subscriberUsername || req.body.subscriber;
+    if (effectiveLookupType === 'all') effectiveLookupType = 'subscriber_user';
+  } else {
+    lookupValue = req.body.username
+      || req.body.customer_username
+      || req.body.customerUniqueId
+      || req.body.request_id
+      || req.body.customerId
+      || req.body.customer_id
+      || req.body.identifier;
+  }
+
   const paymentMode = String(req.body.payment_mode || req.body.paymentMode || req.externalPaymentConfig?.defaultPaymentMode || 'EXTERNAL').toUpperCase();
   const duration = req.body.duration || req.body.package_duration || req.body.packageDuration;
   const packageId = req.body.package_id || req.body.packageId;
@@ -518,12 +641,12 @@ const processPayment = async (req, res) => {
     if (!lookupValue) {
       return res.status(400).json({
         response_code: 1,
-        response_message: "username (or request_id / customerId) is required"
+        response_message: "Customer identifier is required (username, email, phone, secondary_number, subscriber_user, or customerId)"
       });
     }
 
     // 1. Get Customer Context (resolving customer, target package, duration, pricing)
-    const context = await getCustomerContext(req, lookupValue, packageId, duration, packageName);
+    const context = await getCustomerContext(req, lookupValue, packageId, duration, packageName, effectiveLookupType);
     const {
       customer, pkg, totalAmount, aggregatedItems,
       fullName, otcItems, primaryConnectionUsername
@@ -801,15 +924,12 @@ const processPayment = async (req, res) => {
       let resolvedCust = null;
       if (lookupValue) {
         try {
+          const orConditions = buildCustomerLookupConditions(lookupValue, effectiveLookupType);
           resolvedCust = await prisma.customer.findFirst({
             where: {
               ispId: req.ispId || 1,
               isDeleted: false,
-              OR: [
-                { customerUniqueId: String(lookupValue) },
-                { connectionUsers: { some: { username: String(lookupValue), isDeleted: false } } },
-                { lead: { phoneNumber: String(lookupValue) } }
-              ]
+              OR: orConditions
             },
             select: { id: true, customerUniqueId: true, branchId: true }
           });
@@ -817,7 +937,7 @@ const processPayment = async (req, res) => {
       }
 
       const isNoUser = !resolvedCust || err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('customer not found');
-      const failureReason = isNoUser ? 'No user found' : (err.message || 'Payment processing failed');
+      const failureReason = isNoUser ? `No user found (${effectiveLookupType}: ${lookupValue})` : (err.message || 'Payment processing failed');
 
       await prisma.externalPayment.create({
         data: {
@@ -835,6 +955,7 @@ const processPayment = async (req, res) => {
             error: err.message || 'Payment processing failed',
             code: err.code || 'UNKNOWN',
             reason: failureReason,
+            lookupType: effectiveLookupType,
             payload: req.body
           },
           branchId: resolvedCust ? (resolvedCust.branchId || null) : null
@@ -943,7 +1064,12 @@ const listTransactions = async (req, res) => {
       { customerUniqueId: { contains: search } },
       { transactionCode: { contains: search } },
       { referenceCode: { contains: search } },
-      { paymentMode: { contains: search } }
+      { paymentMode: { contains: search } },
+      { customer: { lead: { email: { contains: search } } } },
+      { customer: { lead: { phoneNumber: { contains: search } } } },
+      { customer: { lead: { secondaryContactNumber: { contains: search } } } },
+      { customer: { connectionUsers: { some: { username: { contains: search } } } } },
+      { customer: { subscribedApps: { some: { externalUsername: { contains: search } } } } }
     ];
   }
 
@@ -960,7 +1086,7 @@ const listTransactions = async (req, res) => {
             id: true,
             customerUniqueId: true,
             lead: {
-              select: { firstName: true, middleName: true, lastName: true, phoneNumber: true, email: true }
+              select: { firstName: true, middleName: true, lastName: true, phoneNumber: true, secondaryContactNumber: true, email: true }
             }
           }
         }
@@ -983,6 +1109,7 @@ const listTransactions = async (req, res) => {
       customerUniqueId: t.customerUniqueId || (t.status === 'FAILED' ? 'N/A' : null),
       customerName: custName,
       customerPhone: t.customer?.lead?.phoneNumber || null,
+      customerSecondaryPhone: t.customer?.lead?.secondaryContactNumber || null,
       customerEmail: t.customer?.lead?.email || null,
       amount: t.amount,
       paymentMode: t.paymentMode,

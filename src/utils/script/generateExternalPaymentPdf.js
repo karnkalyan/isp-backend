@@ -138,11 +138,11 @@ function generatePdf(outputPath, baseUrl = 'https://cms.arrownet.com.np') {
 
     drawSectionTitle('4. Customer Inquiry (Inquiry API)');
     drawText(
-      'Query customer status, current subscribed package, plan expiration date, and all available online packages for renewal. The inquiry parameter accepts: PPPoE username (e.g. karnkalyan), Customer Unique ID (e.g. CUST-1001), mobile phone number, or email.'
+      'Query customer status, current subscribed package, plan expiration date, and all available online packages for renewal. The inquiry parameter accepts: PPPoE username (e.g. karnkalyan), subscriber username, customer email, primary phone number, secondary contact number, or Customer Unique ID (e.g. CUST-1001).'
     );
 
     drawSubTitle('HTTP Request:');
-    drawCode(`GET ${hostUrl}/api/externalpayment/inquiry/karnkalyan
+    drawCode(`GET ${hostUrl}/api/externalpayment/inquiry/karnkalyan?lookup_type=all
 Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
 
     drawSubTitle('Success Response (JSON):');
@@ -154,7 +154,10 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
     "customer_unique_id": "CUST-1001",
     "customer_name": "Kalyan Karn",
     "username": "karnkalyan",
+    "subscriber_username": "karnkalyan",
     "phone": "9800000000",
+    "secondary_phone": "9841000000",
+    "email": "kalyan@gmail.com",
     "expiry_date": "2026-10-01",
     "status": "active",
     "is_rechargeable": true
@@ -173,7 +176,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
 
     drawSectionTitle('5. Direct Push Recharge API');
     drawText(
-      'The primary endpoint for pushing payment confirmation and instant recharge. When called, the system automatically resolves the customer, calculates the new expiration date, provisions RADIUS, syncs the sales invoice to accounting, and marks the account active.'
+      'The primary endpoint for pushing payment confirmation and instant recharge. Supported identifiers: username, email, phone, secondary_number, subscriber_user, customerId, or identifier with lookup_type. The system automatically resolves the customer, calculates the new expiration date, provisions RADIUS, syncs the sales invoice to accounting, and marks the account active.'
     );
 
     drawSubTitle('HTTP Request (cURL):');
@@ -182,6 +185,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
   -u "external_isp_1:External@ISP#1!2025" \\
   -d '{
     "username": "karnkalyan",
+    "lookup_type": "all",
     "payment_mode": "EXTERNAL",
     "duration": "1 month",
     "amount": 1200,
