@@ -134,6 +134,42 @@ function computeExpiryFromBase(baseDateOrDuration, maybeDuration) {
   return date;
 }
 
+const DEFAULT_PAYMENT_MODES = [
+  { code: 'ESEWA', name: 'eSewa', default: true, description: 'eSewa Digital Wallet' },
+  { code: 'KHALTI', name: 'Khalti', default: false, description: 'Khalti Digital Wallet' },
+  { code: 'FONEPAY', name: 'Fonepay', default: false, description: 'Fonepay QR / Direct Payment' },
+  { code: 'CONNECTIPS', name: 'connectIPS', default: false, description: 'connectIPS National Payment Interface' },
+  { code: 'BANK_TRANSFER', name: 'Bank Transfer', default: false, description: 'Bank Transfer' },
+  { code: 'CASH', name: 'Cash', default: false, description: 'Cash' },
+  { code: 'EXTERNAL', name: 'External Payment', default: false, description: 'External Payment Gateway' }
+];
+
+function formatPaymentModeName(code) {
+  if (!code) return 'External Payment';
+  const upper = String(code).trim().toUpperCase();
+  const known = {
+    'ESEWA': 'eSewa',
+    'KHALTI': 'Khalti',
+    'FONEPAY': 'Fonepay',
+    'CONNECTIPS': 'connectIPS',
+    'CONNECT_IPS': 'connectIPS',
+    'IMEPAY': 'IME Pay',
+    'IME_PAY': 'IME Pay',
+    'PRABHUPAY': 'Prabhu Pay',
+    'PRABHU_PAY': 'Prabhu Pay',
+    'BANK': 'Bank Transfer',
+    'BANK_TRANSFER': 'Bank Transfer',
+    'CASH': 'Cash',
+    'EXTERNAL': 'External Payment',
+    'ONLINE': 'Online Payment'
+  };
+  if (known[upper]) return known[upper];
+  return upper
+    .split(/[-_ ]+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
 function buildCustomerLookupConditions(lookupValue, lookupType = 'all') {
   const cleanLookup = String(lookupValue || '').trim();
   if (!cleanLookup) return [];
@@ -232,7 +268,16 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
       },
       subscribedApps: {
         where: { status: "active" },
-        select: { externalUsername: true, service: { select: { serviceName: true } } }
+        select: {
+          externalUsername: true,
+          service: {
+            select: {
+              id: true,
+              name: true,
+              code: true
+            }
+          }
+        }
       },
       customerSubscriptions: {
         where: { isActive: true },
@@ -521,11 +566,16 @@ const paymentInquiry = async (req, res) => {
       };
     });
 
-    // Get available payment methods
+    // Get available payment methods (dynamic + standard fallback)
     const paymentMethods = await prisma.billingPaymentMethod.findMany({
-      where: { ispId: req.ispId, isEnabled: true },
+      where: { ispId: Number(req.ispId || 1), isEnabled: true },
       select: { code: true, name: true, isDefault: true }
     });
+
+    let availableModes = paymentMethods.map(m => ({ code: m.code, name: m.name, default: m.isDefault }));
+    if (availableModes.length === 0) {
+      availableModes = DEFAULT_PAYMENT_MODES.map(m => ({ code: m.code, name: m.name, default: m.default }));
+    }
 
     return res.status(200).json({
       response_code: 0,
@@ -553,13 +603,25 @@ const paymentInquiry = async (req, res) => {
         amount: totalAmount
       },
       packages: packagesList,
-      payment_modes: paymentMethods.map(m => ({ code: m.code, name: m.name, default: m.isDefault }))
+      payment_modes: availableModes
     });
 
   } catch (err) {
     console.error("External payment inquiry error:", err);
     try {
       const isUserNotFound = err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('customer not found');
+      const inqPaymentMode = String(
+        req.body?.payment_mode ||
+        req.body?.paymentMode ||
+        req.body?.payment_method ||
+        req.body?.paymentMethod ||
+        req.query?.payment_mode ||
+        req.query?.paymentMode ||
+        req.query?.payment_method ||
+        req.externalPaymentConfig?.defaultPaymentMode ||
+        'INQUIRY'
+      ).trim().toUpperCase();
+
       if (requestId) {
         await prisma.externalPayment.create({
           data: {
@@ -569,7 +631,7 @@ const paymentInquiry = async (req, res) => {
             username: String(requestId),
             requestId: String(requestId),
             amount: 0,
-            paymentMode: 'INQUIRY',
+            paymentMode: inqPaymentMode,
             status: 'FAILED',
             transactionCode: `INQ-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
             packageDuration: null,
@@ -630,7 +692,23 @@ const processPayment = async (req, res) => {
       || req.body.identifier;
   }
 
-  const paymentMode = String(req.body.payment_mode || req.body.paymentMode || req.externalPaymentConfig?.defaultPaymentMode || 'EXTERNAL').toUpperCase();
+  const rawPaymentMode = req.body?.payment_mode
+    || req.body?.paymentMode
+    || req.body?.payment_method
+    || req.body?.paymentMethod
+    || req.body?.payment_type
+    || req.body?.paymentType
+    || req.body?.gateway
+    || req.body?.mode
+    || req.query?.payment_mode
+    || req.query?.paymentMode
+    || req.query?.payment_method
+    || req.query?.paymentMethod
+    || req.query?.mode
+    || req.headers?.['x-payment-mode']
+    || req.externalPaymentConfig?.defaultPaymentMode
+    || 'EXTERNAL';
+  const paymentMode = String(rawPaymentMode || 'EXTERNAL').trim().toUpperCase();
   const duration = req.body.duration || req.body.package_duration || req.body.packageDuration;
   const packageId = req.body.package_id || req.body.packageId;
   const packageName = req.body.package_name || req.body.packageName || req.body.package;
@@ -716,22 +794,50 @@ const processPayment = async (req, res) => {
 
     const orderItemsData = buildPackageOrderItems(pkg, otcItems, customer.isFree);
 
-    // 5. Billing Payment Method
+    // 5. Billing Payment Method - accept ANY payment mode dynamically
     let billingMethod = await prisma.billingPaymentMethod.findFirst({
       where: {
-        ispId: req.ispId,
+        ispId: Number(req.ispId || 1),
         code: paymentMode,
         isEnabled: true
       }
     });
 
     if (!billingMethod) {
-      // Fallback to EXTERNAL or first active payment method
       billingMethod = await prisma.billingPaymentMethod.findFirst({
-        where: { ispId: req.ispId, code: 'EXTERNAL' }
-      }) || await prisma.billingPaymentMethod.findFirst({
-        where: { ispId: req.ispId, isEnabled: true }
+        where: {
+          ispId: Number(req.ispId || 1),
+          OR: [
+            { code: paymentMode },
+            { name: { equals: formatPaymentModeName(paymentMode) } }
+          ]
+        }
       });
+    }
+
+    if (!billingMethod) {
+      // Auto-register payment method for this ISP so ANY payment mode is accepted seamlessly
+      try {
+        const modeName = formatPaymentModeName(paymentMode);
+        billingMethod = await prisma.billingPaymentMethod.create({
+          data: {
+            ispId: Number(req.ispId || 1),
+            name: modeName,
+            code: paymentMode,
+            description: `${modeName} payment gateway / channel`,
+            isEnabled: true,
+            isDefault: false
+          }
+        });
+      } catch (createErr) {
+        billingMethod = await prisma.billingPaymentMethod.findFirst({
+          where: { ispId: Number(req.ispId || 1), code: paymentMode }
+        }) || await prisma.billingPaymentMethod.findFirst({
+          where: { ispId: Number(req.ispId || 1), code: 'EXTERNAL' }
+        }) || await prisma.billingPaymentMethod.findFirst({
+          where: { ispId: Number(req.ispId || 1), isEnabled: true }
+        });
+      }
     }
 
     // 6. Execute atomic database transaction
@@ -936,7 +1042,8 @@ const processPayment = async (req, res) => {
         } catch (_) {}
       }
 
-      const isNoUser = !resolvedCust || err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('customer not found');
+      const isNotFound = err.code === "01" || err.code === "02" || err.statusCode === 404 || String(err.message || '').toLowerCase().includes('not found');
+      const isNoUser = !resolvedCust && isNotFound;
       const failureReason = isNoUser ? `No user found (${effectiveLookupType}: ${lookupValue})` : (err.message || 'Payment processing failed');
 
       await prisma.externalPayment.create({
@@ -1140,10 +1247,20 @@ const listTransactions = async (req, res) => {
  */
 const getPaymentModes = async (req, res) => {
   const prisma = req.prisma || require('../../../backend/prisma/client');
-  const methods = await prisma.billingPaymentMethod.findMany({
-    where: { ispId: Number(req.ispId || 1), isEnabled: true },
+  const ispId = Number(req.ispId || 1);
+  let methods = await prisma.billingPaymentMethod.findMany({
+    where: { ispId, isEnabled: true },
     select: { id: true, name: true, code: true, isDefault: true, description: true }
   });
+  if (!methods || methods.length === 0) {
+    methods = DEFAULT_PAYMENT_MODES.map((m, idx) => ({
+      id: idx + 1,
+      name: m.name,
+      code: m.code,
+      isDefault: m.default,
+      description: m.description
+    }));
+  }
   return res.json({ payment_modes: methods });
 };
 
