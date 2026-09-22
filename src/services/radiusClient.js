@@ -3,6 +3,7 @@ const { PrismaClient } = require('@prisma/client');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const prisma = new PrismaClient();
+const expirationSyncs = new Map();
 
 class RadiusClient {
   #config;
@@ -466,11 +467,23 @@ class RadiusClient {
   // Get radcheck by username
   async getRadcheckByUsername(username) {
     try {
-      const allRadcheck = await this.getRadcheck();
-      if (Array.isArray(allRadcheck)) {
-        return allRadcheck.filter(entry => entry.username === username);
+      const matches = [];
+      let offset = 0;
+      const limit = 500;
+      const seen = new Set();
+      while (true) {
+        const page = await this.getRadcheck(limit, offset);
+        if (!Array.isArray(page) || page.length === 0) break;
+        // Some RADIUS APIs cap the requested page size. Advance by the actual size.
+        for (const entry of page) {
+          if (entry.username === username) matches.push(entry);
+        }
+        const firstId = page[0]?.id;
+        if (seen.has(firstId)) throw new Error('RADIUS radcheck pagination did not advance');
+        seen.add(firstId);
+        offset += page.length;
       }
-      return [];
+      return matches;
     } catch (error) {
       throw new Error(`Failed to get radcheck for username ${username}: ${error.message}`);
     }
@@ -861,6 +874,18 @@ class RadiusClient {
    * Update User Expiration in Radius
    */
   async updateExpiration(username, date) {
+    const key = `${this.#ispId}:${username}`;
+    const previous = expirationSyncs.get(key) || Promise.resolve();
+    const current = previous.catch(() => {}).then(() => this.#syncExpiration(username, date));
+    expirationSyncs.set(key, current);
+    try {
+      return await current;
+    } finally {
+      if (expirationSyncs.get(key) === current) expirationSyncs.delete(key);
+    }
+  }
+
+  async #syncExpiration(username, date) {
     try {
       const expirationDate = date instanceof Date ? date : new Date(date);
       if (Number.isNaN(expirationDate.getTime())) throw new Error('Invalid expiration date');
@@ -892,12 +917,13 @@ class RadiusClient {
       const formattedDate = formatRadiusExpiration(expirationDate);
 
       if (expirationEntries.length) {
-        const result = await Promise.all(expirationEntries.map(entry =>
-          this.updateRadcheck(entry.id, { op: ':=', value: formattedDate })
-        ));
+        const [keep, ...duplicates] = expirationEntries;
+        const result = await this.updateRadcheck(keep.id, { op: ':=', value: formattedDate });
+        await Promise.all(duplicates.map(entry => this.deleteRadcheck(entry.id)));
         console.log('[RADIUS EXPIRATION] Existing radcheck updated', {
           username,
-          entryIds: expirationEntries.map(entry => entry.id),
+          entryIds: [keep.id],
+          removedDuplicateIds: duplicates.map(entry => entry.id),
           value: formattedDate
         });
         return result;

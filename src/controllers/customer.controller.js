@@ -4072,6 +4072,15 @@ async function changePackage(req, res, next) {
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
     if (req.body.requestApproval) {
+      const requestedPackage = await req.prisma.packagePrice.findFirst({
+        where: { id: Number(newPackageId), ispId: req.ispId, isDeleted: false, isActive: true },
+        select: { planId: true }
+      });
+      if (!requestedPackage) return res.status(404).json({ error: "Package not found" });
+      const branchId = customer.subBranchId || customer.branchId;
+      if (branchId && !await req.prisma.packagePlanBranch.findUnique({
+        where: { packagePlanId_branchId: { packagePlanId: requestedPackage.planId, branchId: Number(branchId) } }
+      })) return res.status(400).json({ error: "Package is not assigned to this customer branch" });
       const targetBranch = await req.prisma.branch.findFirst({
         where: { id: req.branchId || customer.branchId || undefined, ispId: req.ispId }
       }) || await req.prisma.branch.findFirst({ where: { ispId: req.ispId } });
@@ -4098,6 +4107,10 @@ async function changePackage(req, res, next) {
       include: { packagePlanDetails: true }
     });
     if (!newPackage) return res.status(404).json({ error: "Package not found" });
+    const branchId = customer.subBranchId || customer.branchId;
+    if (branchId && !await req.prisma.packagePlanBranch.findUnique({
+      where: { packagePlanId_branchId: { packagePlanId: newPackage.planId, branchId: Number(branchId) } }
+    })) return res.status(400).json({ error: "Package is not assigned to this customer branch" });
 
     let updatedSubscription;
     await req.prisma.$transaction(async (tx) => {

@@ -663,7 +663,7 @@ async function renewSubscription(req, res, next) {
             }
         });
 
-        if (!pkgPrice) return res.status(404).json({ error: 'Package Price not found' });
+        if (!pkgPrice || pkgPrice.isDeleted || !pkgPrice.isActive || pkgPrice.ispId !== req.ispId) return res.status(404).json({ error: 'Package Price not found' });
 
         const customer = await prisma.customer.findFirst({
             where: { 
@@ -678,6 +678,14 @@ async function renewSubscription(req, res, next) {
         });
 
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+        const packageBranchId = customer.subBranchId || customer.branchId;
+        if (packageBranchId) {
+            const assigned = await prisma.packagePlanBranch.findUnique({
+                where: { packagePlanId_branchId: { packagePlanId: pkgPrice.planId, branchId: Number(packageBranchId) } }
+            });
+            if (!assigned) return res.status(400).json({ error: 'Package is not assigned to this customer branch' });
+        }
 
         const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
         if (!fiscalYear) return res.status(400).json({ error: 'Select the fiscal year that is active for the current date' });
@@ -833,6 +841,8 @@ async function renewSubscription(req, res, next) {
             await tx.customer.update({
                 where: { id: customer.id },
                 data: { 
+                    subscribedPkgId: pkgPrice.id,
+                    assignedPkg: pkgPrice.id,
                     isRechargeable: true,
                     status: 'active',
                     onboardStatus: 'fully_onboarded'

@@ -242,10 +242,26 @@ async function createPackagePrice(req, res, next) {
 // List package prices without one-time charges
 async function listPackagePrices(req, res, next) {
   try {
+    let allowedPlanIds = null;
+    if (req.query.customerId) {
+      const customer = await req.prisma.customer.findFirst({
+        where: { id: Number(req.query.customerId), ispId: req.ispId, isDeleted: false },
+        select: { branchId: true, subBranchId: true }
+      });
+      if (!customer) return res.status(404).json({ error: 'Customer not found' });
+      const branchId = customer.subBranchId || customer.branchId;
+      if (branchId) {
+        const assignments = await req.prisma.packagePlanBranch.findMany({
+          where: { branchId: Number(branchId) }, select: { packagePlanId: true }
+        });
+        allowedPlanIds = assignments.map(row => row.packagePlanId);
+      }
+    }
     const list = await req.prisma.PackagePrice.findMany({
       where: {
         isDeleted: false,
         ispId: req.ispId,
+        ...(allowedPlanIds !== null ? { planId: { in: allowedPlanIds } } : {}),
         ...(req.query.online === 'true' ? { isOnline: true, isActive: true } : {}),
         ...(req.query.active === 'true' ? { isActive: true } : {})
       },
