@@ -646,7 +646,7 @@ async function payOrder(req, res, next) {
  */
 async function renewSubscription(req, res, next) {
     const prisma = req.prisma;
-    const { customerId, packageId, invoiceId, amount, fiscalYearId, paymentMethodId } = req.body;
+    const { customerId, packageId, invoiceId, amount, fiscalYearId, paymentMethodId, discountType, discountValue, discountReason } = req.body;
     
     try {
         const subscription = await prisma.customerSubscription.findFirst({
@@ -710,7 +710,31 @@ async function renewSubscription(req, res, next) {
         const renewalAmount = pkgPrice.renewAmountWithTax !== null && pkgPrice.renewAmountWithTax !== undefined
             ? Number(pkgPrice.renewAmountWithTax)
             : Number(pkgPrice.price || 0);
-        const expectedAmount = customer.isFree ? 0 : (customer.isRechargeable ? renewalAmount : newPackageAmount);
+        const baseAmount = customer.isFree ? 0 : (customer.isRechargeable ? renewalAmount : newPackageAmount);
+
+        // Calculate discount if provided
+        let discountAmount = 0;
+        let discountLabel = '';
+        const parsedDiscount = parseFloat(discountValue);
+
+        if (!customer.isFree && !isNaN(parsedDiscount) && parsedDiscount > 0) {
+            if (discountType === 'percentage') {
+                if (parsedDiscount > 100) {
+                    return res.status(400).json({ error: 'Percentage discount cannot exceed 100%' });
+                }
+                discountAmount = Math.round((baseAmount * parsedDiscount) / 100 * 100) / 100;
+                discountLabel = discountReason?.trim()
+                    ? `${discountReason.trim()} (${parsedDiscount}%)`
+                    : `Renewal Discount (${parsedDiscount}%)`;
+            } else {
+                discountAmount = Math.min(baseAmount, Math.round(parsedDiscount * 100) / 100);
+                discountLabel = discountReason?.trim()
+                    ? `${discountReason.trim()} (Flat NPR ${discountAmount})`
+                    : `Renewal Discount (Flat NPR ${discountAmount})`;
+            }
+        }
+
+        const expectedAmount = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
 
         // Amount validation
         if (amount !== undefined && amount !== null) {
@@ -805,6 +829,13 @@ async function renewSubscription(req, res, next) {
                 });
             }
             orderItems.push(...renewalItems);
+            if (discountAmount > 0) {
+                orderItems.push({
+                    itemName: discountLabel,
+                    referenceId: 'DISCOUNT',
+                    itemPrice: -discountAmount
+                });
+            }
 
             await tx.customerOrderManagement.create({
                 data: {

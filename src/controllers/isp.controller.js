@@ -73,9 +73,111 @@ function mapPublicIsp(isp, sidebarBranding = {}) {
   };
 }
 
-async function resolvePublicIsp(prisma) {
-  const defaultIspId = Number(process.env.DEFAULT_ISP_ID || 1);
+function extractDomain(input) {
+  if (!input || typeof input !== 'string') return '';
+  let str = input.trim().toLowerCase();
+  str = str.replace(/^[a-z]+:\/\//i, '');
+  str = str.split('/')[0].split('?')[0].split('#')[0].split(':')[0].trim();
+  return str;
+}
 
+function getRootDomain(domain) {
+  if (!domain) return '';
+  const clean = extractDomain(domain);
+  if (!clean || clean === 'localhost' || /^(\d{1,3}\.){3}\d{1,3}$/.test(clean)) {
+    return clean;
+  }
+  const parts = clean.split('.');
+  if (parts.length <= 2) return clean;
+
+  const secondToLast = parts[parts.length - 2];
+  const last = parts[parts.length - 1];
+  const twoPartTlds = ['com', 'net', 'org', 'edu', 'gov', 'co', 'ac', 'mil', 'biz', 'info'];
+  if (twoPartTlds.includes(secondToLast) && last.length <= 3) {
+    return parts.slice(-3).join('.');
+  }
+  return parts.slice(-2).join('.');
+}
+
+function getCandidateDomains(req) {
+  if (!req) return [];
+  const list = [
+    req.query?.domain,
+    req.query?.host,
+    req.headers?.['x-forwarded-host'],
+    req.headers?.host,
+    req.headers?.origin,
+    req.headers?.referer,
+  ];
+  const result = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'string') continue;
+    const splitItems = item.split(',');
+    for (const sub of splitItems) {
+      const d = extractDomain(sub);
+      if (d && !result.includes(d)) {
+        result.push(d);
+      }
+    }
+  }
+  return result;
+}
+
+async function resolvePublicIsp(prisma, req) {
+  // 1. If req already has resolved ispId
+  if (req?.ispId) {
+    const byId = await prisma.iSP.findUnique({
+      where: { id: req.ispId },
+      select: PUBLIC_ISP_SELECT,
+    });
+    if (byId) return byId;
+  }
+
+  // 2. Try domain matching based on incoming candidate domains
+  const candidates = getCandidateDomains(req);
+  const nonLocalCandidates = candidates.filter(
+    (c) => c !== 'localhost' && !/^(\d{1,3}\.){3}\d{1,3}$/.test(c)
+  );
+
+  if (nonLocalCandidates.length > 0) {
+    const isps = await prisma.iSP.findMany({
+      where: {
+        website: { not: null },
+      },
+      select: PUBLIC_ISP_SELECT,
+    });
+
+    for (const candidate of nonLocalCandidates) {
+      const candidateRoot = getRootDomain(candidate);
+
+      // A. Exact domain match
+      for (const isp of isps) {
+        const ispDomain = extractDomain(isp.website);
+        if (ispDomain && candidate === ispDomain) {
+          return isp;
+        }
+      }
+
+      // B. Subdomain match (e.g. cms.arrownet.com.np ends with .arrownet.com.np)
+      for (const isp of isps) {
+        const ispDomain = extractDomain(isp.website);
+        if (ispDomain && candidate.endsWith('.' + ispDomain)) {
+          return isp;
+        }
+      }
+
+      // C. Root domain match (e.g. root of cms.arrownet.com.np is arrownet.com.np, root of arrownet.com.np is arrownet.com.np)
+      for (const isp of isps) {
+        const ispRoot = getRootDomain(isp.website);
+        if (ispRoot && candidateRoot === ispRoot) {
+          return isp;
+        }
+      }
+    }
+  }
+
+  // 3. Fallback to DEFAULT_ISP_ID or first ISP
+  const defaultIspId = Number(process.env.DEFAULT_ISP_ID || 1);
   if (Number.isFinite(defaultIspId) && defaultIspId > 0) {
     const defaultIsp = await prisma.iSP.findUnique({
       where: { id: defaultIspId },
@@ -92,7 +194,7 @@ async function resolvePublicIsp(prisma) {
 
 async function getPublicIspInfo(req, res, next) {
   try {
-    const isp = await resolvePublicIsp(req.prisma);
+    const isp = await resolvePublicIsp(req.prisma, req);
 
     if (!isp) {
       return res.status(404).json({
@@ -652,4 +754,7 @@ module.exports = {
   getIspById,
   updateIsp,
   deleteIsp,
+  resolvePublicIsp,
+  extractDomain,
+  getRootDomain,
 };

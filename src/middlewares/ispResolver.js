@@ -120,6 +120,50 @@ function ispResolver(prisma) {
         }
       }
 
+      // 5. Hostname / Domain inspection (matches ISP website or root domain)
+      if (!req.ispId && prisma?.iSP) {
+        const candidateHost = req.headers['x-forwarded-host'] || req.headers.host;
+        if (candidateHost && typeof candidateHost === 'string') {
+          const rawHost = candidateHost.split(',')[0].trim().toLowerCase().replace(/^[a-z]+:\/\//i, '').split('/')[0].split(':')[0];
+          if (rawHost && rawHost !== 'localhost' && !/^(\d{1,3}\.){3}\d{1,3}$/.test(rawHost)) {
+            const isps = await prisma.iSP.findMany({
+              where: { website: { not: null } },
+              select: { id: true, website: true }
+            });
+            
+            const extractDomainClean = (input) => {
+              if (!input) return '';
+              return input.trim().toLowerCase().replace(/^[a-z]+:\/\//i, '').split('/')[0].split(':')[0];
+            };
+
+            const getRootDomainClean = (domain) => {
+              if (!domain) return '';
+              const clean = extractDomainClean(domain);
+              const parts = clean.split('.');
+              if (parts.length <= 2) return clean;
+              const secondToLast = parts[parts.length - 2];
+              const last = parts[parts.length - 1];
+              const twoPartTlds = ['com', 'net', 'org', 'edu', 'gov', 'co', 'ac', 'mil', 'biz', 'info'];
+              if (twoPartTlds.includes(secondToLast) && last.length <= 3) {
+                return parts.slice(-3).join('.');
+              }
+              return parts.slice(-2).join('.');
+            };
+
+            const rawRoot = getRootDomainClean(rawHost);
+
+            for (const isp of isps) {
+              const ispDomain = extractDomainClean(isp.website);
+              const ispRoot = getRootDomainClean(isp.website);
+              if (ispDomain && (rawHost === ispDomain || rawHost.endsWith('.' + ispDomain) || (rawRoot && rawRoot === ispRoot))) {
+                req.ispId = isp.id;
+                return next();
+              }
+            }
+          }
+        }
+      }
+
     } catch (err) {
       // Non-blocking: If resolution fails, proceed to next middleware
     }
