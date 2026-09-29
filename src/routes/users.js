@@ -42,8 +42,11 @@ const createUserValidation = [
   body('ispId').optional().isInt({ gt: 0 }).withMessage('ISP ID must be a positive integer if provided.'),
   body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
   body('yeastarExt').optional({ values: 'falsy' }).trim().matches(/^\d{1,7}$/).withMessage('VoIP extension must be 1 to 7 digits.'),
-  body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
-  body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
+  body('branchId').optional({ values: 'falsy' }).custom((value) => {
+    if (value === null || value === '' || value === 'none' || value === 'null' || value === '0' || value === 0) return true;
+    const num = Number(value);
+    return Number.isInteger(num) && num > 0;
+  }).withMessage('Branch ID must be a positive integer or empty.'),
   body('branchIds').optional({ values: 'falsy' }).custom((value) => {
     const values = Array.isArray(value) ? value : [value];
     return values.every((item) => {
@@ -67,7 +70,11 @@ const updateUserValidation = [
   body('status').optional().isIn(['active', 'inactive', 'pending', 'disabled']).withMessage('Invalid status.'),
   body('yeastarExt').optional({ values: 'falsy' }).trim().matches(/^\d{1,7}$/).withMessage('VoIP extension must be 1 to 7 digits.'),
   body('departmentId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Department ID must be a positive integer if provided.'),
-  body('branchId').optional({ values: 'falsy' }).isInt({ gt: 0 }).withMessage('Branch ID must be a positive integer if provided.'),
+  body('branchId').optional({ values: 'falsy' }).custom((value) => {
+    if (value === null || value === '' || value === 'none' || value === 'null' || value === '0' || value === 0) return true;
+    const num = Number(value);
+    return Number.isInteger(num) && num > 0;
+  }).withMessage('Branch ID must be a positive integer or empty.'),
   body('branchIds').optional({ values: 'falsy' }).custom((value) => {
     const values = Array.isArray(value) ? value : [value];
     return values.every((item) => {
