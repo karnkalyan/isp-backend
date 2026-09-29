@@ -34,19 +34,22 @@ async function getAllSubBranchIds(prisma, branchId) {
  * @returns {Promise<Object|undefined>} The 'where' clause for branch filtering
  */
 async function getBranchFilter(req, fieldName = 'branchId') {
-    const roleName = req.user.role?.toLowerCase() || '';
+    const roleName = (typeof req.user?.role === 'string' ? req.user.role : req.user?.role?.name || '').toLowerCase();
     const isGlobal = roleName === 'administrator' || 
+                    roleName === 'admin' ||
+                    roleName === 'isp_admin' ||
                     roleName === 'global manager' || 
                     roleName.startsWith('global ');
                     
-    // If user has global access (Admin/Global Manager) and no specific branch is selected, show everything
-    if (isGlobal && !req.selectedBranchId) {
+    // If user has global access (Admin, Global Manager, Global Technical, Global Support, Global Marketing),
+    // they see all data across all branches by default.
+    if (isGlobal) {
         return undefined;
     }
 
-    // Otherwise, we must filter. 
-    // Use selectedBranchId if present, fallback to user's primary branchId
-    const branchIdToFilter = req.selectedBranchId || req.user.branchId;
+    // Otherwise, we must filter for branch-level users. 
+    // Use req.branchId if present, fallback to selectedBranchId, then user's primary branchId
+    const branchIdToFilter = req.branchId || req.selectedBranchId || req.user.branchId;
 
     if (branchIdToFilter) {
         const branch = await req.prisma.branch.findUnique({

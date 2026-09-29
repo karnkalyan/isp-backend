@@ -762,10 +762,31 @@ async function bulkTransferItems(req, res, next) {
 async function assignInventoryItem(req, res, next) {
     try {
         const { itemId } = req.params;
-        const { customerId, userId, assignedRoleId, note, qty } = req.body;
+        const { customerId, userId, branchId, assignedRoleId, note, qty } = req.body;
 
-        if (!customerId && !userId && !assignedRoleId) {
-            return res.status(400).json({ error: 'Customer ID, User ID, or Role ID is required' });
+        let targetUserId = userId ? Number(userId) : null;
+        let targetBranchId = branchId ? Number(branchId) : null;
+
+        if (!targetUserId && targetBranchId) {
+            // Find branch admin of this branch
+            const branchAdmin = await req.prisma.user.findFirst({
+                where: {
+                    ispId: req.ispId,
+                    isDeleted: false,
+                    OR: [
+                        { branchId: targetBranchId },
+                        { userBranches: { some: { branchId: targetBranchId } } }
+                    ],
+                    role: { name: { contains: 'Branch Admin' } }
+                }
+            });
+            if (branchAdmin) {
+                targetUserId = branchAdmin.id;
+            }
+        }
+
+        if (!customerId && !targetUserId && !assignedRoleId && !targetBranchId) {
+            return res.status(400).json({ error: 'Customer ID, User ID, Branch ID, or Role ID is required' });
         }
 
         const item = await req.prisma.InventoryItem.findUnique({
@@ -788,7 +809,8 @@ async function assignInventoryItem(req, res, next) {
         const fromStatus = item.status;
         let toStatus;
         if (customerId) toStatus = 'ASSIGNED_TO_CUSTOMER';
-        else if (userId) toStatus = 'ASSIGNED_TO_USER';
+        else if (targetUserId) toStatus = 'ASSIGNED_TO_USER';
+        else if (targetBranchId) toStatus = 'ASSIGNED_TO_BRANCH';
         else if (assignedRoleId) toStatus = 'ASSIGNED_TO_ROLE';
 
         if (customerId) {
@@ -842,7 +864,7 @@ async function assignInventoryItem(req, res, next) {
                     inventoryItemId: item.id,
                     fromStatus,
                     toStatus: fromStatus,
-                    toEntityId: item.branchId,
+                    toEntityId: targetBranchId || item.branchId,
                     entityType: 'BRANCH',
                     actionByUserId: req.user.id,
                     note: `Split off ${reqQty} unit(s) for assignment. Remaining available: ${newParentAvailable}`
@@ -850,7 +872,6 @@ async function assignInventoryItem(req, res, next) {
             });
 
             // 3. Create new child item representing assigned portion
-            // We append a timestamp to the serial number if it exists to maintain uniqueness
             const childSerialNumber = item.serialNumber ? `${item.serialNumber}-part-${Date.now()}` : null;
             updated = await req.prisma.InventoryItem.create({
                 data: {
@@ -862,12 +883,12 @@ async function assignInventoryItem(req, res, next) {
                     model: item.model,
                     condition: item.condition,
                     ispId: item.ispId,
-                    branchId: item.branchId,
+                    branchId: targetBranchId || item.branchId,
                     status: toStatus,
                     qty: reqQty,
                     availableQty: reqQty,
                     customerId: customerId ? Number(customerId) : null,
-                    userId: userId ? Number(userId) : null,
+                    userId: targetUserId,
                     assignedRoleId: assignedRoleId ? Number(assignedRoleId) : null,
                     updatedAt: new Date()
                 }
@@ -878,8 +899,9 @@ async function assignInventoryItem(req, res, next) {
                 where: { id: Number(itemId) },
                 data: {
                     status: toStatus,
+                    branchId: targetBranchId !== null ? targetBranchId : item.branchId,
                     customerId: customerId ? Number(customerId) : null,
-                    userId: userId ? Number(userId) : null,
+                    userId: targetUserId,
                     assignedRoleId: assignedRoleId ? Number(assignedRoleId) : null,
                     updatedAt: new Date()
                 }
@@ -891,10 +913,10 @@ async function assignInventoryItem(req, res, next) {
                 inventoryItemId: updated.id,
                 fromStatus,
                 toStatus,
-                entityType: customerId ? 'CUSTOMER' : (userId ? 'USER' : 'ROLE'),
-                toEntityId: customerId ? Number(customerId) : (userId ? Number(userId) : Number(assignedRoleId)),
+                entityType: customerId ? 'CUSTOMER' : (targetUserId ? 'USER' : (targetBranchId ? 'BRANCH' : 'ROLE')),
+                toEntityId: customerId ? Number(customerId) : (targetUserId ? Number(targetUserId) : (targetBranchId ? Number(targetBranchId) : Number(assignedRoleId))),
                 actionByUserId: req.user.id,
-                note: note || `Assigned ${reqQty} unit(s) to ${customerId ? 'customer' : (userId ? 'user' : 'role')}`
+                note: note || `Assigned ${reqQty} unit(s) to ${customerId ? 'customer' : (targetUserId ? 'user' : (targetBranchId ? 'branch' : 'role'))}`
             }
         });
 

@@ -2,6 +2,7 @@
 const csv = require('csv-parser');
 const stream = require('stream');
 const { logAudit } = require('../utils/auditLogger');
+const { getAllSubBranchIds } = require('../utils/branchHelper');
 
 async function createLead(req, res, next) {
   try {
@@ -150,8 +151,15 @@ async function createLead(req, res, next) {
 
 const getAllLeads = async (req, res, next) => {
   try {
-    const roleName = String(req.user?.role?.name || "").toLowerCase();
+    const roleName = String(req.user?.role?.name || req.user?.role || "").toLowerCase();
+    const isGlobal = roleName === 'administrator' || 
+                     roleName === 'admin' || 
+                     roleName === 'isp_admin' || 
+                     roleName === 'global manager' || 
+                     roleName.startsWith('global ');
     const isFieldStaff = roleName.includes("field staff") || roleName.includes("field_staff");
+    const isBranchStaff = roleName.includes("branch") || (!isGlobal && !isFieldStaff);
+
     if (isFieldStaff && (!req.query.search || !String(req.query.search).trim())) {
       return res.json({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
     }
@@ -174,17 +182,25 @@ const getAllLeads = async (req, res, next) => {
       ispId: req.ispId || req.user.ispId,
     };
 
-    // ROLE-BASED FILTERING (EXACTLY LIKE FOLLOW-UPS)
-    // If the request specifically queries qualified leads, allow non-admins (like field staff) to see them all
+    // ROLE-BASED FILTERING
     const isSearchingAllQualified = status === 'qualified' || qualified === 'true' || req.query.showAllQualified === 'true';
-    if (userRole !== 'Administrator' && !isSearchingAllQualified) {
-      // For non-admin users, show only their assigned leads
+
+    if (assigned_to_me === 'true' || (isFieldStaff && !isSearchingAllQualified)) {
+      // Explicitly requested assigned leads, or field staff
       where.assignedUserId = userId;
-    } else {
-      // For admins: if "assigned_to_me" is true, show only their leads
-      // Otherwise, admins see all leads
-      if (assigned_to_me === 'true') {
-        where.assignedUserId = userId;
+    } else if (isGlobal) {
+      // Global roles (Global Technical, Global Support, Global Marketing, Global Manager, Administrator)
+      // see all leads across all branches!
+    } else if (isBranchStaff) {
+      // Branch-level roles (Branch Admin, Branch Support, Branch Technical, Branch Marketing)
+      // see all leads for their branch and its sub-branches
+      const branchIdToFilter = req.branchId || req.selectedBranchId || req.user.branchId;
+      if (branchIdToFilter) {
+        const allowedBranchIds = await getAllSubBranchIds(req.prisma, Number(branchIdToFilter));
+        where.OR = [
+          { branchId: { in: allowedBranchIds } },
+          { subBranchId: { in: allowedBranchIds } }
+        ];
       }
     }
 
@@ -349,7 +365,7 @@ const getAllLeads = async (req, res, next) => {
       },
       filters: {
         userRole,
-        canViewAll: userRole === 'Administrator'
+        canViewAll: isGlobal || isBranchStaff
       }
     });
   } catch (err) {

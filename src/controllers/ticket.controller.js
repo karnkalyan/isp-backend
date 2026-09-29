@@ -701,8 +701,21 @@ async function updateTicket(req, res, next) {
             return res.status(403).json({ error: 'Field staff are not authorized to close tickets.' });
         }
         if (assignedToId) {
-            const assignee = await req.prisma.user.findFirst({ where: { id: Number(assignedToId), ispId: req.ispId, isDeleted: false, ...(existing.branchId ? { OR: [{ branchId: existing.branchId }, { userBranches: { some: { branchId: existing.branchId } } }] } : {}) } });
-            if (!assignee) return res.status(400).json({ error: 'Assignee must be a user of the ticket branch' });
+            const assignee = await req.prisma.user.findFirst({
+                where: {
+                    id: Number(assignedToId),
+                    ispId: req.ispId,
+                    isDeleted: false,
+                    ...(existing.branchId ? {
+                        OR: [
+                            { branchId: existing.branchId },
+                            { userBranches: { some: { branchId: existing.branchId } } },
+                            { role: { name: { in: ['Administrator', 'Global Technical', 'Global Support', 'Global Manager', 'Global Field Staff'] } } }
+                        ]
+                    } : {})
+                }
+            });
+            if (!assignee) return res.status(400).json({ error: 'Assignee must be a user of the ticket branch or global staff' });
         }
 
         const updateData = {};

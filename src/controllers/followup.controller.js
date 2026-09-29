@@ -420,7 +420,8 @@ async function getAllFollowUps(req, res, next) {
       }
     };
 
-    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    const roleName = String(userRole || '').toLowerCase();
+    const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName === 'isp_admin' || roleName === 'global manager' || roleName.startsWith('global ');
     if (!isAdmin) {
       // For non-admin users, show only their assigned follow-ups
       where.assignedUserId = userId;
@@ -436,8 +437,8 @@ async function getAllFollowUps(req, res, next) {
       where.type = type;
     }
 
-    // Specific assigned user filter (admin only)
-    if (assignedUserId && assignedUserId !== 'all' && userRole === 'Administrator') {
+    // Specific assigned user filter (admin/global only)
+    if (assignedUserId && assignedUserId !== 'all' && isAdmin) {
       // Handle "me" parameter
       if (assignedUserId === 'me') {
         where.assignedUserId = userId;
@@ -589,7 +590,7 @@ async function getAllFollowUps(req, res, next) {
       },
       filters: {
         userRole,
-        canViewAll: userRole === 'Administrator'
+        canViewAll: isAdmin
       }
     });
   } catch (err) {
@@ -723,7 +724,8 @@ async function getFollowUpStats(req, res, next) {
       }
     };
 
-    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    const roleName = String(userRole || '').toLowerCase();
+    const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName === 'isp_admin' || roleName === 'global manager' || roleName.startsWith('global ');
     const whereAll = isAdmin
       ? whereBase
       : { ...whereBase, assignedUserId: userId };
@@ -843,7 +845,8 @@ async function getUpcomingFollowUps(req, res, next) {
       }
     };
 
-    const isAdmin = userRole?.toLowerCase() === 'administrator' || userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'isp_admin';
+    const roleName = String(userRole || '').toLowerCase();
+    const isAdmin = roleName === 'administrator' || roleName === 'admin' || roleName === 'isp_admin' || roleName === 'global manager' || roleName.startsWith('global ');
     if (!isAdmin) {
       where.assignedUserId = userId;
     }
@@ -885,7 +888,7 @@ async function getUpcomingFollowUps(req, res, next) {
       success: true,
       data: followUps,
       userRole,
-      canViewAll: userRole === 'Administrator'
+      canViewAll: isAdmin
     });
   } catch (err) {
     console.error("Get Upcoming Follow Ups Error:", err.message);
