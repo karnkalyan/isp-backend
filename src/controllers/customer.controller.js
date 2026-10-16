@@ -1026,8 +1026,9 @@ async function createCustomer(req, res, next) {
     // Data preparation
     const panCandidate = panNumber || (existingCustomerForLead?.panNo ? existingCustomerForLead.panNo : null);
     const finalPan = await generateUniquePAN(prisma, panCandidate);
-    const membership = membershipId
-      ? await prisma.membership.findFirst({ where: { id: Number(membershipId), ispId: req.ispId } })
+    const effectiveMembershipId = membershipId || lead.memberShipId || null;
+    const membership = effectiveMembershipId
+      ? await prisma.membership.findFirst({ where: { id: Number(effectiveMembershipId), ispId: req.ispId } })
       : null;
     const membershipCode = membership?.code || 'GEN';
 
@@ -1051,7 +1052,7 @@ async function createCustomer(req, res, next) {
       const customerPayload = {
         panNo: finalPan,
         idNumber: idNumber.trim(),
-        ...(membershipId ? { membership: { connect: { id: Number(membershipId) } } } : { membership: { disconnect: true } }),
+        ...(effectiveMembershipId ? { membership: { connect: { id: Number(effectiveMembershipId) } } } : {}),
         ...(effectiveBranchId ? { branch: { connect: { id: Number(effectiveBranchId) } } } : {}),
         ...(effectiveSubBranchId ? { subBranch: { connect: { id: Number(effectiveSubBranchId) } } } : {}),
         ...(targetTypeId ? { customerType: { connect: { id: targetTypeId } } } : {}),
@@ -1070,7 +1071,10 @@ async function createCustomer(req, res, next) {
       if (existingCustomerForLead && existingCustomerForLead.isDeleted) {
         createdCustomer = await tx.customer.update({
           where: { id: existingCustomerForLead.id },
-          data: customerPayload
+          data: {
+            ...customerPayload,
+            ...(!effectiveMembershipId && existingCustomerForLead.membershipId ? { membership: { disconnect: true } } : {})
+          }
         });
       } else {
         createdCustomer = await tx.customer.create({
