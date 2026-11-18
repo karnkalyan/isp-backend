@@ -292,6 +292,25 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
           price: true,
           initialTotalWithTax: true,
           renewAmountWithTax: true,
+          upgradePackageId: true,
+          upgradePackage: {
+            select: {
+              id: true,
+              packageName: true,
+              price: true,
+              initialTotalWithTax: true,
+              renewAmountWithTax: true,
+              packageDuration: true,
+              referenceId: true,
+              planId: true,
+              isActive: true,
+              isDeleted: true,
+              oneTimeCharges: {
+                where: { isDeleted: false },
+                select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+              }
+            }
+          },
           packageDuration: true,
           referenceId: true,
           planId: true,
@@ -319,12 +338,17 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     throw error;
   }
 
+  const originalPkg = pkg;
+  if (Boolean(customer.isRechargeable) && pkg.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
+    pkg = pkg.upgradePackage;
+  }
+
   // If specific packageId or packageName requested, resolve matching package under same plan
   if (packageId && Number(packageId) !== pkg.id) {
     const selectedPkg = await prisma.packagePrice.findFirst({
       where: {
         id: Number(packageId),
-        planId: pkg.planId,
+        planId: { in: Array.from(new Set([pkg.planId, originalPkg.planId].filter(Boolean))) },
         isDeleted: false,
         isActive: true
       },

@@ -373,6 +373,9 @@ model PackagePrice {
   orders                CustomerOrderManagement[] @relation("PackageOrders")
   lead                  Lead[]
   customersSubscribed   Customer[]                @relation("SubscribedPackage")
+  upgradePackageId      Int?
+  upgradePackage        PackagePrice?             @relation("PackageUpgrade", fields: [upgradePackageId], references: [id], map: "package_price_upgrade_fkey")
+  upgradedFromPackages  PackagePrice[]            @relation("PackageUpgrade")
 }
 
 model OneTimeCharge {

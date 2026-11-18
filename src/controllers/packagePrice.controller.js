@@ -66,6 +66,7 @@ async function createPackagePrice(req, res, next) {
       initialTotalWithTax,
       renewAmountWithTax,
       isTscApplicable,
+      upgradePackageId,
       oneTimeCharges = [],
       oneTimeChargeIds = []
     } = req.body;
@@ -151,6 +152,7 @@ async function createPackagePrice(req, res, next) {
           isDeleted: false,
           referenceId: finalRefId,
           isTrial: isTrial === true,
+          upgradePackageId: upgradePackageId !== undefined ? (upgradePackageId ? Number(upgradePackageId) : null) : undefined,
           addonPricesJson,
           updatedAt: new Date()
         }
@@ -181,6 +183,7 @@ async function createPackagePrice(req, res, next) {
           referenceId: finalRefId,
           isTrial: isTrial === true,
           isDeleted: false,
+          upgradePackageId: upgradePackageId !== undefined ? (upgradePackageId ? Number(upgradePackageId) : null) : undefined,
           addonPricesJson,
           updatedAt: new Date()
         }
@@ -279,6 +282,20 @@ async function listPackagePrices(req, res, next) {
         referenceId: true,
         isTrial: true,
         addonPricesJson: true,
+        upgradePackageId: true,
+        upgradePackage: {
+          select: {
+            id: true,
+            packageName: true,
+            packageDuration: true,
+            price: true,
+            initialTotalWithTax: true,
+            renewAmountWithTax: true,
+            planId: true,
+            isActive: true,
+            isDeleted: true
+          }
+        },
         packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } }
       }
     });
@@ -330,6 +347,20 @@ async function getPackagePriceById(req, res, next) {
         planId: true,
         referenceId: true,
         isTrial: true,
+        upgradePackageId: true,
+        upgradePackage: {
+          select: {
+            id: true,
+            packageName: true,
+            packageDuration: true,
+            price: true,
+            initialTotalWithTax: true,
+            renewAmountWithTax: true,
+            planId: true,
+            isActive: true,
+            isDeleted: true
+          }
+        },
         packagePlanDetails: { select: { planName: true, downSpeed: true, upSpeed: true } }
       }
     });
@@ -373,6 +404,7 @@ async function updatePackagePrice(req, res, next) {
       initialTotalWithTax,
       renewAmountWithTax,
       isTscApplicable,
+      upgradePackageId,
       oneTimeCharges,
       oneTimeChargeIds
     } = req.body;
@@ -426,6 +458,7 @@ async function updatePackagePrice(req, res, next) {
         isActive: isActive !== undefined ? Boolean(isActive) : undefined,
         isOnline: isOnline !== undefined ? Boolean(isOnline) : undefined,
         isTrial: isTrial !== undefined ? isTrial : undefined,
+        upgradePackageId: upgradePackageId !== undefined ? (upgradePackageId && Number(upgradePackageId) !== id ? Number(upgradePackageId) : null) : undefined,
         addonPricesJson: addonPricesJson !== undefined ? addonPricesJson : undefined,
         updatedAt: new Date()
       }
@@ -529,6 +562,7 @@ async function createBulkPackagePrices(req, res, next) {
         initialTotalWithTax,
         renewAmountWithTax,
         isTscApplicable,
+      upgradePackageId,
         isActive,
         isOnline,
         oneTimeCharges = [],
@@ -585,7 +619,8 @@ async function createBulkPackagePrices(req, res, next) {
             isOnline: isOnline === true,
             isDeleted: false,
             referenceId: finalRefId,
-            addonPricesJson,
+            upgradePackageId: upgradePackageId !== undefined ? (upgradePackageId ? Number(upgradePackageId) : null) : undefined,
+          addonPricesJson,
             updatedAt: new Date()
           }
         });
@@ -615,7 +650,8 @@ async function createBulkPackagePrices(req, res, next) {
             referenceId: finalRefId,
             isTrial: false,
             isDeleted: false,
-            addonPricesJson,
+            upgradePackageId: upgradePackageId !== undefined ? (upgradePackageId ? Number(upgradePackageId) : null) : undefined,
+          addonPricesJson,
             updatedAt: new Date()
           }
         });

@@ -864,6 +864,25 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
           price: true,
           initialTotalWithTax: true,
           renewAmountWithTax: true,
+          upgradePackageId: true,
+          upgradePackage: {
+            select: {
+              id: true,
+              packageName: true,
+              price: true,
+              initialTotalWithTax: true,
+              renewAmountWithTax: true,
+              packageDuration: true,
+              referenceId: true,
+              planId: true,
+              isActive: true,
+              isDeleted: true,
+              oneTimeCharges: {
+                where: { isDeleted: false },
+                select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+              }
+            }
+          },
           packageDuration: true,
           referenceId: true,
           planId: true,
@@ -891,12 +910,17 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
     throw error;
   }
 
+  const originalPkg = pkg;
+  if (Boolean(customer.isRechargeable) && pkg.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
+    pkg = pkg.upgradePackage;
+  }
+
   // If a specific package ID is requested, load it and verify it's under the same Speed Plan
   if (packageId && Number(packageId) !== pkg.id) {
     const selectedPkg = await req.prisma.PackagePrice.findFirst({
       where: {
         id: Number(packageId),
-        planId: pkg.planId,
+        planId: { in: Array.from(new Set([pkg.planId, originalPkg.planId].filter(Boolean))) },
         isDeleted: false,
         isActive: true,
         isOnline: true
@@ -1888,7 +1912,7 @@ const listTransactions = async (req, res, next) => {
       } : {})
     };
     const [transactions, total] = await Promise.all([
-      req.prisma.eSewaTokenPayment.findMany({
+      req.prisma.eSew8aTokenPayment.findMany({
         where,
         include: {
           customer: { include: { lead: { select: { firstName: true, lastName: true, phoneNumber: true, email: true } } } },

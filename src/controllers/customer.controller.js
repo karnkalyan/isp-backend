@@ -3571,6 +3571,24 @@ const subscribePackage = async (req, res, next) => {
             price: true,
             initialTotalWithTax: true,
             renewAmountWithTax: true,
+            upgradePackageId: true,
+            upgradePackage: {
+              select: {
+                id: true,
+                packageName: true,
+                price: true,
+                initialTotalWithTax: true,
+                renewAmountWithTax: true,
+                packageDuration: true,
+                referenceId: true,
+                isActive: true,
+                isDeleted: true,
+                oneTimeCharges: {
+                  where: { isDeleted: false },
+                  select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+                }
+              }
+            },
             packageDuration: true,
             referenceId: true,
             oneTimeCharges: {
@@ -3584,7 +3602,10 @@ const subscribePackage = async (req, res, next) => {
 
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
-    const pkg = customer.subscribedPkg;
+    let pkg = customer.subscribedPkg;
+    if (customer.isRechargeable && pkg?.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
+      pkg = pkg.upgradePackage;
+    }
     if (!pkg) return res.status(404).json({ error: "Customer has no subscribed package" });
 
     // FIX: use the correct database field 'isRechargeable'
@@ -3680,6 +3701,9 @@ const subscribePackage = async (req, res, next) => {
       if (subscription.isTrial) {
         updatedSubData.planStart = previousPlanEnd;
       }
+      if (pkg.id !== subscription.package) {
+        updatedSubData.package = pkg.id;
+      }
 
       const updatedSubscription = await tx.customerSubscription.update({
         where: { id: subscription.id },
@@ -3691,7 +3715,8 @@ const subscribePackage = async (req, res, next) => {
         data: {
           isRechargeable: true,
           status: 'active',
-          onboardStatus: 'fully_onboarded'
+          onboardStatus: 'fully_onboarded',
+          ...(pkg.id !== customer.subscribedPkgId ? { subscribedPkgId: pkg.id, assignedPkg: pkg.id } : {})
         }
       });
       await tx.customerServiceConnection.updateMany({
