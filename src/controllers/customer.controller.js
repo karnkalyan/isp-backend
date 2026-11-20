@@ -3571,22 +3571,12 @@ const subscribePackage = async (req, res, next) => {
             price: true,
             initialTotalWithTax: true,
             renewAmountWithTax: true,
-            upgradePackageId: true,
-            upgradePackage: {
+            planId: true,
+            packagePlanDetails: {
               select: {
                 id: true,
-                packageName: true,
-                price: true,
-                initialTotalWithTax: true,
-                renewAmountWithTax: true,
-                packageDuration: true,
-                referenceId: true,
-                isActive: true,
-                isDeleted: true,
-                oneTimeCharges: {
-                  where: { isDeleted: false },
-                  select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
-                }
+                planName: true,
+                upgradePlanIds: true
               }
             },
             packageDuration: true,
@@ -3603,10 +3593,38 @@ const subscribePackage = async (req, res, next) => {
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
     let pkg = customer.subscribedPkg;
-    if (customer.isRechargeable && pkg?.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
-      pkg = pkg.upgradePackage;
-    }
     if (!pkg) return res.status(404).json({ error: "Customer has no subscribed package" });
+    const rawUpgradePlanIds = pkg.packagePlanDetails?.upgradePlanIds;
+    const upgradePlanIds = Array.isArray(rawUpgradePlanIds)
+      ? rawUpgradePlanIds.map(Number).filter(id => Number.isInteger(id) && id > 0 && id !== pkg.planId)
+      : [];
+    if (customer.isRechargeable && upgradePlanIds.length > 0) {
+      const upgradedCandidates = await req.prisma.packagePrice.findMany({
+        where: {
+          planId: { in: upgradePlanIds },
+          isDeleted: false,
+          isActive: true
+        },
+        select: {
+          id: true,
+          packageName: true,
+          price: true,
+          initialTotalWithTax: true,
+          renewAmountWithTax: true,
+          packageDuration: true,
+          referenceId: true,
+          planId: true,
+          oneTimeCharges: {
+            where: { isDeleted: false },
+            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          }
+        }
+      });
+      if (upgradedCandidates.length > 0) {
+        const durNorm = String(pkg.packageDuration || "").trim().toLowerCase();
+        pkg = upgradedCandidates.find(c => String(c.packageDuration || "").trim().toLowerCase() === durNorm) || upgradedCandidates[0];
+      }
+    }
 
     // FIX: use the correct database field 'isRechargeable'
     const isRechargeable = Boolean(customer.isRechargeable);

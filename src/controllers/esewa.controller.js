@@ -864,23 +864,11 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
           price: true,
           initialTotalWithTax: true,
           renewAmountWithTax: true,
-          upgradePackageId: true,
-          upgradePackage: {
+          packagePlanDetails: {
             select: {
               id: true,
-              packageName: true,
-              price: true,
-              initialTotalWithTax: true,
-              renewAmountWithTax: true,
-              packageDuration: true,
-              referenceId: true,
-              planId: true,
-              isActive: true,
-              isDeleted: true,
-              oneTimeCharges: {
-                where: { isDeleted: false },
-                select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
-              }
+              planName: true,
+              upgradePlanIds: true
             }
           },
           packageDuration: true,
@@ -911,8 +899,41 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
   }
 
   const originalPkg = pkg;
-  if (Boolean(customer.isRechargeable) && pkg.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
-    pkg = pkg.upgradePackage;
+  const rawUpgradePlanIds = originalPkg.packagePlanDetails?.upgradePlanIds;
+  const upgradePlanIds = Array.isArray(rawUpgradePlanIds)
+    ? rawUpgradePlanIds.map(Number).filter(id => Number.isInteger(id) && id > 0 && id !== originalPkg.planId)
+    : [];
+  const allowedPlanIds = Boolean(customer.isRechargeable) && upgradePlanIds.length > 0
+    ? upgradePlanIds
+    : [originalPkg.planId];
+
+  if (!packageId && Boolean(customer.isRechargeable) && upgradePlanIds.length > 0) {
+    const upgradedCandidates = await req.prisma.PackagePrice.findMany({
+      where: {
+        planId: { in: upgradePlanIds },
+        isDeleted: false,
+        isActive: true,
+        isOnline: true
+      },
+      select: {
+        id: true,
+        packageName: true,
+        price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
+        packageDuration: true,
+        referenceId: true,
+        planId: true,
+        oneTimeCharges: {
+          where: { isDeleted: false },
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+        }
+      }
+    });
+    if (upgradedCandidates.length > 0) {
+      const durNorm = String(originalPkg.packageDuration || "").trim().toLowerCase();
+      pkg = upgradedCandidates.find(c => String(c.packageDuration || "").trim().toLowerCase() === durNorm) || upgradedCandidates[0];
+    }
   }
 
   // If a specific package ID is requested, load it and verify it's under the same Speed Plan
@@ -920,7 +941,7 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
     const selectedPkg = await req.prisma.PackagePrice.findFirst({
       where: {
         id: Number(packageId),
-        planId: { in: Array.from(new Set([pkg.planId, originalPkg.planId].filter(Boolean))) },
+        planId: { in: Array.from(new Set([originalPkg.planId, ...upgradePlanIds].filter(Boolean))) },
         isDeleted: false,
         isActive: true,
         isOnline: true
@@ -1007,7 +1028,8 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
     otcItems,
     totalAmount,
     aggregatedItems,
-    fullName
+    fullName,
+    allowedPlanIds
   };
 };
 
@@ -1018,12 +1040,12 @@ const paymentInquiry = async (req, res, next) => {
   try {
     // Use shared helper to get data
     const context = await getCustomerContext(req, requestId);
-    const { customer, pkg, totalAmount, fullName } = context;
+    const { customer, pkg, totalAmount, fullName, allowedPlanIds } = context;
 
-    // Fetch all online-enabled packages under the same Speed Plan (same planId)
+    // Fetch all online-enabled packages under the target Speed Plan(s)
     const dbPrices = await req.prisma.PackagePrice.findMany({
       where: {
-        planId: pkg.planId,
+        planId: { in: allowedPlanIds || [pkg.planId] },
         isDeleted: false,
         isActive: true,
         isOnline: true

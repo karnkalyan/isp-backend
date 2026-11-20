@@ -292,23 +292,11 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
           price: true,
           initialTotalWithTax: true,
           renewAmountWithTax: true,
-          upgradePackageId: true,
-          upgradePackage: {
+          packagePlanDetails: {
             select: {
               id: true,
-              packageName: true,
-              price: true,
-              initialTotalWithTax: true,
-              renewAmountWithTax: true,
-              packageDuration: true,
-              referenceId: true,
-              planId: true,
-              isActive: true,
-              isDeleted: true,
-              oneTimeCharges: {
-                where: { isDeleted: false },
-                select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
-              }
+              planName: true,
+              upgradePlanIds: true
             }
           },
           packageDuration: true,
@@ -339,8 +327,40 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
   }
 
   const originalPkg = pkg;
-  if (Boolean(customer.isRechargeable) && pkg.upgradePackage && !pkg.upgradePackage.isDeleted && pkg.upgradePackage.isActive) {
-    pkg = pkg.upgradePackage;
+  const rawUpgradePlanIds = originalPkg.packagePlanDetails?.upgradePlanIds;
+  const upgradePlanIds = Array.isArray(rawUpgradePlanIds)
+    ? rawUpgradePlanIds.map(Number).filter(id => Number.isInteger(id) && id > 0 && id !== originalPkg.planId)
+    : [];
+  const allowedPlanIds = Boolean(customer.isRechargeable) && upgradePlanIds.length > 0
+    ? upgradePlanIds
+    : [originalPkg.planId];
+
+  if (!packageId && !desiredPackageName && !desiredDuration && Boolean(customer.isRechargeable) && upgradePlanIds.length > 0) {
+    const upgradedCandidates = await prisma.packagePrice.findMany({
+      where: {
+        planId: { in: upgradePlanIds },
+        isDeleted: false,
+        isActive: true
+      },
+      select: {
+        id: true,
+        packageName: true,
+        price: true,
+        initialTotalWithTax: true,
+        renewAmountWithTax: true,
+        packageDuration: true,
+        referenceId: true,
+        planId: true,
+        oneTimeCharges: {
+          where: { isDeleted: false },
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+        }
+      }
+    });
+    if (upgradedCandidates.length > 0) {
+      const durNorm = String(originalPkg.packageDuration || "").trim().toLowerCase();
+      pkg = upgradedCandidates.find(c => String(c.packageDuration || "").trim().toLowerCase() === durNorm) || upgradedCandidates[0];
+    }
   }
 
   // If specific packageId or packageName requested, resolve matching package under same plan
@@ -348,7 +368,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     const selectedPkg = await prisma.packagePrice.findFirst({
       where: {
         id: Number(packageId),
-        planId: { in: Array.from(new Set([pkg.planId, originalPkg.planId].filter(Boolean))) },
+        planId: { in: Array.from(new Set([originalPkg.planId, ...upgradePlanIds].filter(Boolean))) },
         isDeleted: false,
         isActive: true
       },
@@ -495,7 +515,8 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     aggregatedItems,
     fullName,
     primaryConnectionUsername,
-    subscriberUsername
+    subscriberUsername,
+    allowedPlanIds
   };
 };
 
@@ -549,12 +570,12 @@ const paymentInquiry = async (req, res) => {
 
   try {
     const context = await getCustomerContext(req, requestId, null, null, null, effectiveLookupType);
-    const { customer, pkg, totalAmount, fullName, primaryConnectionUsername, subscriberUsername } = context;
+    const { customer, pkg, totalAmount, fullName, primaryConnectionUsername, subscriberUsername, allowedPlanIds } = context;
 
-    // Fetch all online-enabled packages under same Speed Plan
+    // Fetch all online-enabled packages under target Speed Plan(s)
     const dbPrices = await prisma.packagePrice.findMany({
       where: {
-        planId: pkg.planId,
+        planId: { in: allowedPlanIds || [pkg.planId] },
         isDeleted: false,
         isActive: true
       },

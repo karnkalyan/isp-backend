@@ -336,6 +336,7 @@ model PackagePlan {
   maxDiscountPercentage  Float?  @default(100)
   maxDiscountCount       Int?    @default(0)
   highPriority           Boolean @default(false)
+  upgradePlanIds         Json?
 
   isActive  Boolean @default(true)
   isDeleted Boolean @default(false)
@@ -373,9 +374,6 @@ model PackagePrice {
   orders                CustomerOrderManagement[] @relation("PackageOrders")
   lead                  Lead[]
   customersSubscribed   Customer[]                @relation("SubscribedPackage")
-  upgradePackageId      Int?
-  upgradePackage        PackagePrice?             @relation("PackageUpgrade", fields: [upgradePackageId], references: [id], map: "package_price_upgrade_fkey")
-  upgradedFromPackages  PackagePrice[]            @relation("PackageUpgrade")
 }
 
 model OneTimeCharge {

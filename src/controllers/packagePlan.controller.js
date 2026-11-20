@@ -204,7 +204,7 @@ async function createPackagePlan(req, res, next) {
       packageType, allowRename, fupApply, fupLimitGb, fupPenaltyPlanId, isFupPackage,
       onlyRenewal, applyFramedPool, framedPoolValue, customRadiusAttributes,
       vendorProfiles, maxDiscountPercentage, maxDiscountCount, highPriority,
-      branchIds
+      branchIds, upgradePlanIds
     } = req.body;
 
     const connectionTypeId = Number(connectionType);
@@ -242,6 +242,9 @@ async function createPackagePlan(req, res, next) {
       maxDiscountPercentage: maxDiscountPercentage !== undefined ? Number(maxDiscountPercentage) : 100,
       maxDiscountCount: maxDiscountCount !== undefined ? Number(maxDiscountCount) : 0,
       highPriority: Boolean(highPriority),
+      upgradePlanIds: Array.isArray(upgradePlanIds)
+        ? [...new Set(upgradePlanIds.map(Number).filter(n => Number.isInteger(n) && n > 0))]
+        : null,
       isActive: true,
       isp: req.ispId ? { connect: { id: req.ispId } } : undefined,
       isDeleted: false,
@@ -323,6 +326,12 @@ async function updatePackagePlan(req, res, next) {
       'framedPoolValue', 'customRadiusAttributes',
       'maxDiscountPercentage', 'maxDiscountCount', 'highPriority'
     ];
+
+    if (req.body.upgradePlanIds !== undefined) {
+      data.upgradePlanIds = Array.isArray(req.body.upgradePlanIds)
+        ? [...new Set(req.body.upgradePlanIds.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== id))]
+        : null;
+    }
 
     fields.forEach(f => {
       if (req.body[f] !== undefined) {
