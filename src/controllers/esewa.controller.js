@@ -1958,8 +1958,8 @@ const listTransactions = async (req, res, next) => {
         ]
       } : {})
     };
-    const [transactions, total] = await Promise.all([
-      req.prisma.eSew8aTokenPayment.findMany({
+    const [transactions, total, esewaService] = await Promise.all([
+      req.prisma.eSewaTokenPayment.findMany({
         where,
         include: {
           customer: { include: { lead: { select: { firstName: true, lastName: true, phoneNumber: true, email: true } } } },
@@ -1969,10 +1969,15 @@ const listTransactions = async (req, res, next) => {
         skip: (page - 1) * limit,
         take: limit
       }),
-      req.prisma.eSewaTokenPayment.count({ where })
+      req.prisma.eSewaTokenPayment.count({ where }),
+      req.prisma.iSPService.findFirst({
+        where: { ispId: Number(req.ispId), isDeleted: false, service: { code: 'ESEWA' } },
+        select: { isEnabled: true, isActive: true }
+      })
     ]);
     return res.json({
       success: true,
+      serviceEnabled: Boolean(esewaService?.isEnabled && esewaService?.isActive),
       transactions: transactions.map(payment => ({
         ...payment,
         gatewayMode: payment.packageDetails?.source === 'EPAY_V2' || String(payment.requestId).startsWith('ISP-') ? 'eSewa ePay' : 'eSewa Token',

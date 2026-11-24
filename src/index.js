@@ -250,12 +250,19 @@ app.use('/api/reports', require('./routes/report.routes')(prisma));
 app.use('/api/import', importRouter(prisma));
 
 
+// JSON 404 handler for unmatched API routes
+app.use((req, res) => {
+    res.status(404).json({
+        error: `Endpoint not found: ${req.method} ${req.originalUrl}`,
+    });
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
-    const status = err.status || 500;
+    const status = err.status || err.statusCode || 500;
     res.status(status).json({
-        error: status >= 500 ? 'Internal Server Error' : (err.message || 'Request failed'),
+        error: err.message || (status >= 500 ? 'Internal Server Error' : 'Request failed'),
         details: process.env.NODE_ENV === 'development' ? err : {},
     });
 });

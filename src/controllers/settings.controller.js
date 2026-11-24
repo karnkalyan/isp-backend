@@ -408,9 +408,13 @@ async function saveKhaltiConfiguration(req, res, next) {
             return res.status(403).json({ error: 'Only system administrators can configure Khalti.' });
         }
         const { epayEnabled, env, websiteUrl, returnUrl, secretKey } = req.body || {};
-        let catalog = await req.prisma.serviceCatalog.findFirst({ where: { code: 'KHALTI' } });
+        const origin = String(req.headers.origin || `${req.protocol}://${req.get('host')}` || process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
+        const resolvedWebsiteUrl = String(websiteUrl || '').trim() || origin;
+        const resolvedReturnUrl = String(returnUrl || '').trim() || `${resolvedWebsiteUrl}/payment/khalti/callback`;
+
+        let catalog = await req.prisma.service.findFirst({ where: { code: 'KHALTI' } });
         if (!catalog) {
-            catalog = await req.prisma.serviceCatalog.create({
+            catalog = await req.prisma.service.create({
                 data: {
                     name: 'Khalti',
                     code: 'KHALTI',
@@ -429,8 +433,8 @@ async function saveKhaltiConfiguration(req, res, next) {
             ...currentConfig,
             epayEnabled: Boolean(epayEnabled),
             env: env === 'sandbox' ? 'sandbox' : 'production',
-            websiteUrl: String(websiteUrl || '').trim(),
-            returnUrl: String(returnUrl || '').trim()
+            websiteUrl: resolvedWebsiteUrl,
+            returnUrl: resolvedReturnUrl
         };
 
         if (!service) {

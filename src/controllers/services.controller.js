@@ -226,6 +226,19 @@ class ServiceController {
     try {
       const { category, search, isActive } = req.query;
 
+      // Ensure core payment gateway services exist in the catalog
+      for (const coreSvc of [
+        { name: 'eSewa', code: 'ESEWA', description: 'eSewa token payment and ePay v2 gateway', category: 'PAYMENT', iconUrl: '/icons/esewa.svg' },
+        { name: 'Khalti', code: 'KHALTI', description: 'Khalti ePayment v2 digital payment gateway', category: 'PAYMENT', iconUrl: '/icons/khalti.svg' },
+        { name: 'External Payment', code: 'EXTERNAL_PAYMENT', description: 'External payment gateway & automated recharge push API', category: 'PAYMENT', iconUrl: '/icons/externalpayment.svg' }
+      ]) {
+        await this.prisma.service.upsert({
+          where: { code: coreSvc.code },
+          update: {},
+          create: { ...coreSvc, isActive: true, isDeleted: false }
+        }).catch(() => {});
+      }
+
       const where = {
         isDeleted: false
       };

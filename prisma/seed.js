@@ -11,7 +11,9 @@ async function main() {
   for (const service of [
     { name: 'TShul Billing', code: 'TSHUL', description: 'TShul accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/tshul.svg' },
     { name: 'Nepurix Accounting', code: 'NEPURIX', description: 'Nepurix accounting and invoicing integration', category: 'BILLING', iconUrl: '/icons/nepurix.svg' },
-    { name: 'eSewa', code: 'ESEWA', description: 'eSewa token payment and ePay v2 gateway', category: 'PAYMENT', iconUrl: '/icons/esewa.svg' }
+    { name: 'eSewa', code: 'ESEWA', description: 'eSewa token payment and ePay v2 gateway', category: 'PAYMENT', iconUrl: '/icons/esewa.svg' },
+    { name: 'Khalti', code: 'KHALTI', description: 'Khalti ePayment v2 digital payment gateway', category: 'PAYMENT', iconUrl: '/icons/khalti.svg' },
+    { name: 'External Payment', code: 'EXTERNAL_PAYMENT', description: 'External payment gateway & automated recharge push API', category: 'PAYMENT', iconUrl: '/icons/externalpayment.svg' }
   ]) {
     await prisma.service.upsert({
       where: { code: service.code },

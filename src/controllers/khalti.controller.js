@@ -406,7 +406,7 @@ async function listKhaltiTransactions(req, res, next) {
       } : {})
     };
 
-    const [total, orders] = await Promise.all([
+    const [total, orders, khaltiService] = await Promise.all([
       req.prisma.customerOrderManagement.count({ where }),
       req.prisma.customerOrderManagement.findMany({
         where,
@@ -423,6 +423,10 @@ async function listKhaltiTransactions(req, res, next) {
           },
           packagePrice: { select: { packageName: true } }
         }
+      }),
+      req.prisma.iSPService.findFirst({
+        where: { ispId: Number(req.ispId), isDeleted: false, service: { code: 'KHALTI' } },
+        select: { isEnabled: true, isActive: true }
       })
     ]);
 
@@ -441,6 +445,8 @@ async function listKhaltiTransactions(req, res, next) {
     }));
 
     return res.json({
+      success: true,
+      serviceEnabled: Boolean(khaltiService?.isEnabled && khaltiService?.isActive),
       transactions,
       pagination: { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) }
     });
