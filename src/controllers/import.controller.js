@@ -2979,17 +2979,58 @@ async function importCustomers(req, res, next) {
                         });
 
                         if (!plan) {
-                            const planCode = slugify(pkgName).replace(/[^A-Z0-9]/g, '').substring(0, 16) || `PLAN${Date.now()}`;
                             const speedMbps = extractSpeedMbps(pkgName) || 100;
+                            const existingCode = await prisma.PackagePlan.findFirst({
+                                where: { planCode: pkgName },
+                                select: { id: true }
+                            });
+                            const planCode = existingCode
+                                ? `${slugify(pkgName).replace(/[^A-Z0-9-]/g, '').substring(0, 24)}-${Date.now().toString().slice(-4)}`
+                                : pkgName;
+
+                            const ftthConn = await prisma.ConnectionType.findFirst({
+                                where: {
+                                    isDeleted: false,
+                                    ...(ispId ? { ispId } : {}),
+                                    OR: [{ name: { contains: 'FTTH' } }, { code: { contains: 'FTTH' } }]
+                                },
+                                select: { id: true }
+                            }) || await prisma.ConnectionType.findFirst({
+                                where: { isDeleted: false, ...(ispId ? { ispId } : {}) },
+                                select: { id: true }
+                            });
+
                             plan = await prisma.PackagePlan.create({
                                 data: {
                                     planName: pkgName,
                                     planCode,
-                                    service: (row.serviceType || 'fiber').toString().trim().toLowerCase(),
+                                    service: pkgName,
+                                    nasType: 'mikrotik, juniper',
+                                    priority: '1',
+                                    packageType: 'HOME',
+                                    ...(ftthConn ? { connectionTypeDetails: { connect: { id: ftthConn.id } } } : {}),
                                     downSpeed: Number(speedMbps) || 100,
                                     upSpeed: Number(speedMbps) || 100,
+                                    intUpload: Number(speedMbps) || 100,
+                                    firDownload: Number(speedMbps) || 100,
+                                    localUpload: Number(speedMbps) || 100,
+                                    localDownload: Number(speedMbps) || 100,
                                     dataLimit: 0,
-                                    nasType: (row.nas || 'juniper').toString().trim().toLowerCase(),
+                                    allowRename: true,
+                                    fupApply: true,
+                                    isFupPackage: false,
+                                    onlyRenewal: false,
+                                    isPopular: true,
+                                    highPriority: false,
+                                    fupLimitGb: 0,
+                                    applyFramedPool: true,
+                                    framedPoolValue: 'pool2',
+                                    vendorProfiles: ['JUNIPER:xFTTH-pp0'],
+                                    customRadiusAttributes: [
+                                        { attribute: 'ERX-IPv6-Delegated-Pool-Name', op: ':=', value: 'v6-default-pd' },
+                                        { attribute: 'Framed-IPv6-Pool', op: ':=', value: 'v6-ndra' }
+                                    ],
+                                    description: `Internet Speed of Arrownet ${pkgName}`,
                                     isActive: true,
                                     isDeleted: false,
                                     isp: { connect: { id: ispId || 1 } }
@@ -2997,27 +3038,66 @@ async function importCustomers(req, res, next) {
                             });
                         }
 
-                        const baseRefId = `INT-${slugify(plan.planCode)}${slugify(durationStr)}`.replace(/[^A-Z0-9]/g, '');
+                        const baseRefId = `INT-${String(plan.planCode).replace(/[\s-]/g, '')}${String(durationStr).replace(/[\s-]/g, '')}`.replace(/[^A-Za-z0-9-]/g, '');
                         const finalRefId = await generateUniqueReferenceId(prisma, baseRefId);
-                        const rawPrice = parseFloat(row.price || row.packagePrice || row.amount || row['Package Price'] || row['Price'] || 0);
+                        const rawPrice = parseFloat(row.price || row.packagePrice || row.amount || row['Package Price'] || row['Price'] || 0) || 0;
+                        const cleanRefName = pkgName
+                            .replace(/[-_]+/g, ' ')
+                            .replace(/(\d+)\s*Mbps/gi, '$1 Mbps')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+
+                        // Match final_packages_finals.xlsx addon items (Internet & S&M = 0 when missing)
+                        const defaultAddonAmounts = {
+                            'internet': 0,
+                            'support and maintance': 0,
+                            'support and maintenance': 0,
+                            'drop wire': 25,
+                            'douplex router': 4000,
+                            'duplex router': 4000,
+                            'service charge': 500
+                        };
+                        const ispCharges = await prisma.OneTimeCharge.findMany({
+                            where: { isDeleted: false, ...(ispId ? { ispId } : {}) },
+                            select: { id: true, name: true }
+                        }).catch(() => []);
+                        const addonPricesMap = {};
+                        const selectedAddonIds = [];
+                        for (const ch of ispCharges) {
+                            const key = String(ch.name || '').trim().toLowerCase();
+                            if (key in defaultAddonAmounts) {
+                                addonPricesMap[String(ch.id)] = defaultAddonAmounts[key];
+                                selectedAddonIds.push(ch.id);
+                            }
+                        }
 
                         packagePrice = await prisma.PackagePrice.create({
                             data: {
                                 planId: plan.id,
-                                packageName: `${plan.planName} - ${durationStr}`,
+                                packageName: `${cleanRefName} - ${durationStr}`,
                                 packageDuration: durationStr,
                                 price: rawPrice,
                                 initialTotalWithTax: rawPrice ? Math.round(rawPrice * 1.13 * 100) / 100 : 0,
                                 renewAmountWithTax: rawPrice ? Math.round(rawPrice * 1.13 * 100) / 100 : 0,
                                 referenceId: finalRefId,
+                                isTscApplicable: true,
                                 isActive: true,
+                                isOnline: false,
                                 isDeleted: false,
+                                addonPricesJson: Object.keys(addonPricesMap).length > 0 ? JSON.stringify(addonPricesMap) : null,
                                 ispId: ispId || 1
                             },
                             include: {
                                 packagePlanDetails: true
                             }
                         });
+
+                        if (selectedAddonIds.length > 0) {
+                            await prisma.packageonetimecharges.createMany({
+                                data: selectedAddonIds.map(cid => ({ A: packagePrice.id, B: Number(cid) })),
+                                skipDuplicates: true
+                            }).catch(() => {});
+                        }
                     }
 
                     packageCache.set(pKey, packagePrice);
