@@ -236,10 +236,16 @@ async function getAllUsers(req, res, next) {
 
     const branchFilter = await getBranchFilter(req);
 
+    const excludeCustomers = String(req.query.excludeCustomers || '').toLowerCase() === 'true';
+
     const where = {
       isDeleted: false,
       ispId: authenticatedIspId,
-      ...branchFilter
+      ...branchFilter,
+      ...(excludeCustomers ? {
+        customerId: null,
+        role: { name: { notIn: ['Customer', 'customer', 'CUSTOMER'] } }
+      } : {})
     };
 
     const users = await req.prisma.user.findMany({
