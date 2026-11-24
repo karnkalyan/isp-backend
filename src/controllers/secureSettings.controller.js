@@ -118,6 +118,7 @@ async function truncateDatabase(req, res, next) {
       packages = true,
       billing = true,
       ticketsTasks = true,
+      messages = true,
       radius = true
     } = options;
 
@@ -136,7 +137,7 @@ async function truncateDatabase(req, res, next) {
     if (billing || customers) {
       await safeDelete('orderDetails', () => req.prisma.orderDetail.deleteMany({ where: { order: { customer: { ispId } } } }));
       await safeDelete('eSewaPayments', () => req.prisma.eSewaTokenPayment.deleteMany({ where: { ispId } }));
-      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { ispId } }));
+      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { OR: [{ ispId }, { ispId: null }] } }));
       await safeDelete('orders', () => req.prisma.customerOrderManagement.deleteMany({ where: { customer: { ispId } } }));
       if (billing) {
         await safeDelete('invoiceRanges', () => req.prisma.branchInvoiceRange.deleteMany({ where: { branch: { ispId } } }));
@@ -150,7 +151,7 @@ async function truncateDatabase(req, res, next) {
       await safeDelete('tickets', () => req.prisma.ticket.deleteMany({ where: { ispId } }));
     }
 
-    if (customers || ticketsTasks) {
+    if (messages || customers || ticketsTasks) {
       await safeDelete('messages', () => req.prisma.message.deleteMany({ where: { ispId } }));
     }
 
@@ -182,7 +183,19 @@ async function truncateDatabase(req, res, next) {
       await safeDelete('packagePlanBranches', async () => {
         const plans = await req.prisma.packagePlan.findMany({ where: { ispId }, select: { id: true } });
         const planIds = plans.map(p => p.id);
-        return planIds.length > 0 ? req.prisma.packagePlanBranch.deleteMany({ where: { packagePlanId: { in: planIds } } }) : { count: 0 };
+        const allOtherPlans = await req.prisma.packagePlan.findMany({ where: { ispId: { not: ispId } }, select: { id: true } });
+        const keepPlanIds = allOtherPlans.map(p => p.id);
+        if (keepPlanIds.length === 0) {
+          return req.prisma.packagePlanBranch.deleteMany({});
+        }
+        return req.prisma.packagePlanBranch.deleteMany({
+          where: {
+            OR: [
+              ...(planIds.length > 0 ? [{ packagePlanId: { in: planIds } }] : []),
+              { packagePlanId: { notIn: keepPlanIds } }
+            ]
+          }
+        });
       });
       await safeDelete('packagePrices', () => req.prisma.packagePrice.deleteMany({ where: { ispId } }));
       await safeDelete('packagePlans', () => req.prisma.packagePlan.deleteMany({ where: { ispId } }));
@@ -192,25 +205,32 @@ async function truncateDatabase(req, res, next) {
       try {
         const radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
         if (radiusClient) {
-          const deleteBatch = async (rows, delFn) => {
-            const list = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
-            let count = 0;
-            for (let i = 0; i < list.length; i += 20) {
-              const chunk = list.slice(i, i + 20);
-              const results = await Promise.all(
-                chunk.map(item => (item?.id != null ? delFn(item.id).then(() => 1).catch(() => 0) : Promise.resolve(0)))
-              );
-              count += results.reduce((a, b) => a + b, 0);
+          const deleteAllPages = async (fetchFn, delFn) => {
+            let totalDeleted = 0;
+            for (let pass = 0; pass < 200; pass++) {
+              const rows = await fetchFn().catch(() => []);
+              const list = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
+              if (list.length === 0) break;
+              let passDeleted = 0;
+              for (let i = 0; i < list.length; i += 25) {
+                const chunk = list.slice(i, i + 25);
+                const results = await Promise.all(
+                  chunk.map(item => (item?.id != null ? delFn(item.id).then(() => 1).catch(() => 0) : Promise.resolve(0)))
+                );
+                passDeleted += results.reduce((a, b) => a + b, 0);
+              }
+              totalDeleted += passDeleted;
+              if (passDeleted === 0) break;
             }
-            return count;
+            return totalDeleted;
           };
 
           const [rc, rr, rug, rgc, rgr] = await Promise.all([
-            radiusClient.getRadcheck(50000, 0).then(rows => deleteBatch(rows, id => radiusClient.deleteRadcheck(id))).catch(() => 0),
-            radiusClient.getRadreply().then(rows => deleteBatch(rows, id => radiusClient.deleteRadreply(id))).catch(() => 0),
-            radiusClient.getRadusergroup().then(rows => deleteBatch(rows, id => radiusClient.deleteRadusergroup(id))).catch(() => 0),
-            radiusClient.getRadgroupcheck().then(rows => deleteBatch(rows, id => radiusClient.deleteRadgroupcheck(id))).catch(() => 0),
-            radiusClient.getRadgroupreply().then(rows => deleteBatch(rows, id => radiusClient.deleteRadgroupreply(id))).catch(() => 0),
+            deleteAllPages(() => radiusClient.getRadcheck(500, 0), id => radiusClient.deleteRadcheck(id)),
+            deleteAllPages(() => radiusClient.getRadreply(), id => radiusClient.deleteRadreply(id)),
+            deleteAllPages(() => radiusClient.getRadusergroup(), id => radiusClient.deleteRadusergroup(id)),
+            deleteAllPages(() => radiusClient.getRadgroupcheck(), id => radiusClient.deleteRadgroupcheck(id)),
+            deleteAllPages(() => radiusClient.getRadgroupreply(), id => radiusClient.deleteRadgroupreply(id)),
           ]);
           summary.radius = `cleared (radcheck=${rc}, radreply=${rr}, radusergroup=${rug}, radgroupcheck=${rgc}, radgroupreply=${rgr}; NAS & api_users preserved)`;
         }
