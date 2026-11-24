@@ -244,9 +244,28 @@ async function getAllUsers(req, res, next) {
       ...branchFilter,
       ...(excludeCustomers ? {
         customerId: null,
-        role: { name: { notIn: ['Customer', 'customer', 'CUSTOMER'] } }
+        role: { is: { name: { notIn: ['Customer', 'customer', 'CUSTOMER', 'Subscriber', 'subscriber'] } } }
       } : {})
     };
+
+    if (excludeCustomers) {
+      const staffUsers = await req.prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          roleId: true,
+          status: true,
+          profilePicture: true,
+          branchId: true,
+          role: { select: { id: true, name: true } },
+          branch: { select: { id: true, name: true, code: true } },
+        },
+        orderBy: { name: 'asc' },
+      });
+      return res.json(staffUsers);
+    }
 
     const users = await req.prisma.user.findMany({
       where,
