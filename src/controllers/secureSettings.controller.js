@@ -62,11 +62,22 @@ async function createDatabaseBackupBuffer(prisma) {
   return { buffer: Buffer.from(json, 'utf8'), filename: `isp-backup-${new Date().toISOString().slice(0, 10)}.json`, contentType: 'application/json' };
 }
 
+function parseBackupEmails(raw) {
+  return String(raw || '')
+    .split(/[\s,;]+/)
+    .map(e => e.trim())
+    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+}
+
 async function sendBackupEmail(prisma, ispId, recipientEmail) {
   const mailHelper = require('../utils/mailHelper');
+  const recipients = parseBackupEmails(recipientEmail);
+  if (recipients.length === 0) {
+    throw new Error('At least one valid recipient email is required');
+  }
   const { buffer, filename } = await createDatabaseBackupBuffer(prisma);
   await mailHelper.sendMail(ispId, {
-    to: recipientEmail,
+    to: recipients.join(', '),
     subject: `Database Backup - ${new Date().toISOString().slice(0, 10)}`,
     html: `<p>Attached is your scheduled database backup (<strong>${filename}</strong>) generated at ${new Date().toLocaleString()}.</p>`,
     attachments: [{ filename, content: buffer }]
@@ -79,10 +90,11 @@ function scheduleBackupJob(prisma, ispId, enabled, cronExpression, email) {
     try { activeBackupTasks.get(key).stop(); } catch {}
     activeBackupTasks.delete(key);
   }
-  if (!enabled || !email || !cron.validate(cronExpression)) return;
+  const recipients = parseBackupEmails(email);
+  if (!enabled || recipients.length === 0 || !cron.validate(cronExpression)) return;
   const task = cron.schedule(cronExpression, async () => {
     try {
-      await sendBackupEmail(prisma, ispId, email);
+      await sendBackupEmail(prisma, ispId, recipients.join(', '));
     } catch (err) {
       console.error(`[DB BACKUP CRON] Failed for ISP ${ispId}:`, err.message);
     }
@@ -121,19 +133,32 @@ async function truncateDatabase(req, res, next) {
       }
     };
 
-    if (billing) {
+    if (billing || customers) {
       await safeDelete('orderDetails', () => req.prisma.orderDetail.deleteMany({ where: { order: { customer: { ispId } } } }));
       await safeDelete('eSewaPayments', () => req.prisma.eSewaTokenPayment.deleteMany({ where: { ispId } }));
+      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { ispId } }));
       await safeDelete('orders', () => req.prisma.customerOrderManagement.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('invoiceRanges', () => req.prisma.branchInvoiceRange.deleteMany({ where: { branch: { ispId } } }));
+      if (billing) {
+        await safeDelete('invoiceRanges', () => req.prisma.branchInvoiceRange.deleteMany({ where: { branch: { ispId } } }));
+      }
     }
 
     if (ticketsTasks) {
-      await safeDelete('tickets', () => req.prisma.ticket.deleteMany({ where: { ispId } }));
+      await safeDelete('ticketComments', () => req.prisma.ticketComment.deleteMany({ where: { ticket: { ispId } } }));
+      await safeDelete('taskActivityLogs', () => req.prisma.taskActivityLog.deleteMany({ where: { task: { ispId } } }));
       await safeDelete('tasks', () => req.prisma.task.deleteMany({ where: { ispId } }));
+      await safeDelete('tickets', () => req.prisma.ticket.deleteMany({ where: { ispId } }));
     }
 
     if (customers) {
+      await safeDelete('unlinkPortalUsers', () => req.prisma.user.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
+      await safeDelete('unlinkTicketCustomers', () => req.prisma.ticket.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
+      await safeDelete('branchRequests', () => req.prisma.branchRequest.deleteMany({ where: { customer: { ispId } } }));
+      await safeDelete('customerDocuments', () => req.prisma.customerDocument.deleteMany({ where: { customer: { ispId } } }));
+      await safeDelete('customerDevices', () => req.prisma.customerDevice.deleteMany({ where: { customer: { ispId } } }));
+      await safeDelete('customerWifiCredentials', () => req.prisma.customerWiFiCredential.deleteMany({ where: { customer: { ispId } } }));
+      await safeDelete('customerReferrals', () => req.prisma.customerReferral.deleteMany({ where: { customer: { ispId } } }));
+      await safeDelete('customerSubscribedServices', () => req.prisma.customerSubscribedService.deleteMany({ where: { customer: { ispId } } }));
       await safeDelete('customerSubscriptions', () => req.prisma.customerSubscription.deleteMany({ where: { customer: { ispId } } }));
       await safeDelete('connectionUsers', () => req.prisma.connectionUser.deleteMany({ where: { customer: { ispId } } }));
       await safeDelete('customerServiceConnections', () => req.prisma.customerServiceConnection.deleteMany({ where: { customer: { ispId } } }));
@@ -141,10 +166,15 @@ async function truncateDatabase(req, res, next) {
     }
 
     if (leads) {
+      await safeDelete('unlinkTicketLeads', () => req.prisma.ticket.updateMany({ where: { ispId, leadId: { not: null } }, data: { leadId: null } }));
+      await safeDelete('followUps', () => req.prisma.followUp.deleteMany({ where: { lead: { ispId } } }));
       await safeDelete('leads', () => req.prisma.lead.deleteMany({ where: { ispId } }));
     }
 
     if (packages) {
+      await safeDelete('unlinkLeadPackages', () => req.prisma.lead.updateMany({ where: { ispId, interestedPackageId: { not: null } }, data: { interestedPackageId: null } }));
+      await safeDelete('unlinkCustomerAssignedPackages', () => req.prisma.customer.updateMany({ where: { ispId, assignedPkg: { not: null } }, data: { assignedPkg: null } }));
+      await safeDelete('unlinkCustomerSubscribedPackages', () => req.prisma.customer.updateMany({ where: { ispId, subscribedPkgId: { not: null } }, data: { subscribedPkgId: null } }));
       await safeDelete('packagePlanBranches', () => req.prisma.packagePlanBranch.deleteMany({ where: { packagePlan: { ispId } } }));
       await safeDelete('packagePrices', () => req.prisma.packagePrice.deleteMany({ where: { ispId } }));
       await safeDelete('packagePlans', () => req.prisma.packagePlan.deleteMany({ where: { ispId } }));
@@ -220,14 +250,16 @@ async function saveBackupSchedule(req, res, next) {
     if (enabled && !cron.validate(String(cronExpression))) {
       return res.status(400).json({ error: 'Invalid cron expression (e.g. 0 2 * * *)' });
     }
-    if (enabled && !String(email).includes('@')) {
-      return res.status(400).json({ error: 'Valid recipient email is required when schedule is enabled' });
+    const recipients = parseBackupEmails(email);
+    if (enabled && recipients.length === 0) {
+      return res.status(400).json({ error: 'At least one valid recipient email is required when schedule is enabled' });
     }
+    const normalizedEmails = recipients.join(', ');
 
     const entries = [
       ['dbBackupCronEnabled', String(Boolean(enabled))],
       ['dbBackupCronExpression', String(cronExpression).trim()],
-      ['dbBackupEmail', String(email).trim()]
+      ['dbBackupEmail', normalizedEmails || String(email).trim()]
     ];
     for (const [key, value] of entries) {
       const existing = await req.prisma.iSPSettings.findFirst({
@@ -253,11 +285,12 @@ async function sendBackupNow(req, res, next) {
       return res.status(403).json({ error: 'Only system administrators can send database backups.' });
     }
     const { email } = req.body || {};
-    if (!email || !String(email).includes('@')) {
-      return res.status(400).json({ error: 'Valid recipient email is required' });
+    const recipients = parseBackupEmails(email);
+    if (recipients.length === 0) {
+      return res.status(400).json({ error: 'At least one valid recipient email is required' });
     }
-    await sendBackupEmail(req.prisma, req.ispId, String(email).trim());
-    return res.json({ success: true, message: `Backup sent to ${email}` });
+    await sendBackupEmail(req.prisma, req.ispId, recipients.join(', '));
+    return res.json({ success: true, message: `Backup sent to ${recipients.join(', ')}` });
   } catch (err) {
     return next(err);
   }

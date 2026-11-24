@@ -146,6 +146,7 @@ app.use('/pkgplan', pkgplanRouter(prisma));
 app.use('/package-price', packagePrice(prisma));
 app.use('/package-prices', packagePrice(prisma));
 app.use('/extra-charges', extraCharges(prisma));
+app.use('/one-time-charges', extraCharges(prisma));
 app.use('/customer', customerRouter(prisma));
 app.use('/existingisp', existingISPRouter(prisma));
 app.use('/lead', leadRouter(prisma));
@@ -201,6 +202,7 @@ app.use('/api/pkgplan', pkgplanRouter(prisma));
 app.use('/api/package-price', packagePrice(prisma));
 app.use('/api/package-prices', packagePrice(prisma));
 app.use('/api/extra-charges', extraCharges(prisma));
+app.use('/api/one-time-charges', extraCharges(prisma));
 app.use('/api/customer', customerRouter(prisma));
 
 app.use('/api/existingisp', existingISPRouter(prisma));
