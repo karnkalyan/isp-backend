@@ -150,6 +150,10 @@ async function truncateDatabase(req, res, next) {
       await safeDelete('tickets', () => req.prisma.ticket.deleteMany({ where: { ispId } }));
     }
 
+    if (customers || ticketsTasks) {
+      await safeDelete('messages', () => req.prisma.message.deleteMany({ where: { ispId } }));
+    }
+
     if (customers) {
       await safeDelete('unlinkPortalUsers', () => req.prisma.user.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
       await safeDelete('unlinkTicketCustomers', () => req.prisma.ticket.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
