@@ -1402,7 +1402,7 @@ async function importPlans(req, res, next) {
                                     code: slugify(rawConnType),
                                     isActive: true,
                                     isDeleted: false,
-                                    ispId: ispId || 1
+                                    isp: { connect: { id: ispId || 1 } }
                                 }
                             });
                         }
@@ -1582,12 +1582,16 @@ async function importPlans(req, res, next) {
                 maxDiscountCount,
                 description,
                 isActive: true,
-                isDeleted: false,
-                ispId: ispId || 1
+                isDeleted: false
             };
 
             if (!plan) {
-                plan = await prisma.PackagePlan.create({ data: planPayload });
+                plan = await prisma.PackagePlan.create({
+                    data: {
+                        ...planPayload,
+                        isp: { connect: { id: ispId || 1 } }
+                    }
+                });
             } else {
                 plan = await prisma.PackagePlan.update({
                     where: { id: plan.id },
@@ -2078,7 +2082,7 @@ async function importPackages(req, res, next) {
                             fupLimitGb: row.fupLimitGb ? Number(row.fupLimitGb) : null,
                             isActive: true,
                             isDeleted: false,
-                            ispId: ispId || 1
+                            isp: { connect: { id: ispId || 1 } }
                         }
                     });
                 } else {
@@ -2988,7 +2992,7 @@ async function importCustomers(req, res, next) {
                                     nasType: (row.nas || 'juniper').toString().trim().toLowerCase(),
                                     isActive: true,
                                     isDeleted: false,
-                                    ispId: ispId || 1
+                                    isp: { connect: { id: ispId || 1 } }
                                 }
                             });
                         }
