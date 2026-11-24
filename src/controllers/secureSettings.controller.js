@@ -3,6 +3,7 @@ const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
 const cron = require('node-cron');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
@@ -31,35 +32,159 @@ function parseMysqlUrl(dbUrl) {
   }
 }
 
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createZipBuffer(entryName, dataBuffer) {
+  const nameBuf = Buffer.from(entryName, 'utf8');
+  const compressed = zlib.deflateRawSync(dataBuffer, { level: 6 });
+  const crc = crc32(dataBuffer);
+
+  const localHeader = Buffer.alloc(30 + nameBuf.length);
+  localHeader.writeUInt32LE(0x04034b50, 0);
+  localHeader.writeUInt16LE(20, 4);
+  localHeader.writeUInt16LE(0, 6);
+  localHeader.writeUInt16LE(8, 8);
+  localHeader.writeUInt16LE(0, 10);
+  localHeader.writeUInt16LE(0, 12);
+  localHeader.writeUInt32LE(crc, 14);
+  localHeader.writeUInt32LE(compressed.length, 18);
+  localHeader.writeUInt32LE(dataBuffer.length, 22);
+  localHeader.writeUInt16LE(nameBuf.length, 26);
+  localHeader.writeUInt16LE(0, 28);
+  nameBuf.copy(localHeader, 30);
+
+  const centralHeader = Buffer.alloc(46 + nameBuf.length);
+  centralHeader.writeUInt32LE(0x02014b50, 0);
+  centralHeader.writeUInt16LE(20, 4);
+  centralHeader.writeUInt16LE(20, 6);
+  centralHeader.writeUInt16LE(0, 8);
+  centralHeader.writeUInt16LE(8, 10);
+  centralHeader.writeUInt16LE(0, 12);
+  centralHeader.writeUInt16LE(0, 14);
+  centralHeader.writeUInt32LE(crc, 16);
+  centralHeader.writeUInt32LE(compressed.length, 20);
+  centralHeader.writeUInt32LE(dataBuffer.length, 24);
+  centralHeader.writeUInt16LE(nameBuf.length, 28);
+  centralHeader.writeUInt16LE(0, 30);
+  centralHeader.writeUInt16LE(0, 32);
+  centralHeader.writeUInt16LE(0, 34);
+  centralHeader.writeUInt16LE(0, 36);
+  centralHeader.writeUInt32LE(0, 38);
+  centralHeader.writeUInt32LE(0, 42);
+  nameBuf.copy(centralHeader, 46);
+
+  const centralOffset = localHeader.length + compressed.length;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(centralHeader.length, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([localHeader, compressed, centralHeader, eocd]);
+}
+
+function escapeSqlValue(val) {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'boolean') return val ? '1' : '0';
+  if (typeof val === 'number' || typeof val === 'bigint') return String(val);
+  if (val instanceof Date) {
+    return `'${val.toISOString().slice(0, 19).replace('T', ' ')}'`;
+  }
+  if (Buffer.isBuffer(val)) {
+    return `X'${val.toString('hex')}'`;
+  }
+  const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+  return `'${str
+    .replace(/\\/g, '\\\\')
+    .replace(/\0/g, '\\0')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/'/g, "\\'")}'`;
+}
+
+async function buildPureNodeSqlDump(prisma, dbName) {
+  const lines = [
+    `-- Database Backup: ${dbName}`,
+    `-- Generated at: ${new Date().toISOString()}`,
+    'SET FOREIGN_KEY_CHECKS = 0;',
+    ''
+  ];
+
+  const tablesRaw = await prisma.$queryRawUnsafe('SHOW TABLES');
+  const tableNames = tablesRaw
+    .map(row => Object.values(row)[0])
+    .filter(Boolean);
+
+  for (const table of tableNames) {
+    const createRows = await prisma.$queryRawUnsafe(`SHOW CREATE TABLE \`${table}\``);
+    const createSql = createRows?.[0]?.['Create Table'] || Object.values(createRows?.[0] || {})[1];
+    if (createSql) {
+      lines.push(`DROP TABLE IF EXISTS \`${table}\`;`);
+      lines.push(`${createSql};`);
+    }
+
+    const batchSize = 500;
+    let offset = 0;
+    while (true) {
+      const rows = await prisma.$queryRawUnsafe(`SELECT * FROM \`${table}\` LIMIT ${batchSize} OFFSET ${offset}`);
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      const cols = Object.keys(rows[0]).map(c => `\`${c}\``).join(', ');
+      const valuesSql = rows
+        .map(r => `(${Object.values(r).map(escapeSqlValue).join(', ')})`)
+        .join(',\n');
+      lines.push(`INSERT INTO \`${table}\` (${cols}) VALUES\n${valuesSql};`);
+      if (rows.length < batchSize) break;
+      offset += batchSize;
+    }
+    lines.push('');
+  }
+
+  lines.push('SET FOREIGN_KEY_CHECKS = 1;');
+  return Buffer.from(lines.join('\n'), 'utf8');
+}
+
 async function createDatabaseBackupBuffer(prisma) {
   const dbInfo = parseMysqlUrl(process.env.DATABASE_URL || '');
+  const dbName = dbInfo?.database || 'radius_manager';
+  const dateTag = new Date().toISOString().slice(0, 10);
+  const sqlFilename = `${dbName}-${dateTag}.sql`;
+  const zipFilename = `${sqlFilename}.zip`;
   const tmpFile = path.join(os.tmpdir(), `isp-backup-${Date.now()}.sql`);
+
+  let sqlBuffer = null;
   if (dbInfo && dbInfo.database) {
     try {
       const passArg = dbInfo.password ? `-p"${dbInfo.password}"` : '';
       const cmd = `mysqldump -h "${dbInfo.host}" -P ${dbInfo.port} -u "${dbInfo.user}" ${passArg} --single-transaction --routines --triggers "${dbInfo.database}" > "${tmpFile}"`;
       await execAsync(cmd, { timeout: 120000 });
       if (fs.existsSync(tmpFile) && fs.statSync(tmpFile).size > 0) {
-        const buf = fs.readFileSync(tmpFile);
-        fs.unlinkSync(tmpFile);
-        return { buffer: buf, filename: `${dbInfo.database}-${new Date().toISOString().slice(0, 10)}.sql`, contentType: 'application/sql' };
+        sqlBuffer = fs.readFileSync(tmpFile);
       }
-    } catch (e) {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch {
       if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
     }
   }
 
-  // Fallback logical JSON snapshot if mysqldump is unavailable
-  const [isps, users, customers, plans, prices, orders] = await Promise.all([
-    prisma.iSP.findMany().catch(() => []),
-    prisma.user.findMany({ select: { id: true, name: true, email: true, roleId: true, ispId: true, branchId: true } }).catch(() => []),
-    prisma.customer.findMany().catch(() => []),
-    prisma.packagePlan.findMany().catch(() => []),
-    prisma.packagePrice.findMany().catch(() => []),
-    prisma.customerOrderManagement.findMany({ include: { items: true } }).catch(() => [])
-  ]);
-  const json = JSON.stringify({ exportedAt: new Date().toISOString(), isps, users, customers, plans, prices, orders }, null, 2);
-  return { buffer: Buffer.from(json, 'utf8'), filename: `isp-backup-${new Date().toISOString().slice(0, 10)}.json`, contentType: 'application/json' };
+  if (!sqlBuffer) {
+    sqlBuffer = await buildPureNodeSqlDump(prisma, dbName);
+  }
+
+  const zipBuffer = createZipBuffer(sqlFilename, sqlBuffer);
+  return { buffer: zipBuffer, filename: zipFilename, contentType: 'application/zip' };
 }
 
 function parseBackupEmails(raw) {
