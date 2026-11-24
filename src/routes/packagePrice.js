@@ -22,29 +22,6 @@ module.exports = (prisma) => {
   
         if (!plan) return res.status(404).json({ error: 'Plan not found' });
   
-        const token = process.env.FREE_RADIUS_API_TOKEN;
-        const headers = { Authorization: `${token}` };
-        const radBase = process.env.RADIUS_BASE_URL;
-  
-        await axios.post(`${radBase}/radgroupcheck`, {
-          groupname: plan.planName,
-          attribute: 'Auth-Type',
-          op: ':=',
-          value: 'Accept'
-        }, { headers });
-  
-        const replyAttrs = [
-          { attribute: 'Mikrotik-Rate-Limit', op: ':=', value: `${plan.downSpeed}/${plan.upSpeed}` },
-          { attribute: 'Framed-Protocol', op: ':=', value: 'PPP' },
-          { attribute: 'Framed-Pool', op: ':=', value: 'PPOE' }
-        ];
-        for (const attr of replyAttrs) {
-          await axios.post(`${radBase}/radgroupreply`, {
-            groupname: plan.planName,
-            ...attr
-          }, { headers });
-        }
-  
         res.status(201).json(record);
       } catch (err) {
         next(err);

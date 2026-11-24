@@ -1614,13 +1614,6 @@ async function importPlans(req, res, next) {
             let radiusSyncMessage = 'FreeRADIUS not configured';
             if (radiusClient) {
                 try {
-                    await radiusClient.createRadgroupcheck({
-                        groupname: plan.planCode,
-                        attribute: 'Auth-Type',
-                        op: ':=',
-                        value: 'Accept'
-                    }).catch(() => null);
-
                     const nasList = (cleanNasType || '').split(',').map(s => s.trim().toLowerCase());
                     const replyAttributes = [];
 
@@ -2100,46 +2093,8 @@ async function importPackages(req, res, next) {
                 }
             }
 
-            let radiusSyncMessage = 'FreeRADIUS not configured';
-            if (radiusClient) {
-                try {
-                    await radiusClient.createRadgroupcheck({
-                        groupname: plan.planCode,
-                        attribute: 'Auth-Type',
-                        op: ':=',
-                        value: 'Accept'
-                    }).catch(() => null);
-
-                    const mikrotikRateLimit = formatMikrotikRateLimit(upSpeed, downSpeed, row.priority || 8);
-                    const replyAttributes = [
-                        { attribute: 'Mikrotik-Rate-Limit', op: ':=', value: mikrotikRateLimit },
-                        { attribute: 'Framed-Protocol', op: ':=', value: 'PPP' },
-                        { attribute: 'Service-Type', op: ':=', value: 'Framed-User' }
-                    ];
-
-                    let firstReplyId = null;
-                    for (const attr of replyAttributes) {
-                        try {
-                            const res = await radiusClient.createRadgroupreply({
-                                groupname: plan.planCode,
-                                ...attr
-                            });
-                            if (!firstReplyId && res?.id) firstReplyId = res.id;
-                        } catch (attrErr) {}
-                    }
-
-                    if (firstReplyId) {
-                        await prisma.PackagePlan.update({
-                            where: { id: plan.id },
-                            data: { radgroupreplyId: firstReplyId }
-                        });
-                    }
-
-                    radiusSyncMessage = `FreeRADIUS Synced (Group: ${plan.planCode}, Rate: ${upSpeed}M/${downSpeed}M)`;
-                } catch (rSyncErr) {
-                    radiusSyncMessage = `FreeRADIUS Sync Warning: ${rSyncErr.message}`;
-                }
-            }
+            // Package & tariff import does not push to FreeRADIUS (only Internet Plans sync to FreeRADIUS)
+            let radiusSyncMessage = 'Handled at Internet Plan level';
 
             // Dynamically parse duration tiers from row
             const parsedDurationTiers = [];

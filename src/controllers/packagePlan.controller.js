@@ -270,7 +270,6 @@ async function createPackagePlan(req, res, next) {
     try {
       const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
       if (client) {
-        await client.createRadgroupcheck({ groupname: planCode, attribute: 'Auth-Type', op: ':=', value: 'Accept' });
         const replyAttrs = await generateRadiusAttributes(plan);
         let firstReplyId = null;
         for (const attr of replyAttrs) {
@@ -386,13 +385,6 @@ async function updatePackagePlan(req, res, next) {
           if (!firstId) firstId = result.id;
         }
         if (firstId) await req.prisma.PackagePlan.update({ where: { id }, data: { radgroupreplyId: firstId } });
-
-        if (updated.planCode !== existing.planCode) {
-          const checks = await client.getRadgroupcheck();
-          const check = checks.find(c => c.groupname === existing.planCode && c.attribute === 'Auth-Type');
-          if (check) await client.updateRadgroupcheck(check.id, { groupname: updated.planCode, attribute: 'Auth-Type', op: ':=', value: 'Accept' });
-          else await client.createRadgroupcheck({ groupname: updated.planCode, attribute: 'Auth-Type', op: ':=', value: 'Accept' });
-        }
       }
     } catch (err) { console.error("Radius update failed:", err); }
 
@@ -433,13 +425,6 @@ async function resyncPackagePlan(req, res, next) {
       // Refresh logic as recommended in plan
       const existingReplies = await client.getRadgroupreplyByGroupname(local.planCode);
       for (const r of existingReplies) await client.deleteRadgroupreply(r.id);
-
-      // Re-create Auth check
-      const checks = await client.getRadgroupcheck();
-      const hasCheck = checks.some(c => c.groupname === local.planCode && c.attribute === 'Auth-Type');
-      if (!hasCheck) {
-        await client.createRadgroupcheck({ groupname: local.planCode, attribute: 'Auth-Type', op: ':=', value: 'Accept' });
-      }
 
       const replyAttrs = await generateRadiusAttributes(local);
       let firstId = null;
