@@ -1064,6 +1064,7 @@ async function createCustomer(req, res, next) {
         status: 'draft',
         onboardStatus: 'pending',
         isFree: parsedIsFree,
+        dropWireMeters: req.body.dropWireMeters ? parseFloat(req.body.dropWireMeters) : null,
         isDeleted: false,
         updatedAt: new Date()
       };

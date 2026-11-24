@@ -8,6 +8,7 @@ const {
     applyDiscount,
     payOrder,
     renewSubscription,
+    createCustomInvoice,
     generateManualInvoice,
     getBillingStats,
     listInvoices,
@@ -44,6 +45,8 @@ module.exports = (prisma) => {
     router.post('/adjustments/discount', checkPermission('billing_update'), applyDiscount);
     router.post('/invoices/discount', checkPermission('billing_update'), applyDiscount);
     router.post('/pay', checkPermission('billing_update'), payOrder);
+    router.post('/pay-order/:orderId', checkPermission('billing_update'), payOrder);
+    router.post('/create-custom-invoice', checkPermission('billing_create'), createCustomInvoice);
     router.post('/update-payment-mode', checkPermission('billing_update'), updatePaymentMode);
     router.post('/renew', checkAnyPermission(['billing_create', 'billing_read_self', 'customer_read']), renewSubscription);
     router.post('/generate-manual', checkPermission('billing_create'), generateManualInvoice);

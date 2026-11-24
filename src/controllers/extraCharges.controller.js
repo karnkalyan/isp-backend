@@ -60,6 +60,7 @@ async function createOneTimeCharge(req, res, next) {
       isTscApplicable,
       forPackageCreation,
       isRenewal,
+      isDropWireDynamic,
       applicablePackageIds = []
     } = req.body;
 
@@ -87,6 +88,7 @@ async function createOneTimeCharge(req, res, next) {
         amount: amount !== undefined && amount !== null && amount !== '' ? parseFloat(amount) : null,
         forPackageCreation: Boolean(forPackageCreation),
         isRenewal: Boolean(isRenewal),
+        isDropWireDynamic: Boolean(isDropWireDynamic),
         code: cleanCode,
         isTaxable: Boolean(isTaxable),
         isTscApplicable: Boolean(isTscApplicable),
@@ -188,7 +190,7 @@ async function updateOneTimeCharge(req, res, next) {
       select: { referenceId: true }
     });
 
-    const { name, description, amount, ispId, isTaxable, isTscApplicable, forPackageCreation, isRenewal, applicablePackageIds = [] } = req.body;
+    const { name, description, amount, ispId, isTaxable, isTscApplicable, forPackageCreation, isRenewal, isDropWireDynamic, applicablePackageIds = [] } = req.body;
     const updated = await req.prisma.OneTimeCharge.update({
       where: { id },
       data: {
@@ -199,6 +201,7 @@ async function updateOneTimeCharge(req, res, next) {
         amount: amount !== undefined ? (amount !== null && amount !== '' ? parseFloat(amount) : null) : undefined,
         forPackageCreation: forPackageCreation !== undefined ? Boolean(forPackageCreation) : undefined,
         isRenewal: isRenewal !== undefined ? Boolean(isRenewal) : undefined,
+        isDropWireDynamic: isDropWireDynamic !== undefined ? Boolean(isDropWireDynamic) : undefined,
         ispId: ispId !== undefined ? Number(ispId) : undefined,
         updatedAt: new Date()
       }

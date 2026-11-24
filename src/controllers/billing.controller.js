@@ -13,6 +13,7 @@ const { formatRadiusExpiration } = require('../utils/radiusExpiration');
 const { RadiusClient } = require('../services/radiusClient');
 const { getBranchFilter } = require('../utils/branchHelper');
 const { syncOrderToAccounting, fetchAccountingInvoices } = require('../services/accountingInvoice.service');
+const { applyDynamicDropWireCharges } = require('../utils/dropWireHelper');
 
 async function syncPaidOrderAccounting(prisma, ispId, orderId) {
     try {
@@ -1635,6 +1636,100 @@ async function updatePaymentMode(req, res, next) {
     }
 }
 
+async function createCustomInvoice(req, res, next) {
+    const prisma = req.prisma;
+    try {
+        const {
+            customerId,
+            items = [],
+            invoiceType = 'cash',
+            paymentMethodId,
+            invoiceId,
+            fiscalYearId
+        } = req.body || {};
+
+        if (!customerId) return res.status(400).json({ error: 'customerId is required' });
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ error: 'At least one invoice item is required' });
+        }
+
+        const customer = await prisma.customer.findFirst({
+            where: {
+                id: Number(customerId),
+                ispId: req.ispId,
+                isDeleted: false,
+                ...(req.branchId ? { branchId: req.branchId } : {})
+            },
+            select: { id: true, branchId: true, subBranchId: true }
+        });
+        if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+        const isCredit = String(invoiceType || 'cash').trim().toLowerCase() === 'credit';
+        const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
+        if (!fiscalYear) return res.status(400).json({ error: 'Select an active fiscal year' });
+
+        const paymentMethod = (!isCredit && paymentMethodId)
+            ? await prisma.billingPaymentMethod.findFirst({
+                where: { id: Number(paymentMethodId), ispId: req.ispId, isEnabled: true }
+            })
+            : null;
+        if (!isCredit && !paymentMethod) {
+            return res.status(400).json({ error: 'Select an enabled payment method' });
+        }
+
+        const preparedItems = items
+            .map(it => {
+                const qty = Math.max(1, Number(it.quantity || 1));
+                const unitPrice = Math.max(0, Number(it.unitPrice ?? it.amount ?? 0));
+                const lineBase = Math.round(qty * unitPrice * 100) / 100;
+                const lineTotal = it.isTaxable !== false ? Math.round(lineBase * 1.13 * 100) / 100 : lineBase;
+                return {
+                    itemName: qty > 1 ? `${String(it.itemName || 'Item').trim()} (x${qty})` : String(it.itemName || 'Item').trim(),
+                    referenceId: it.referenceId ? String(it.referenceId) : null,
+                    itemPrice: lineBase,
+                    lineTotal
+                };
+            })
+            .filter(it => it.itemName && it.lineTotal >= 0);
+
+        if (preparedItems.length === 0) {
+            return res.status(400).json({ error: 'No valid invoice items provided' });
+        }
+
+        const totalAmount = Math.round(preparedItems.reduce((s, it) => s + it.lineTotal, 0) * 100) / 100;
+
+        const order = await prisma.customerOrderManagement.create({
+            data: {
+                customerId: customer.id,
+                subscriptionId: null,
+                package: null,
+                orderDate: new Date(),
+                totalAmount,
+                isPaid: !isCredit,
+                isActive: true,
+                invoiceId: !isCredit && invoiceId ? String(invoiceId).trim() : null,
+                paymentId: isCredit ? 'CREDIT' : paymentMethod.code,
+                fiscalYearId: fiscalYear.id,
+                paymentMethodId: isCredit ? null : paymentMethod.id,
+                updatedAt: new Date(),
+                items: {
+                    create: preparedItems.map(i => ({
+                        itemName: i.itemName,
+                        referenceId: i.referenceId,
+                        itemPrice: i.itemPrice
+                    }))
+                }
+            },
+            include: { items: true }
+        });
+
+        await syncPaidOrderAccounting(prisma, req.ispId, order.id);
+        return res.status(201).json({ success: true, order });
+    } catch (err) {
+        return next(err);
+    }
+}
+
 module.exports = {
     updatePaymentMode,
     extendSubscription,
@@ -1644,6 +1739,7 @@ module.exports = {
     applyDiscount,
     payOrder,
     renewSubscription,
+    createCustomInvoice,
     generateManualInvoice,
     getBillingStats,
     listInvoices,

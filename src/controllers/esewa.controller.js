@@ -5,6 +5,8 @@ const axios = require('axios');
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
 const { logAudit } = require('../utils/auditLogger');
 const { atPlanBoundary, getDeductibleRenewalBase } = require('../utils/dateHelper');
+const { applyDynamicDropWireCharges } = require('../utils/dropWireHelper');
+const { resolveGatewayDueContext, markUnpaidCreditOrdersPaid } = require('../utils/unpaidInvoiceHelper');
 
 async function syncEsewaAccounting(prisma, ispId, orderId) {
   try {
@@ -876,7 +878,7 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
           planId: true,
           oneTimeCharges: {
             where: { isDeleted: false },
-            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
           }
         }
       }
@@ -926,7 +928,7 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -957,7 +959,7 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -997,12 +999,14 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
     otcItems = otcItems.map(it => ({ ...it, amount: 0 }));
   }
 
+  const dwApplied = applyDynamicDropWireCharges({ pkg, customer, isRechargeable, otcItems, baseAmount: packagePrice });
+  packagePrice = dwApplied.packagePrice;
+  otcItems = dwApplied.otcItems;
+
   const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
   // The configured initial/renewal totals already include tax and applicable
   // invoice items. Never add the item breakdown a second time.
-  const totalAmount = packagePrice;
-
-  const aggregatedItems = [
+  const baseAggregatedItems = [
     {
       type: "package",
       name: pkg.packageName || "Base Package",
@@ -1015,6 +1019,19 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
       referenceId: it.referenceId || null
     }))
   ];
+
+  const dueCtx = await resolveGatewayDueContext({
+    prisma: req.prisma,
+    customer,
+    subscription: customer.customerSubscriptions?.[0],
+    packagePrice,
+    aggregatedItems: baseAggregatedItems,
+    requestedPackageId: packageId
+  });
+  const totalAmount = dueCtx.totalAmount;
+  const aggregatedItems = dueCtx.aggregatedItems;
+  const unpaidOrderIds = dueCtx.unpaidOrderIds;
+  const payOnlyInvoices = dueCtx.payOnlyInvoices;
 
   const fullName = [customer.lead?.firstName, customer.lead?.middleName, customer.lead?.lastName]
     .filter(Boolean)
@@ -1029,7 +1046,9 @@ const getCustomerContext = async (req, requestId, packageId = null) => {
     totalAmount,
     aggregatedItems,
     fullName,
-    allowedPlanIds
+    allowedPlanIds,
+    unpaidOrderIds,
+    payOnlyInvoices
   };
 };
 
@@ -1139,7 +1158,7 @@ const processPayment = async (req, res, next) => {
     const context = await getCustomerContext(req, requestId, req.body.package_id);
     const {
       customer, pkg, totalAmount, aggregatedItems,
-      fullName, otcItems, packagePrice
+      fullName, otcItems, packagePrice, unpaidOrderIds, payOnlyInvoices
     } = context;
 
     if (req.body.amount !== undefined && Number(req.body.amount) !== Number(totalAmount)) {
@@ -1260,10 +1279,13 @@ const processPayment = async (req, res, next) => {
         updatedSubData.package = pkg.id;
       }
 
-      const updatedSubscription = await tx.customerSubscription.update({
-        where: { id: subscription.id },
-        data: updatedSubData
-      });
+      const updatedSubscription = payOnlyInvoices
+        ? subscription
+        : await tx.customerSubscription.update({
+            where: { id: subscription.id },
+            data: updatedSubData
+          });
+      await markUnpaidCreditOrdersPaid(tx, unpaidOrderIds, 'ESEWA', esewaPaymentMethod?.id || null);
 
       // C. Update Customer Status & Subscribed Package
       const customerUpdateData = {
@@ -1509,10 +1531,13 @@ const confirmPayment = async (req, res) => {
         updatedSubData.package = pkg.id;
       }
 
-      const updatedSubscription = await tx.customerSubscription.update({
-        where: { id: subscription.id },
-        data: updatedSubData
-      });
+      const updatedSubscription = payOnlyInvoices
+        ? subscription
+        : await tx.customerSubscription.update({
+            where: { id: subscription.id },
+            data: updatedSubData
+          });
+      await markUnpaidCreditOrdersPaid(tx, unpaidOrderIds, 'ESEWA', esewaPaymentMethod?.id || null);
 
       // Update Customer Status & Subscribed Package
       const customerUpdateData = {

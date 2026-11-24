@@ -3,6 +3,8 @@ const { getDeductibleRenewalBase, computeExpiryFromBase } = require('../services
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
 const { SERVICE_CODES } = require('../lib/serviceConstants');
+const { applyDynamicDropWireCharges } = require('../utils/dropWireHelper');
+const { resolveGatewayDueContext, markUnpaidCreditOrdersPaid } = require('../utils/unpaidInvoiceHelper');
 
 async function getKhaltiConfig(prisma, ispId) {
   let secretKey = process.env.KHALTI_SECRET_KEY || '';
@@ -64,7 +66,7 @@ async function resolveCustomerPackageForKhalti(prisma, req, customerId, packageI
           },
           oneTimeCharges: {
             where: { isDeleted: false },
-            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
           }
         }
       }
@@ -133,9 +135,41 @@ async function resolveCustomerPackageForKhalti(prisma, req, customerId, packageI
   const isRechargeable = Boolean(customer.isRechargeable);
   const newPkgAmt = pkg.initialTotalWithTax ?? pkg.price ?? 0;
   const renewAmt = pkg.renewAmountWithTax ?? pkg.price ?? 0;
-  const totalAmount = customer.isFree ? 0 : Number(isRechargeable ? renewAmt : newPkgAmt);
+  let packagePrice = customer.isFree ? 0 : Number(isRechargeable ? renewAmt : newPkgAmt);
 
-  return { customer, pkg, totalAmount, isRechargeable };
+  let otcItems = (pkg.oneTimeCharges || [])
+    .filter(o => !isRechargeable || o.isRenewal)
+    .map(o => ({ id: o.id, name: o.name || 'addon', referenceId: o.referenceId || null, amount: Number(o.amount || 0) }));
+  if (customer.isFree) otcItems = otcItems.map(it => ({ ...it, amount: 0 }));
+
+  const dwApplied = applyDynamicDropWireCharges({ pkg, customer, isRechargeable, otcItems, baseAmount: packagePrice });
+  packagePrice = dwApplied.packagePrice;
+  otcItems = dwApplied.otcItems;
+
+  const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
+  const baseAggregatedItems = [
+    { type: 'package', name: pkg.packageName || 'Base Package', amount: Math.max(0, packagePrice - otcTotal) },
+    ...otcItems.map(it => ({ type: 'oneTime', name: it.name, amount: it.amount, referenceId: it.referenceId || null }))
+  ];
+
+  const dueCtx = await resolveGatewayDueContext({
+    prisma,
+    customer,
+    subscription: customer.customerSubscriptions?.[0],
+    packagePrice,
+    aggregatedItems: baseAggregatedItems,
+    requestedPackageId: packageId
+  });
+
+  return {
+    customer,
+    pkg,
+    totalAmount: dueCtx.totalAmount,
+    aggregatedItems: dueCtx.aggregatedItems,
+    unpaidOrderIds: dueCtx.unpaidOrderIds,
+    payOnlyInvoices: dueCtx.payOnlyInvoices,
+    isRechargeable
+  };
 }
 
 async function initiateKhaltiPayment(req, res, next) {
@@ -146,7 +180,7 @@ async function initiateKhaltiPayment(req, res, next) {
       return res.status(400).json({ error: 'Khalti Secret Key is not configured for this ISP' });
     }
 
-    const { customer, pkg, totalAmount } = await resolveCustomerPackageForKhalti(req.prisma, req, customerId, packageId);
+    const { customer, pkg, totalAmount, unpaidOrderIds, payOnlyInvoices } = await resolveCustomerPackageForKhalti(req.prisma, req, customerId, packageId);
     if (totalAmount < 10) {
       return res.status(400).json({ error: 'Minimum Khalti payment amount is NPR 10' });
     }
@@ -228,7 +262,7 @@ async function completeKhaltiPayment(req, res, next) {
       });
     }
 
-    const { customer, pkg, totalAmount } = await resolveCustomerPackageForKhalti(req.prisma, req, customerId, packageId);
+    const { customer, pkg, totalAmount, unpaidOrderIds, payOnlyInvoices } = await resolveCustomerPackageForKhalti(req.prisma, req, customerId, packageId);
     const paidNpr = Number(lookup.total_amount || 0) / 100;
     if (Math.abs(paidNpr - totalAmount) > 1) {
       return res.status(400).json({ error: `Payment amount mismatch. Expected NPR ${totalAmount}, got NPR ${paidNpr}` });
@@ -267,10 +301,13 @@ async function completeKhaltiPayment(req, res, next) {
       if (subscription.isTrial) updatedSubData.planStart = planStart;
       if (pkg.id !== subscription.package) updatedSubData.package = pkg.id;
 
-      const updatedSub = await tx.customerSubscription.update({
-        where: { id: subscription.id },
-        data: updatedSubData
-      });
+      const updatedSub = payOnlyInvoices
+        ? subscription
+        : await tx.customerSubscription.update({
+            where: { id: subscription.id },
+            data: updatedSubData
+          });
+      await markUnpaidCreditOrdersPaid(tx, unpaidOrderIds, `KHALTI-${pidx}`, khaltiMethod?.id || null);
 
       await tx.customer.update({
         where: { id: customer.id },

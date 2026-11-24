@@ -4,6 +4,8 @@ const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { syncOrderToAccounting } = require('../services/accountingInvoice.service');
 const { logAudit } = require('../utils/auditLogger');
 const { atPlanBoundary, getDeductibleRenewalBase } = require('../utils/dateHelper');
+const { applyDynamicDropWireCharges } = require('../utils/dropWireHelper');
+const { resolveGatewayDueContext, markUnpaidCreditOrdersPaid } = require('../utils/unpaidInvoiceHelper');
 
 async function syncExternalPaymentAccounting(prisma, ispId, orderId) {
   try {
@@ -304,7 +306,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
           planId: true,
           oneTimeCharges: {
             where: { isDeleted: false },
-            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+            select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
           }
         }
       }
@@ -353,7 +355,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -383,7 +385,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -412,7 +414,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -440,7 +442,7 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
         planId: true,
         oneTimeCharges: {
           where: { isDeleted: false },
-          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true }
+          select: { id: true, name: true, amount: true, referenceId: true, isRenewal: true, isDropWireDynamic: true, isTaxable: true }
         }
       }
     });
@@ -481,10 +483,12 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     otcItems = otcItems.map(it => ({ ...it, amount: 0 }));
   }
 
-  const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
-  const totalAmount = packagePrice;
+  const dwApplied = applyDynamicDropWireCharges({ pkg, customer, isRechargeable, otcItems, baseAmount: packagePrice });
+  packagePrice = dwApplied.packagePrice;
+  otcItems = dwApplied.otcItems;
 
-  const aggregatedItems = [
+  const otcTotal = otcItems.reduce((s, it) => s + it.amount, 0);
+  const baseAggregatedItems = [
     {
       type: "package",
       name: pkg.packageName || "Base Package",
@@ -497,6 +501,19 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
       referenceId: it.referenceId || null
     }))
   ];
+
+  const dueCtx = await resolveGatewayDueContext({
+    prisma,
+    customer,
+    subscription: customer.customerSubscriptions?.[0],
+    packagePrice,
+    aggregatedItems: baseAggregatedItems,
+    requestedPackageId: packageId
+  });
+  const totalAmount = dueCtx.totalAmount;
+  const aggregatedItems = dueCtx.aggregatedItems;
+  const unpaidOrderIds = dueCtx.unpaidOrderIds;
+  const payOnlyInvoices = dueCtx.payOnlyInvoices;
 
   const fullName = [customer.lead?.firstName, customer.lead?.middleName, customer.lead?.lastName]
     .filter(Boolean)
@@ -516,7 +533,9 @@ const getCustomerContext = async (req, lookupValue, packageId = null, desiredDur
     fullName,
     primaryConnectionUsername,
     subscriberUsername,
-    allowedPlanIds
+    allowedPlanIds,
+    unpaidOrderIds,
+    payOnlyInvoices
   };
 };
 
@@ -925,10 +944,13 @@ const processPayment = async (req, res) => {
         updatedSubData.package = pkg.id;
       }
 
-      const updatedSubscription = await tx.customerSubscription.update({
-        where: { id: subscription.id },
-        data: updatedSubData
-      });
+      const updatedSubscription = context.payOnlyInvoices
+        ? subscription
+        : await tx.customerSubscription.update({
+            where: { id: subscription.id },
+            data: updatedSubData
+          });
+      await markUnpaidCreditOrdersPaid(tx, context.unpaidOrderIds, paymentMethodCode || 'EXTERNAL', paymentMethodRecord?.id || null);
 
       // C. Update Customer Status & Connections
       const customerUpdateData = {

@@ -388,6 +388,7 @@ model OneTimeCharge {
   amount             Float?
   forPackageCreation Boolean        @default(false)
   isRenewal          Boolean        @default(false)
+  isDropWireDynamic  Boolean        @default(false)
   ispId              Int?
   isActive           Boolean        @default(true)
   isDeleted          Boolean        @default(false)
@@ -564,6 +565,7 @@ model Customer {
   isDeleted     Boolean? @default(false)
   onboardStatus String?  @default("completed")
   isFree        Boolean? @default(false)
+  dropWireMeters Float?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
