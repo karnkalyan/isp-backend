@@ -184,20 +184,27 @@ async function truncateDatabase(req, res, next) {
       try {
         const radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
         if (radiusClient) {
-          // Clear subscriber/package RADIUS entries while preserving NAS
-          const tables = ['radcheck', 'radreply', 'radusergroup', 'radacct', 'radgroupcheck', 'radgroupreply'];
-          if (typeof radiusClient.query === 'function') {
-            for (const tbl of tables) {
-              await radiusClient.query(`TRUNCATE TABLE ${tbl}`).catch(() => {});
+          const deleteBatch = async (rows, delFn) => {
+            const list = Array.isArray(rows) ? rows : (Array.isArray(rows?.data) ? rows.data : []);
+            let count = 0;
+            for (let i = 0; i < list.length; i += 20) {
+              const chunk = list.slice(i, i + 20);
+              const results = await Promise.all(
+                chunk.map(item => (item?.id != null ? delFn(item.id).then(() => 1).catch(() => 0) : Promise.resolve(0)))
+              );
+              count += results.reduce((a, b) => a + b, 0);
             }
-            summary.radius = 'truncated (NAS preserved)';
-          } else if (typeof radiusClient.listUsers === 'function' && typeof radiusClient.deleteUser === 'function') {
-            const rUsers = await radiusClient.listUsers().catch(() => []);
-            for (const u of (Array.isArray(rUsers) ? rUsers : [])) {
-              await radiusClient.deleteUser(u.username || u).catch(() => {});
-            }
-            summary.radius = 'cleared subscriber entries (NAS preserved)';
-          }
+            return count;
+          };
+
+          const [rc, rr, rug, rgc, rgr] = await Promise.all([
+            radiusClient.getRadcheck(50000, 0).then(rows => deleteBatch(rows, id => radiusClient.deleteRadcheck(id))).catch(() => 0),
+            radiusClient.getRadreply().then(rows => deleteBatch(rows, id => radiusClient.deleteRadreply(id))).catch(() => 0),
+            radiusClient.getRadusergroup().then(rows => deleteBatch(rows, id => radiusClient.deleteRadusergroup(id))).catch(() => 0),
+            radiusClient.getRadgroupcheck().then(rows => deleteBatch(rows, id => radiusClient.deleteRadgroupcheck(id))).catch(() => 0),
+            radiusClient.getRadgroupreply().then(rows => deleteBatch(rows, id => radiusClient.deleteRadgroupreply(id))).catch(() => 0),
+          ]);
+          summary.radius = `cleared (radcheck=${rc}, radreply=${rr}, radusergroup=${rug}, radgroupcheck=${rgc}, radgroupreply=${rgr}; NAS & api_users preserved)`;
         }
       } catch (radErr) {
         summary.radius = `skipped (${radErr.message})`;
