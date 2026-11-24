@@ -175,7 +175,11 @@ async function truncateDatabase(req, res, next) {
       await safeDelete('unlinkLeadPackages', () => req.prisma.lead.updateMany({ where: { ispId, interestedPackageId: { not: null } }, data: { interestedPackageId: null } }));
       await safeDelete('unlinkCustomerAssignedPackages', () => req.prisma.customer.updateMany({ where: { ispId, assignedPkg: { not: null } }, data: { assignedPkg: null } }));
       await safeDelete('unlinkCustomerSubscribedPackages', () => req.prisma.customer.updateMany({ where: { ispId, subscribedPkgId: { not: null } }, data: { subscribedPkgId: null } }));
-      await safeDelete('packagePlanBranches', () => req.prisma.packagePlanBranch.deleteMany({ where: { packagePlan: { ispId } } }));
+      await safeDelete('packagePlanBranches', async () => {
+        const plans = await req.prisma.packagePlan.findMany({ where: { ispId }, select: { id: true } });
+        const planIds = plans.map(p => p.id);
+        return planIds.length > 0 ? req.prisma.packagePlanBranch.deleteMany({ where: { packagePlanId: { in: planIds } } }) : { count: 0 };
+      });
       await safeDelete('packagePrices', () => req.prisma.packagePrice.deleteMany({ where: { ispId } }));
       await safeDelete('packagePlans', () => req.prisma.packagePlan.deleteMany({ where: { ispId } }));
     }
