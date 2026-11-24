@@ -125,85 +125,90 @@ async function truncateDatabase(req, res, next) {
     const summary = {};
     const ispId = Number(req.ispId);
 
-    const safeDelete = async (label, fn) => {
+    const safeTruncate = async (tx, label, tableName) => {
       try {
-        const result = await fn();
-        summary[label] = result?.count ?? 'done';
+        await tx.$executeRawUnsafe(`TRUNCATE TABLE \`${tableName}\``);
+        summary[label] = 'truncated';
       } catch (err) {
         summary[label] = `skipped (${err.message.split('\n')[0]})`;
       }
     };
 
-    if (billing || customers) {
-      await safeDelete('orderDetails', () => req.prisma.orderDetail.deleteMany({ where: { order: { customer: { ispId } } } }));
-      await safeDelete('eSewaPayments', () => req.prisma.eSewaTokenPayment.deleteMany({ where: { ispId } }));
-      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { ispId } }));
-      await safeDelete('orders', () => req.prisma.customerOrderManagement.deleteMany({ where: { customer: { ispId } } }));
-      if (billing) {
-        await safeDelete('invoiceRanges', async () => {
-          const branches = await req.prisma.branch.findMany({ where: { ispId }, select: { id: true } });
-          const branchIds = branches.map(b => b.id);
-          return branchIds.length > 0 ? req.prisma.branchInvoiceRange.deleteMany({ where: { branchId: { in: branchIds } } }) : { count: 0 };
-        });
+    const safeExec = async (tx, label, sql) => {
+      try {
+        await tx.$executeRawUnsafe(sql);
+        summary[label] = 'done';
+      } catch (err) {
+        summary[label] = `skipped (${err.message.split('\n')[0]})`;
       }
-    }
+    };
 
-    if (ticketsTasks) {
-      await safeDelete('ticketComments', () => req.prisma.ticketComment.deleteMany({ where: { ticket: { ispId } } }));
-      await safeDelete('taskActivityLogs', () => req.prisma.taskActivityLog.deleteMany({ where: { task: { ispId } } }));
-      await safeDelete('tasks', () => req.prisma.task.deleteMany({ where: { ispId } }));
-      await safeDelete('tickets', () => req.prisma.ticket.deleteMany({ where: { ispId } }));
-    }
-
-    if (messages || customers || ticketsTasks) {
-      await safeDelete('messages', () => req.prisma.message.deleteMany({ where: { ispId } }));
-    }
-
-    if (customers) {
-      await safeDelete('unlinkPortalUsers', () => req.prisma.user.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
-      await safeDelete('unlinkTicketCustomers', () => req.prisma.ticket.updateMany({ where: { ispId, customerId: { not: null } }, data: { customerId: null } }));
-      await safeDelete('branchRequests', () => req.prisma.branchRequest.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerDocuments', () => req.prisma.customerDocument.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerDevices', () => req.prisma.customerDevice.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerWifiCredentials', () => req.prisma.customerWiFiCredential.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerReferrals', () => req.prisma.customerReferral.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerSubscribedServices', () => req.prisma.customerSubscribedService.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerSubscriptions', () => req.prisma.customerSubscription.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('connectionUsers', () => req.prisma.connectionUser.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customerServiceConnections', () => req.prisma.customerServiceConnection.deleteMany({ where: { customer: { ispId } } }));
-      await safeDelete('customers', () => req.prisma.customer.deleteMany({ where: { ispId } }));
-    }
-
-    if (leads) {
-      await safeDelete('unlinkTicketLeads', () => req.prisma.ticket.updateMany({ where: { ispId, leadId: { not: null } }, data: { leadId: null } }));
-      await safeDelete('followUps', () => req.prisma.followUp.deleteMany({ where: { lead: { ispId } } }));
-      await safeDelete('leads', () => req.prisma.lead.deleteMany({ where: { ispId } }));
-    }
-
-    if (packages) {
-      await safeDelete('unlinkLeadPackages', () => req.prisma.lead.updateMany({ where: { ispId, interestedPackageId: { not: null } }, data: { interestedPackageId: null } }));
-      await safeDelete('unlinkCustomerAssignedPackages', () => req.prisma.customer.updateMany({ where: { ispId, assignedPkg: { not: null } }, data: { assignedPkg: null } }));
-      await safeDelete('unlinkCustomerSubscribedPackages', () => req.prisma.customer.updateMany({ where: { ispId, subscribedPkgId: { not: null } }, data: { subscribedPkgId: null } }));
-      await safeDelete('packagePlanBranches', async () => {
-        const plans = await req.prisma.packagePlan.findMany({ where: { ispId }, select: { id: true } });
-        const planIds = plans.map(p => p.id);
-        const allOtherPlans = await req.prisma.packagePlan.findMany({ where: { ispId: { not: ispId } }, select: { id: true } });
-        const keepPlanIds = allOtherPlans.map(p => p.id);
-        if (keepPlanIds.length === 0) {
-          return req.prisma.packagePlanBranch.deleteMany({});
-        }
-        return req.prisma.packagePlanBranch.deleteMany({
-          where: {
-            OR: [
-              ...(planIds.length > 0 ? [{ packagePlanId: { in: planIds } }] : []),
-              { packagePlanId: { notIn: keepPlanIds } }
-            ]
+    await req.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
+      try {
+        if (billing || customers) {
+          await safeTruncate(tx, 'orderDetails', 'OrderDetail');
+          await safeTruncate(tx, 'eSewaPayments', 'ESewaTokenPayment');
+          await safeTruncate(tx, 'externalPayments', 'ExternalPayment');
+          await safeTruncate(tx, 'orders', 'CustomerOrderManagement');
+          if (billing) {
+            await safeTruncate(tx, 'invoiceRanges', 'branch_invoice_ranges');
           }
-        });
-      });
-      await safeDelete('packagePrices', () => req.prisma.packagePrice.deleteMany({ where: { ispId } }));
-      await safeDelete('packagePlans', () => req.prisma.packagePlan.deleteMany({ where: { ispId } }));
-    }
+        }
+
+        if (ticketsTasks) {
+          await safeTruncate(tx, 'ticketComments', 'ticket_comments');
+          await safeTruncate(tx, 'taskActivityLogs', 'task_activity_logs');
+          await safeTruncate(tx, 'tasks', 'task');
+          await safeTruncate(tx, 'tickets', 'tickets');
+        }
+
+        if (messages || customers || ticketsTasks) {
+          await safeTruncate(tx, 'messages', 'messages');
+        }
+
+        if (customers) {
+          await safeExec(tx, 'unlinkPortalUsers', 'UPDATE `User` SET customerId = NULL WHERE customerId IS NOT NULL');
+          if (!ticketsTasks) {
+            await safeExec(tx, 'unlinkTicketCustomers', 'UPDATE `tickets` SET customerId = NULL WHERE customerId IS NOT NULL');
+          }
+          await safeTruncate(tx, 'branchRequests', 'branch_requests');
+          await safeTruncate(tx, 'customerDocuments', 'CustomerDocument');
+          await safeTruncate(tx, 'customerDevices', 'CustomerDevice');
+          await safeTruncate(tx, 'customerWifiCredentials', 'CustomerWiFiCredential');
+          await safeTruncate(tx, 'customerReferrals', 'CustomerReferral');
+          await safeTruncate(tx, 'customerSubscribedServices', 'CustomerSubscribedService');
+          await safeTruncate(tx, 'customerSubscriptions', 'CustomerSubscription');
+          await safeTruncate(tx, 'connectionUsers', 'ConnectionUser');
+          await safeTruncate(tx, 'customerServiceConnections', 'CustomerServiceConnection');
+          await safeTruncate(tx, 'customers', 'Customer');
+        }
+
+        if (leads) {
+          if (!ticketsTasks) {
+            await safeExec(tx, 'unlinkTicketLeads', 'UPDATE `tickets` SET leadId = NULL WHERE leadId IS NOT NULL');
+          }
+          await safeTruncate(tx, 'followUps', 'FollowUp');
+          await safeTruncate(tx, 'leads', 'lead');
+        }
+
+        if (packages) {
+          if (!leads) {
+            await safeExec(tx, 'unlinkLeadPackages', 'UPDATE `lead` SET interestedPackageId = NULL WHERE interestedPackageId IS NOT NULL');
+          }
+          if (!customers) {
+            await safeExec(tx, 'unlinkCustomerPackages', 'UPDATE `Customer` SET assignedPkg = NULL, subscribedPkgId = NULL WHERE assignedPkg IS NOT NULL OR subscribedPkgId IS NOT NULL');
+          }
+          await safeTruncate(tx, 'packagePlanBranches', 'package_plan_branches');
+          await safeTruncate(tx, 'packageOneTimeCharges', '_packageonetimecharges');
+          await safeTruncate(tx, 'packageOneTimeChargesCamel', '_PackageOneTimeCharges');
+          await safeTruncate(tx, 'packagePrices', 'PackagePrice');
+          await safeTruncate(tx, 'packagePlans', 'PackagePlan');
+        }
+      } finally {
+        await tx.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+      }
+    });
 
     if (radius) {
       try {
