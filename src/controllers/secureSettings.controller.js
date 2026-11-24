@@ -137,10 +137,14 @@ async function truncateDatabase(req, res, next) {
     if (billing || customers) {
       await safeDelete('orderDetails', () => req.prisma.orderDetail.deleteMany({ where: { order: { customer: { ispId } } } }));
       await safeDelete('eSewaPayments', () => req.prisma.eSewaTokenPayment.deleteMany({ where: { ispId } }));
-      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { OR: [{ ispId }, { ispId: null }] } }));
+      await safeDelete('externalPayments', () => req.prisma.externalPayment.deleteMany({ where: { ispId } }));
       await safeDelete('orders', () => req.prisma.customerOrderManagement.deleteMany({ where: { customer: { ispId } } }));
       if (billing) {
-        await safeDelete('invoiceRanges', () => req.prisma.branchInvoiceRange.deleteMany({ where: { branch: { ispId } } }));
+        await safeDelete('invoiceRanges', async () => {
+          const branches = await req.prisma.branch.findMany({ where: { ispId }, select: { id: true } });
+          const branchIds = branches.map(b => b.id);
+          return branchIds.length > 0 ? req.prisma.branchInvoiceRange.deleteMany({ where: { branchId: { in: branchIds } } }) : { count: 0 };
+        });
       }
     }
 
