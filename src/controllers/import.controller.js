@@ -1554,7 +1554,7 @@ async function importPlans(req, res, next) {
             const planPayload = {
                 planName: rawPlanName,
                 planCode,
-                connectionType: connectionTypeId,
+                ...(connectionTypeId ? { connectionTypeDetails: { connect: { id: connectionTypeId } } } : {}),
                 downSpeed,
                 upSpeed,
                 intUpload,
@@ -2070,7 +2070,7 @@ async function importPackages(req, res, next) {
                         data: {
                             planName: rawPlanName,
                             planCode,
-                            connectionType: defaultConnectionType.id,
+                            ...(defaultConnectionType?.id ? { connectionTypeDetails: { connect: { id: defaultConnectionType.id } } } : {}),
                             downSpeed,
                             upSpeed,
                             dataLimit: row.dataLimit ? Number(row.dataLimit) : 0,
