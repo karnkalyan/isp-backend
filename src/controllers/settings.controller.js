@@ -380,6 +380,105 @@ async function deleteRadiusPool(req, res, next) {
     }
 }
 
+async function getKhaltiConfiguration(req, res, next) {
+    try {
+        const service = await req.prisma.iSPService.findFirst({
+            where: { ispId: req.ispId, service: { code: 'KHALTI' }, isDeleted: false },
+            include: { credentials: true }
+        });
+        const cfg = service?.config && typeof service.config === 'object' ? service.config : {};
+        const creds = Array.isArray(service?.credentials) ? service.credentials : [];
+        const hasSecret = Boolean(creds.find(c => String(c.key || '').toLowerCase().includes('secret') && c.value));
+        const envCred = creds.find(c => ['env', 'environment', 'mode'].includes(String(c.key || '').toLowerCase()))?.value;
+        const websiteCred = creds.find(c => String(c.key || '').toLowerCase().includes('website'))?.value;
+        res.json({
+            epayEnabled: cfg.epayEnabled !== false && Boolean(service?.isEnabled),
+            env: cfg.env || envCred || 'production',
+            websiteUrl: cfg.websiteUrl || websiteCred || '',
+            returnUrl: cfg.returnUrl || '',
+            secretKeyConfigured: hasSecret,
+            serviceEnabled: Boolean(service?.isActive && service?.isEnabled)
+        });
+    } catch (err) { next(err); }
+}
+
+async function saveKhaltiConfiguration(req, res, next) {
+    try {
+        if (!isSystemAdmin(req)) {
+            return res.status(403).json({ error: 'Only system administrators can configure Khalti.' });
+        }
+        const { epayEnabled, env, websiteUrl, returnUrl, secretKey } = req.body || {};
+        let catalog = await req.prisma.serviceCatalog.findFirst({ where: { code: 'KHALTI' } });
+        if (!catalog) {
+            catalog = await req.prisma.serviceCatalog.create({
+                data: {
+                    name: 'Khalti',
+                    code: 'KHALTI',
+                    description: 'Khalti ePayment v2 digital payment gateway',
+                    category: 'PAYMENT',
+                    iconUrl: '/icons/khalti.svg',
+                    isActive: true
+                }
+            });
+        }
+        let service = await req.prisma.iSPService.findFirst({
+            where: { ispId: req.ispId, serviceId: catalog.id, isDeleted: false }
+        });
+        const currentConfig = service?.config && typeof service.config === 'object' ? service.config : {};
+        const nextConfig = {
+            ...currentConfig,
+            epayEnabled: Boolean(epayEnabled),
+            env: env === 'sandbox' ? 'sandbox' : 'production',
+            websiteUrl: String(websiteUrl || '').trim(),
+            returnUrl: String(returnUrl || '').trim()
+        };
+
+        if (!service) {
+            service = await req.prisma.iSPService.create({
+                data: {
+                    ispId: req.ispId,
+                    serviceId: catalog.id,
+                    isActive: true,
+                    isEnabled: Boolean(epayEnabled),
+                    config: nextConfig
+                }
+            });
+        } else {
+            service = await req.prisma.iSPService.update({
+                where: { id: service.id },
+                data: {
+                    isActive: true,
+                    isEnabled: Boolean(epayEnabled),
+                    config: nextConfig
+                }
+            });
+        }
+
+        const upsertCred = async (key, value) => {
+            if (value === undefined || value === null || value === '') return;
+            const existing = await req.prisma.serviceCredential.findFirst({
+                where: { ispServiceId: service.id, key }
+            });
+            if (existing) {
+                await req.prisma.serviceCredential.update({
+                    where: { id: existing.id },
+                    data: { value: String(value) }
+                });
+            } else {
+                await req.prisma.serviceCredential.create({
+                    data: { ispServiceId: service.id, key, value: String(value) }
+                });
+            }
+        };
+
+        if (secretKey) await upsertCred('secret_key', String(secretKey).trim());
+        await upsertCred('env', nextConfig.env);
+        if (nextConfig.websiteUrl) await upsertCred('website_url', nextConfig.websiteUrl);
+
+        res.json({ success: true, message: 'Khalti configuration saved' });
+    } catch (err) { next(err); }
+}
+
 module.exports = {
     getSettings,
     updateSetting,
@@ -387,6 +486,8 @@ module.exports = {
     generateEsewaBase64,
     getEsewaConfiguration,
     saveEsewaConfiguration,
+    getKhaltiConfiguration,
+    saveKhaltiConfiguration,
     getExternalPaymentConfiguration,
     saveExternalPaymentConfiguration,
     listRadiusPools,

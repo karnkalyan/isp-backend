@@ -30,13 +30,13 @@ const DEFAULT_SERVICES = [
         category: "PAYMENT",
         iconUrl: "/icons/external-payment.svg"
     },
-    // {
-    //     name: "Khalti",
-    //     code: "KHALTI",
-    //     description: "Digital payment gateway",
-    //     category: "PAYMENT",
-    //     iconUrl: "/icons/khalti.svg"
-    // },
+    {
+        name: "Khalti",
+        code: "KHALTI",
+        description: "Khalti ePayment v2 digital payment gateway",
+        category: "PAYMENT",
+        iconUrl: "/icons/khalti.svg"
+    },
     {
         name: "NetTV",
         code: "NETTV",

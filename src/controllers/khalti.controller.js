@@ -346,7 +346,74 @@ async function completeKhaltiPayment(req, res, next) {
   }
 }
 
+async function listKhaltiTransactions(req, res, next) {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
+    const status = String(req.query.status || 'ALL').toUpperCase();
+    const search = String(req.query.search || '').trim();
+
+    const where = {
+      customer: { ispId: Number(req.ispId) },
+      paymentId: { startsWith: 'KHALTI' },
+      isDeleted: false,
+      ...(status === 'COMPLETED' ? { isPaid: true } : status === 'PENDING' ? { isPaid: false } : {}),
+      ...(search ? {
+        OR: [
+          { paymentId: { contains: search } },
+          { invoiceId: { contains: search } },
+          { customer: { customerUniqueId: { contains: search } } },
+          { customer: { lead: { firstName: { contains: search } } } },
+          { customer: { lead: { phoneNumber: { contains: search } } } }
+        ]
+      } : {})
+    };
+
+    const [total, orders] = await Promise.all([
+      req.prisma.customerOrderManagement.count({ where }),
+      req.prisma.customerOrderManagement.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: {
+          customer: {
+            select: {
+              id: true,
+              customerUniqueId: true,
+              lead: { select: { firstName: true, lastName: true, phoneNumber: true } }
+            }
+          },
+          packagePrice: { select: { packageName: true } }
+        }
+      })
+    ]);
+
+    const transactions = orders.map(o => ({
+      id: o.id,
+      createdAt: o.createdAt,
+      paidAt: o.orderDate,
+      customerName: [o.customer?.lead?.firstName, o.customer?.lead?.lastName].filter(Boolean).join(' ') || `Customer #${o.customerId}`,
+      customerUniqueId: o.customer?.customerUniqueId || `CUST-${o.customerId}`,
+      customerPhone: o.customer?.lead?.phoneNumber || null,
+      packageName: o.packagePrice?.packageName || null,
+      pidx: String(o.paymentId || '').replace(/^KHALTI-/, ''),
+      referenceCode: o.invoiceId || `ORD-${o.id}`,
+      amount: Number(o.totalAmount || 0),
+      status: o.isPaid ? 'COMPLETED' : 'PENDING'
+    }));
+
+    return res.json({
+      transactions,
+      pagination: { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   initiateKhaltiPayment,
-  completeKhaltiPayment
+  completeKhaltiPayment,
+  listKhaltiTransactions
 };
