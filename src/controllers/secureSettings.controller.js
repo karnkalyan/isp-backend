@@ -208,7 +208,7 @@ async function truncateDatabase(req, res, next) {
       } finally {
         await tx.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
       }
-    });
+    }, { maxWait: 10000, timeout: 120000 });
 
     if (radius) {
       try {
