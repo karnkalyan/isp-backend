@@ -126,10 +126,10 @@ async function extendSubscription(req, res, next) {
             return res.status(403).json({ error: 'Only an administrator can extend a trial subscription.' });
         }
 
-        if (!['grace', 'compensation', 'admin_extension'].includes(type)) {
+        if (!['grace', 'compensation', 'admin_extension', 'admin_set_expiry'].includes(type)) {
             return res.status(400).json({ error: 'Invalid extension type' });
         }
-        if (type === 'admin_extension' && !isAdmin) {
+        if ((type === 'admin_extension' || type === 'admin_set_expiry') && !isAdmin) {
             return res.status(403).json({ error: 'Only an administrator can apply an admin extension' });
         }
         if (type === 'grace') {
@@ -166,14 +166,16 @@ async function extendSubscription(req, res, next) {
         if (extendToDate) {
             newPlanEnd = atPlanBoundary(extendToDate);
         } else {
-            const baseDate = isCurrentlyExpired ? atPlanBoundary(new Date()) : new Date(subscription.planEnd);
+            const baseDate = type === 'admin_set_expiry'
+                ? (subscription.planEnd ? new Date(subscription.planEnd) : atPlanBoundary(new Date()))
+                : (isCurrentlyExpired ? atPlanBoundary(new Date()) : new Date(subscription.planEnd));
             newPlanEnd = new Date(baseDate);
             newPlanEnd.setDate(newPlanEnd.getDate() + Number(days));
             newPlanEnd = atPlanBoundary(newPlanEnd);
         }
 
         const referenceDate = isCurrentlyExpired ? atPlanBoundary(new Date()) : new Date(subscription.planEnd);
-        if (isNaN(newPlanEnd.getTime()) || newPlanEnd <= referenceDate) {
+        if (isNaN(newPlanEnd.getTime()) || (type !== 'admin_set_expiry' && newPlanEnd <= referenceDate)) {
             return res.status(400).json({ error: 'Extension must move the expiry date forward' });
         }
 
@@ -547,8 +549,9 @@ async function payOrder(req, res, next) {
             return res.status(400).json({ error: `Incorrect payment amount. Expected: ${order.totalAmount}, Received: ${amount}` });
         }
 
-        const invIdNumeric = Number(invoiceId);
-        if (isNaN(invIdNumeric)) return res.status(400).json({ error: 'Invoice ID must be numeric' });
+        const hasInvoiceId = invoiceId !== undefined && invoiceId !== null && String(invoiceId).trim() !== '';
+        const invIdNumeric = hasInvoiceId ? Number(invoiceId) : null;
+        if (hasInvoiceId && isNaN(invIdNumeric)) return res.status(400).json({ error: 'Invoice ID must be numeric' });
 
         const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
         if (!fiscalYear) return res.status(400).json({ error: 'Select the fiscal year that is active for the current date' });
@@ -560,7 +563,7 @@ async function payOrder(req, res, next) {
         // Enforce global uniqueness of the invoice ID within the same ISP and fiscal year
         const existingInvoice = await prisma.customerOrderManagement.findFirst({
             where: {
-                invoiceId: invoiceId.toString(),
+                invoiceId: hasInvoiceId ? invoiceId.toString() : '__NONE__',
                 isPaid: true,
                 fiscalYearId: fiscalYear.id,
                 customer: {
@@ -568,12 +571,12 @@ async function payOrder(req, res, next) {
                 }
             }
         });
-        if (existingInvoice) {
+        if (hasInvoiceId && existingInvoice) {
             return res.status(400).json({ error: 'Invoice number is already used/duplicate in this fiscal year' });
         }
 
         // Check branch invoice range for this fiscal year
-        if (customer.branchId) {
+        if (hasInvoiceId && customer.branchId) {
             const ranges = await prisma.branchInvoiceRange.findMany({
                 where: { branchId: customer.branchId, fiscalYearId: fiscalYear.id, isActive: true }
             });
@@ -590,7 +593,7 @@ async function payOrder(req, res, next) {
             where: { id: order.id },
             data: {
                 isPaid: true,
-                invoiceId: invoiceId.toString(),
+                invoiceId: hasInvoiceId ? invoiceId.toString() : order.invoiceId,
                 paymentId: paymentMethodRecord ? paymentMethodRecord.code : (paymentMethod || 'CASH'),
                 fiscalYearId: fiscalYear.id,
                 paymentMethodId: paymentMethodRecord ? paymentMethodRecord.id : undefined,
@@ -646,7 +649,8 @@ async function payOrder(req, res, next) {
  */
 async function renewSubscription(req, res, next) {
     const prisma = req.prisma;
-    const { customerId, packageId, invoiceId, amount, fiscalYearId, paymentMethodId, discountType, discountValue, discountReason } = req.body;
+    const { customerId, packageId, invoiceId, amount, fiscalYearId, paymentMethodId, invoiceType, discountType, discountValue, discountReason } = req.body;
+    const isCredit = String(invoiceType || 'cash').trim().toLowerCase() === 'credit';
     
     try {
         const subscription = await prisma.customerSubscription.findFirst({
@@ -690,17 +694,17 @@ async function renewSubscription(req, res, next) {
         const fiscalYear = await resolveActiveFiscalYear(prisma, req.ispId, fiscalYearId);
         if (!fiscalYear) return res.status(400).json({ error: 'Select the fiscal year that is active for the current date' });
 
-        const paymentMethod = await prisma.billingPaymentMethod.findFirst({
+        const paymentMethod = (!isCredit && paymentMethodId) ? await prisma.billingPaymentMethod.findFirst({
             where: { id: Number(paymentMethodId), ispId: req.ispId, isEnabled: true }
-        });
-        if (!paymentMethod) return res.status(400).json({ error: 'Select an enabled payment method' });
+        }) : null;
+        if (!isCredit && !paymentMethod) return res.status(400).json({ error: 'Select an enabled payment method' });
 
         const policyBranchId = customer.subBranchId || customer.branchId;
         const branchPolicy = policyBranchId ? await prisma.branch.findFirst({
             where: { id: Number(policyBranchId), ispId: req.ispId, isDeleted: false },
             select: { receiptRequired: true }
         }) : null;
-        if (branchPolicy?.receiptRequired && !invoiceId) {
+        if (!isCredit && branchPolicy?.receiptRequired && !invoiceId) {
             return res.status(400).json({ error: 'Invoice/receipt number is required for this branch' });
         }
 
@@ -786,7 +790,7 @@ async function renewSubscription(req, res, next) {
         const planEnd = computeExpiryFromBase(planStart, pkgPrice.packageDuration);
         if (renewalWindow.trialDeductionDays > 0) planEnd.setDate(planEnd.getDate() - renewalWindow.trialDeductionDays);
 
-        const newSub = await prisma.$transaction(async (tx) => {
+        const { created: newSub, createdOrderId } = await prisma.$transaction(async (tx) => {
             // End old sub
             await tx.customerSubscription.update({
                 where: { id: subscription.id },
@@ -837,7 +841,7 @@ async function renewSubscription(req, res, next) {
                 });
             }
 
-            await tx.customerOrderManagement.create({
+            const createdOrder = await tx.customerOrderManagement.create({
                 data: {
                     customerId: Number(customerId),
                     subscriptionId: created.id,
@@ -846,12 +850,12 @@ async function renewSubscription(req, res, next) {
                     packageStart: planStart,
                     packageEnd: planEnd,
                     totalAmount: amount !== undefined ? Number(amount) : expectedAmount,
-                    isPaid: false,
+                    isPaid: !isCredit,
                     isActive: true,
-                    invoiceId: invoiceId ? String(invoiceId) : null,
-                    paymentId: 'PENDING_APPROVAL',
+                    invoiceId: !isCredit && invoiceId ? String(invoiceId) : null,
+                    paymentId: isCredit ? 'CREDIT' : paymentMethod.code,
                     fiscalYearId: fiscalYear.id,
-                    paymentMethodId: paymentMethod.id,
+                    paymentMethodId: isCredit ? null : paymentMethod.id,
                     updatedAt: new Date(),
                     items: {
                         create: orderItems.map(i => ({
@@ -889,8 +893,12 @@ async function renewSubscription(req, res, next) {
                 data: { isActive: true }
             });
 
-            return created;
+            return { created, createdOrderId: createdOrder.id };
         });
+
+        if (createdOrderId) {
+            await syncPaidOrderAccounting(prisma, req.ispId, createdOrderId);
+        }
 
         // Sync with FreeRADIUS immediately after successful renewal
         const pppUsers = await prisma.connectionUser.findMany({

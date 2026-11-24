@@ -332,7 +332,7 @@ async function me(req, res) {
     }
 
     const { passwordHash, ...safeUser } = user;
-    res.json({ user: safeUser });
+    res.json({ user: safeUser, impersonating: Boolean(req.cookies?.impersonator_token) });
   } catch (error) {
     console.error('Error fetching user profile:', error);
     res.status(500).json({ error: 'Failed to fetch user profile.' });
@@ -428,6 +428,77 @@ async function switchBranch(req, res) {
   }
 }
 
+// Admin User Switch (Impersonate / Revert without login page)
+async function switchUser(req, res) {
+  try {
+    const { targetUserId, revertToAdmin } = req.body || {};
+    const commonOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+    };
+
+    const impersonatorCookie = req.cookies?.impersonator_token;
+    let impersonatorAdminId = null;
+    if (impersonatorCookie) {
+      try {
+        const decoded = jwt.verify(impersonatorCookie, ACCESS_SECRET);
+        impersonatorAdminId = decoded?.adminId || null;
+      } catch {
+        impersonatorAdminId = null;
+      }
+    }
+
+    if (revertToAdmin) {
+      if (!impersonatorAdminId) {
+        return res.status(400).json({ error: 'No active admin impersonation session found' });
+      }
+      const adminUser = await prisma.user.findFirst({
+        where: { id: Number(impersonatorAdminId), isDeleted: false },
+        include: LOGIN_USER_INCLUDE
+      });
+      if (!adminUser) return res.status(404).json({ error: 'Original admin user not found' });
+      res.clearCookie('impersonator_token', commonOptions);
+      return issueTokensAndSetCookies(req, res, adminUser, true);
+    }
+
+    const roleName = String(typeof req.user?.role === 'string' ? req.user.role : req.user?.role?.name || '').toLowerCase();
+    const isAdmin = ['admin', 'isp_admin', 'administrator', 'super_admin', 'global admin', 'global_admin'].includes(roleName);
+    if (!isAdmin && !impersonatorAdminId) {
+      return res.status(403).json({ error: 'Only administrators can switch users' });
+    }
+
+    if (!targetUserId) {
+      return res.status(400).json({ error: 'targetUserId is required' });
+    }
+
+    const targetUser = await prisma.user.findFirst({
+      where: {
+        id: Number(targetUserId),
+        ispId: req.ispId,
+        isDeleted: false
+      },
+      include: LOGIN_USER_INCLUDE
+    });
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Target user not found' });
+    }
+
+    const originalAdminId = impersonatorAdminId || req.user.id;
+    const impersonatorToken = jwt.sign({ adminId: originalAdminId, ispId: req.ispId }, ACCESS_SECRET, { expiresIn: '12h' });
+    res.cookie('impersonator_token', impersonatorToken, {
+      ...commonOptions,
+      maxAge: 1000 * 60 * 60 * 12
+    });
+
+    return issueTokensAndSetCookies(req, res, targetUser, true);
+  } catch (error) {
+    console.error('Error switching user:', error);
+    return res.status(500).json({ error: 'Failed to switch user.' });
+  }
+}
+
 // Logout user
 function logout(req, res) {
   const clearOptions = {
@@ -439,6 +510,7 @@ function logout(req, res) {
 
   res.clearCookie('access_token', clearOptions);
   res.clearCookie('refresh_token', clearOptions);
+  res.clearCookie('impersonator_token', clearOptions);
 
   res.json({ message: 'Logged out successfully' });
 }
@@ -452,4 +524,5 @@ module.exports = {
   logout,
   me,
   switchBranch,
+  switchUser,
 };

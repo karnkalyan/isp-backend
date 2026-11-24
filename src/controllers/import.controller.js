@@ -1,6 +1,34 @@
 const xlsx = require('xlsx');
 const bcrypt = require('bcrypt');
 const { ServiceFactory } = require('../lib/clients/ServiceFactory');
+
+function humanizeImportError(err) {
+    const raw = String(err?.message || err || 'Unknown error');
+    const code = err?.code;
+    if (code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(', ') : (err?.meta?.target || 'record');
+        return `Duplicate entry already exists (${target})`;
+    }
+    if (code === 'P2003') {
+        return 'Missing or invalid referenced package, plan, or branch';
+    }
+    if (code === 'P2025') {
+        return 'Referenced record was not found';
+    }
+    if (/Unknown argument `([^`]+)`/i.test(raw)) {
+        const field = raw.match(/Unknown argument `([^`]+)`/i)?.[1];
+        return `Invalid import field "${field}" for package/plan`;
+    }
+    if (/Argument `([^`]+)` is missing/i.test(raw)) {
+        const field = raw.match(/Argument `([^`]+)` is missing/i)?.[1];
+        return `Missing required field: ${field}`;
+    }
+    if (/Invalid `prisma\.([^`]+)` invocation/i.test(raw)) {
+        const model = raw.match(/Invalid `prisma\.([^.`]+)/i)?.[1] || 'record';
+        return `Missing or invalid ${model} data in import row`;
+    }
+    return raw.split('\n').map(l => l.trim()).filter(Boolean).slice(-1)[0] || 'Import failed';
+}
 const { SERVICE_CODES } = require('../lib/serviceConstants');
 const { computeExpiryFromBase, computeStartFromExpiry, normalizeDurationString, atPlanBoundary, parseAnyDate } = require('../utils/dateHelper');
 const { formatRadiusExpiration } = require('../utils/radiusExpiration');
@@ -1251,7 +1279,7 @@ async function importBranches(req, res, next) {
                 rowNumber,
                 name: `${branchName}${subBranchName ? ` > ${subBranchName}` : ''}`,
                 status: 'failed',
-                message: `Failed: ${err.message}`
+                message: `Failed: ${humanizeImportError(err)}`
             });
             failedCount++;
         }
@@ -1701,7 +1729,7 @@ async function importPlans(req, res, next) {
                 rowNumber,
                 name: rawPlanName,
                 status: 'failed',
-                message: `Failed: ${err.message}`
+                message: `Failed: ${humanizeImportError(err)}`
             });
             failedCount++;
         }
@@ -2481,7 +2509,7 @@ async function importPackages(req, res, next) {
                 rowNumber,
                 name: packageReferenceName || rawPlanName,
                 status: 'failed',
-                message: `Failed: ${err.message}`
+                message: `Failed: ${humanizeImportError(err)}`
             });
             failedCount++;
         }
@@ -2712,7 +2740,7 @@ async function importLeads(req, res, next) {
                 rowNumber,
                 name: `${firstName} ${lastName}`,
                 status: 'failed',
-                message: `Failed: ${err.message}`
+                message: `Failed: ${humanizeImportError(err)}`
             });
             failedCount++;
         }
@@ -2998,11 +3026,10 @@ async function importCustomers(req, res, next) {
                                 data: {
                                     planName: pkgName,
                                     planCode,
-                                    serviceType: (row.serviceType || 'fiber').toString().trim().toLowerCase(),
-                                    downloadSpeed: `${speedMbps} Mbps`,
-                                    uploadSpeed: `${speedMbps} Mbps`,
-                                    volume: 'Unlimited',
-                                    validity: durationStr || '1 Month',
+                                    service: (row.serviceType || 'fiber').toString().trim().toLowerCase(),
+                                    downSpeed: Number(speedMbps) || 100,
+                                    upSpeed: Number(speedMbps) || 100,
+                                    dataLimit: 0,
                                     nasType: (row.nas || 'juniper').toString().trim().toLowerCase(),
                                     isActive: true,
                                     isDeleted: false,
@@ -3925,7 +3952,7 @@ async function importCustomers(req, res, next) {
                 rowNumber,
                 name: `${firstName} ${lastName}`,
                 status: 'failed',
-                message: `Failed: ${err.message}`
+                message: `Failed: ${humanizeImportError(err)}`
             });
             failedCount++;
         }

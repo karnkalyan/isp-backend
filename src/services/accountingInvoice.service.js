@@ -298,9 +298,14 @@ async function buildNepurixPayload(prisma, ispId, order, customItemsToUse = null
     });
   }
 
+  const isCreditInvoice =
+    String(order.paymentMethod?.code || '').trim().toUpperCase() === 'CREDIT' ||
+    String(order.paymentId || '').trim().toUpperCase() === 'CREDIT';
+  const resolvedInvoiceType = isCreditInvoice ? 'Credit' : 'Cash';
+
   const payload = {
-    invoiceType: 'Cash',
-    paymentMode: paymentMode(order.paymentId),
+    invoiceType: resolvedInvoiceType,
+    paymentMode: isCreditInvoice ? 'Credit' : paymentMode(order.paymentId),
     customer: customerName,
     UserName: order.customer?.customerUniqueId || radiusUsername,
     date: order.orderDate,
@@ -325,9 +330,13 @@ async function buildNepurixPayload(prisma, ispId, order, customItemsToUse = null
 function buildTshulPayload(order, itemsToUse) {
   const lead = order.customer?.lead || {};
   const customerReferenceId = order.customer?.customerUniqueId || `CUST-${order.customerId}`;
+  const isCreditInvoice =
+    String(order.paymentMethod?.code || '').trim().toUpperCase() === 'CREDIT' ||
+    String(order.paymentId || '').trim().toUpperCase() === 'CREDIT';
+  const resolvedInvoiceType = isCreditInvoice ? 'Credit' : 'Cash';
   return {
-    InvoiceType: 'Cash',
-    PaymentMode: paymentMode(order.paymentId),
+    InvoiceType: resolvedInvoiceType,
+    PaymentMode: isCreditInvoice ? 'Credit' : paymentMode(order.paymentId),
     Date: dateOnly(order.orderDate),
     SubTotal: round(itemsToUse.reduce((sum, item) => sum + number(item.itemPrice), 0)),
     TaxableAmount: round(order.totalAmount),
