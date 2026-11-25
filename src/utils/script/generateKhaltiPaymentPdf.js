@@ -104,7 +104,7 @@ function generateKhaltiPdf(outputPath, baseUrl = 'https://cms.arrownet.com.np', 
 
     drawSectionTitle('1. Overview & Customer Portal Flow');
     drawText(
-      'This document specifies the Khalti ePayment v2 (KPG-2) integration for the Kisan ISP Customer Portal (Web & Mobile). All secret keys remain strictly on the backend; the customer portal communicates with Kisan ISP backend endpoints using the customer Bearer JWT, and the backend communicates server-to-server with Khalti.'
+      'This document specifies the Khalti ePayment v2 (KPG-2) integration for the ISP Customer Portal (Web & Mobile). All secret keys remain strictly on the backend; the customer portal communicates with ISP backend endpoints using the customer Bearer JWT, and the backend communicates server-to-server with Khalti.'
     );
     drawTable([
       ['Step 1: Initiate', 'Customer Portal calls POST /api/khalti/epay/initiate -> Backend calls Khalti POST /api/v2/epayment/initiate/ and returns pidx + payment_url.'],
@@ -293,7 +293,7 @@ function generateKhaltiPdf(outputPath, baseUrl = 'https://cms.arrownet.com.np', 
       doc.switchToPage(i);
       doc.rect(40, 785, 515, 1).fill(borderColor);
       doc.fillColor(grayColor).fontSize(8).font('Helvetica').text(
-        'Kisan ISP Management System | Khalti ePayment v2 Integration Guide',
+        'ISP Management System | Khalti ePayment v2 Integration Guide',
         40,
         792
       );

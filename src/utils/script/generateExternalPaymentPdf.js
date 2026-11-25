@@ -92,13 +92,13 @@ function generatePdf(outputPath, baseUrl = 'https://cms.arrownet.com.np') {
 
     // ================= PAGE 1 =================
     drawHeader(
-      'Kisan ISP - External Payment Public API Guide',
+      'External Payment Public API Guide',
       'Production Documentation & Integration Manual | Version 1.0.0'
     );
 
     drawSectionTitle('1. Overview & Architecture');
     drawText(
-      'The External Payment Gateway (externalpayment) provides an enterprise REST API that allows third-party payment gateways, bank channels, kiosk aggregators, and custom portals to push instant subscriber recharges, query customer balances, and synchronize billing transactions automatically with Kisan ISP.'
+      'The External Payment Gateway (externalpayment) provides an enterprise REST API that allows third-party payment gateways, bank channels, kiosk aggregators, and custom portals to push instant subscriber recharges, query customer balances, and synchronize billing transactions automatically with the ISP Billing System.'
     );
     drawText(
       'It mirrors 100% of the proven architecture from existing payment integrations (such as eSewa) while introducing direct push recharge capabilities where an external service can recharge an account directly using a customer username and duration without requiring a prior inquiry request.'
@@ -164,13 +164,13 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
   },
   "current_package": {
     "id": 12,
-    "name": "KISAN-75-1-TV",
+    "name": "FIBER-75M-1M",
     "duration": "1 month",
     "amount": 1200
   },
   "packages": [
-    { "id": 12, "name": "KISAN-75-1-TV", "duration": "1 month", "amount": 1200 },
-    { "id": 13, "name": "KISAN-75-3-TV", "duration": "3 months", "amount": 3400 }
+    { "id": 12, "name": "FIBER-75M-1M", "duration": "1 month", "amount": 1200 },
+    { "id": 13, "name": "FIBER-75M-3M", "duration": "3 months", "amount": 3400 }
   ]
 }`);
 
@@ -205,7 +205,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==`);
     "username": "karnkalyan",
     "payment_mode": "EXTERNAL",
     "amount": 1200,
-    "package_name": "KISAN-75-1-TV",
+    "package_name": "FIBER-75M-1M",
     "package_duration": "1 month",
     "new_expiry_date": "2026-11-01T18:15:00.000Z",
     "radius_provisioned": true
@@ -296,7 +296,7 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==
       doc.switchToPage(i);
       doc.rect(40, 785, 515, 1).fill(borderColor);
       doc.fillColor(grayColor).fontSize(8).font('Helvetica').text(
-        'Kisan ISP Management System | Confidential & Proprietary',
+        'External Payment Public API | Integration Specification',
         40,
         792
       );
