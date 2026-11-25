@@ -269,29 +269,26 @@ Authorization: Basic ZXh0ZXJuYWxfaXNwXzE6RXh0ZXJuYWxASVNQIyExMjAyNQ==
     // ================= PAGE 4 =================
     doc.addPage();
     drawHeader(
-      'External Payment API - Access, Setup & Credentials',
-      'Credential Management, System Settings & Dashboard Access'
+      'External Payment API - Error Codes & Meanings',
+      'HTTP Status Codes, Response Codes & Timeout Handling'
     );
 
-    drawSectionTitle('9. ISP Credential Generation & Management');
-    drawText(
-      'Each ISP tenant can independently generate and customize their external payment API username and password. This ensures complete isolation between ISPs.'
-    );
+    drawSectionTitle('9. Response & Error Codes');
     drawTable([
-      ['Master Settings Tab', 'System Settings -> Master Settings -> External Payment tab.'],
-      ['Dedicated Portal', 'Services -> 3rd Party Services -> External Payment API Requests.'],
-      ['Credential Generator', 'Click "Generate Random Password" or enter a secure password and save.'],
-      ['Default Payment Mode', 'Configurable per ISP (default: EXTERNAL).'],
-      ['API Authentication', 'Supports HTTP Basic Auth (username:password), Bearer Token, or JSON body.']
+      ['response_code: 0 (200)', 'Success: Inquiry matched or Payment & RADIUS recharge completed.'],
+      ['400 Bad Request', 'Missing required fields (username/request_id, amount, transaction_code) or invalid duration/package.'],
+      ['401 Unauthorized', 'Invalid or missing credentials (Bearer token expired, wrong Basic Auth, or invalid x-api-key).'],
+      ['404 Not Found', 'Customer not found for the given username, customer_id, phone, or email.'],
+      ['409 Conflict', 'Duplicate transaction_code already processed (idempotent check via /status).'],
+      ['500 / 504 Timeout', 'Server or upstream timeout. Call POST /api/externalpayment/status with transaction_code to verify state.']
     ], [150, 365]);
 
-    drawSectionTitle('10. Frontend URLs & Live Recharge Tester');
-    drawTable([
-      ['Dashboard URL', `${hostUrl}/externalpayment`],
-      ['Alternative URL', `${hostUrl}/services/externalpayment`],
-      ['Sidebar Navigation', 'Services -> 3rd Party Services -> External Payment API Requests'],
-      ['Live Tester Tab', 'Allows operators to enter a username & duration to test live push recharges directly.']
-    ], [150, 365]);
+    drawSubTitle('Error Response Format:');
+    drawCode(`{
+  "response_code": 1,
+  "response_message": "Customer not found",
+  "error": "No customer matched identifier"
+}`);
 
     // Footer on all pages
     const range = doc.bufferedPageRange();

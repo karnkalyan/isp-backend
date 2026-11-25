@@ -1,0 +1,142 @@
+{
+  "info": {
+    "name": "External Payment API (Partner Integration)",
+    "description": "Postman collection for 3rd-party payment partners (Khalti, eSewa, Banks, Kiosks) to integrate with the ISP External Payment API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://cms.arrownet.com.np", "type": "string" },
+    { "key": "username", "value": "external_isp_1", "type": "string" },
+    { "key": "password", "value": "CHANGE_ME", "type": "string" },
+    { "key": "access_token", "value": "", "type": "string" },
+    { "key": "request_id", "value": "karnkalyan", "type": "string" },
+    { "key": "payment_mode", "value": "KHALTI", "type": "string" },
+    { "key": "transaction_code", "value": "KHL-TXN-100001", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Auth - Get Access Token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json && json.access_token) {",
+              "  pm.collectionVariables.set('access_token', json.access_token);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/access-token",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "access-token"]
+        }
+      }
+    },
+    {
+      "name": "2. Customer Inquiry (GET)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/inquiry/{{request_id}}?lookup_type=all",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "inquiry", "{{request_id}}"],
+          "query": [{ "key": "lookup_type", "value": "all" }]
+        }
+      }
+    },
+    {
+      "name": "3. Customer Inquiry (POST)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"request_id\": \"{{request_id}}\",\n  \"lookup_type\": \"all\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/inquiry",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "inquiry"]
+        }
+      }
+    },
+    {
+      "name": "4. Payment / Direct Recharge",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{request_id}}\",\n  \"lookup_type\": \"all\",\n  \"payment_mode\": \"{{payment_mode}}\",\n  \"duration\": \"1 month\",\n  \"amount\": 1200,\n  \"transaction_code\": \"{{transaction_code}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/payment",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "payment"]
+        }
+      }
+    },
+    {
+      "name": "5. Status Check (Timeout Reconciliation - POST)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"transaction_code\": \"{{transaction_code}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/status",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "status"]
+        }
+      }
+    },
+    {
+      "name": "6. Status Check (GET)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/status/{{transaction_code}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "status", "{{transaction_code}}"]
+        }
+      }
+    },
+    {
+      "name": "7. List Payment Modes",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+        "url": {
+          "raw": "{{base_url}}/api/externalpayment/payment-modes",
+          "host": ["{{base_url}}"],
+          "path": ["api", "externalpayment", "payment-modes"]
+        }
+      }
+    }
+  ]
+}
