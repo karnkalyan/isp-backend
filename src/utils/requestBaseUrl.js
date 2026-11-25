@@ -12,13 +12,13 @@ function normalizeHttpUrl(value) {
 }
 
 function getRequestBaseUrl(req) {
-  // Browser Origin is the most accurate public CMS URL when the API is hosted
-  // separately. Environment values support server-to-server registrations.
-  const origin = normalizeHttpUrl(req?.headers?.origin);
-  if (origin) return origin;
+  const explicit = normalizeHttpUrl(req?.query?.baseUrl);
+  if (explicit) return explicit;
 
-  const configured = normalizeHttpUrl(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || process.env.APP_URL);
-  if (configured) return configured;
+  // Browser Origin or Referer is the most accurate public CMS URL when the API is hosted
+  // separately. Environment values support server-to-server registrations.
+  const origin = normalizeHttpUrl(req?.headers?.origin || req?.headers?.referer);
+  if (origin) return origin;
 
   const forwardedHost = String(req?.headers?.['x-forwarded-host'] || '').split(',')[0].trim();
   const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
@@ -26,6 +26,16 @@ function getRequestBaseUrl(req) {
     const forwarded = normalizeHttpUrl(`${forwardedProto || 'https'}://${forwardedHost}`);
     if (forwarded) return forwarded;
   }
+
+  const host = String(req?.headers?.host || '').split(',')[0].trim();
+  if (host) {
+    const proto = forwardedProto || req?.protocol || (host.includes('localhost') || host.startsWith('127.') ? 'http' : 'https');
+    const fromHost = normalizeHttpUrl(`${proto}://${host}`);
+    if (fromHost) return fromHost;
+  }
+
+  const configured = normalizeHttpUrl(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || process.env.APP_URL);
+  if (configured) return configured;
 
   return DEFAULT_APP_URL;
 }
