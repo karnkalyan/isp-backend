@@ -3140,19 +3140,21 @@ async function importCustomers(req, res, next) {
             }
 
             const rawCustomId = (row.customerUniqueId || row.customerId || row.customerCode || row['Customer Code'] || row['Customer ID'] || row['Customer Id'] || '').toString().trim();
-            if (!existingCustomer && rawCustomId) {
+            // When a RADIUS username is provided and does not exist in ConnectionUser,
+            // treat it as a distinct account instead of matching another username's customer by code/pan/id/phone.
+            if (!existingCustomer && !rawUsername && rawCustomId) {
                 existingCustomer = await prisma.Customer.findFirst({
                     where: { customerUniqueId: rawCustomId, ...(ispId ? { ispId } : {}) }
                 });
             }
 
-            if (!existingCustomer && panNo) {
+            if (!existingCustomer && !rawUsername && panNo) {
                 existingCustomer = await prisma.Customer.findFirst({
                     where: { panNo, ...(ispId ? { ispId } : {}) }
                 });
             }
 
-            if (!existingCustomer && idNumber && !idNumber.startsWith('ID-')) {
+            if (!existingCustomer && !rawUsername && idNumber && !idNumber.startsWith('ID-')) {
                 existingCustomer = await prisma.Customer.findFirst({
                     where: { idNumber, ...(ispId ? { ispId } : {}) }
                 });
