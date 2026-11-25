@@ -2442,7 +2442,8 @@ async function listCustomers(req, res, next) {
       area,
       packageId,
       planId,
-      connectionType
+      connectionType,
+      onlineStatus
     } = req.query;
 
     const branchFilter = await getBranchFilter(req);
@@ -2534,14 +2535,67 @@ async function listCustomers(req, res, next) {
       }
     }
 
-    if (andConditions.length > 0) {
-      where.AND = andConditions;
-    }
-
     const fetchAll = String(limit).toLowerCase() === 'all';
     const parsedLimit = Math.max(1, parseInt(limit) || 20);
     const parsedPage = Math.max(1, parseInt(page) || 1);
     const skip = (parsedPage - 1) * parsedLimit;
+
+    const onlineFilter = String(onlineStatus || 'all').trim().toLowerCase();
+    if (onlineFilter === 'online' || onlineFilter === 'offline') {
+      let activeUsernames = [];
+      try {
+        const { RadiusClient } = require('../services/radiusClient');
+        const radius = await RadiusClient.create(req.ispId);
+        if (radius) {
+          const sessions = await radius.getActiveSessions();
+          const active = Array.isArray(sessions)
+            ? sessions.filter(s => !s?.acctstoptime || s.acctstoptime === '0000-00-00 00:00:00')
+            : [];
+          activeUsernames = Array.from(new Set(
+            active.map(s => String(s?.username || s?.UserName || '').trim()).filter(Boolean)
+          ));
+        }
+      } catch (rErr) {
+        console.warn('[listCustomers] onlineStatus lookup warning:', rErr.message);
+      }
+
+      if (onlineFilter === 'online') {
+        if (activeUsernames.length === 0) {
+          return res.json({
+            data: [],
+            pagination: {
+              page: fetchAll ? 1 : parsedPage,
+              limit: fetchAll ? 0 : parsedLimit,
+              total: 0,
+              totalPages: 0
+            }
+          });
+        }
+        andConditions.push({
+          connectionUsers: {
+            some: {
+              username: { in: activeUsernames },
+              isDeleted: false
+            }
+          }
+        });
+      } else if (onlineFilter === 'offline' && activeUsernames.length > 0) {
+        andConditions.push({
+          NOT: {
+            connectionUsers: {
+              some: {
+                username: { in: activeUsernames },
+                isDeleted: false
+              }
+            }
+          }
+        });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
     const [customers, total] = await Promise.all([
       req.prisma.customer.findMany({
         where,
