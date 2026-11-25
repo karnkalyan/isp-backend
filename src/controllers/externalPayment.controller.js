@@ -950,7 +950,7 @@ const processPayment = async (req, res) => {
             where: { id: subscription.id },
             data: updatedSubData
           });
-      await markUnpaidCreditOrdersPaid(tx, context.unpaidOrderIds, paymentMethodCode || 'EXTERNAL', paymentMethodRecord?.id || null);
+      await markUnpaidCreditOrdersPaid(tx, context.unpaidOrderIds, paymentMode || 'EXTERNAL', billingMethod?.id || null);
 
       // C. Update Customer Status & Connections
       const customerUpdateData = {
