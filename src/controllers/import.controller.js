@@ -3158,7 +3158,9 @@ async function importCustomers(req, res, next) {
                 });
             }
 
-            if (!existingCustomer && (cleanEmail || phone)) {
+            // Only fall back to email/phone matching when neither username nor customer code was provided,
+            // so distinct RADIUS usernames or customer codes sharing a phone/email stay separate customers.
+            if (!existingCustomer && !rawUsername && !rawCustomId && (cleanEmail || phone)) {
                 const candidateLead = await prisma.Lead.findFirst({
                     where: {
                         OR: [
@@ -3231,12 +3233,22 @@ async function importCustomers(req, res, next) {
             const notesVal = (row.notes || row['Notes'] || '').toString().trim() || null;
 
             if (!lead) {
+                let leadEmail = cleanEmail;
+                if (leadEmail) {
+                    const existingEmailLead = await prisma.Lead.findUnique({
+                        where: { email: leadEmail },
+                        select: { id: true }
+                    });
+                    if (existingEmailLead) {
+                        leadEmail = null;
+                    }
+                }
                 lead = await prisma.Lead.create({
                     data: {
                         firstName,
                         middleName,
                         lastName,
-                        email: cleanEmail,
+                        email: leadEmail,
                         phoneNumber: phone || null,
                         secondaryContactNumber: altPhone || null,
                         address: addressVal,
@@ -3377,7 +3389,17 @@ async function importCustomers(req, res, next) {
             }
 
             try {
-                const loginEmail = cleanEmail || `${finalUsername.toLowerCase()}@customer.portal`;
+                const fallbackPortalEmail = `${finalUsername.toLowerCase()}@customer.portal`;
+                let loginEmail = cleanEmail || fallbackPortalEmail;
+                if (cleanEmail) {
+                    const emailOwner = await prisma.User.findUnique({
+                        where: { email: cleanEmail },
+                        select: { id: true, customerId: true }
+                    });
+                    if (emailOwner && emailOwner.customerId !== customer.id) {
+                        loginEmail = fallbackPortalEmail;
+                    }
+                }
                 const passwordHash = await bcrypt.hash(finalPassword, 10);
                 const customerName = `${firstName} ${lastName}`.trim() || customer.customerUniqueId;
 
