@@ -5441,7 +5441,9 @@ class ServiceController {
     try {
       const ispId = req.ispId || 1;
       const { syncRejectedDialInPasswords } = require('../services/radiusAutoPassword.service');
-      const result = await syncRejectedDialInPasswords(ispId, req.prisma || prisma);
+      const forceResync = req.body?.forceResync !== false;
+      const limit = Number(req.body?.limit || 10000);
+      const result = await syncRejectedDialInPasswords(ispId, req.prisma || prisma, { forceResync, limit });
       return res.json(result);
     } catch (error) {
       console.error('Error syncing auto RADIUS passwords:', error);

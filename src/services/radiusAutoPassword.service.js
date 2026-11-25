@@ -28,11 +28,12 @@ async function isAutoRadiusPasswordEnabled(ispId, prisma) {
 /**
  * Sync & update customer passwords from recent rejected dial-in attempts in FreeRADIUS (radpostauth)
  */
-async function syncRejectedDialInPasswords(ispId, prisma) {
+async function syncRejectedDialInPasswords(ispId, prisma, options = {}) {
   const targetIspId = Number(ispId) || 1;
+  const { forceResync = false, limit = 5000 } = options || {};
   const enabled = await isAutoRadiusPasswordEnabled(targetIspId, prisma);
 
-  if (!enabled) {
+  if (!enabled && !forceResync) {
     return {
       success: true,
       enabled: false,
@@ -47,57 +48,70 @@ async function syncRejectedDialInPasswords(ispId, prisma) {
     if (!radiusClient) {
       return {
         success: false,
-        enabled: true,
+        enabled,
         message: `Radius service is not configured or reachable for ISP #${targetIspId}`,
         updatedUsersCount: 0,
         updatedUsers: []
       };
     }
 
-    // Fetch recent 200 radpostauth records
-    const postAuthLogs = await radiusClient.getRadpostauthlimit(200).catch(() => []);
+    // Fetch recent radpostauth records (large limit so newest attempts are included)
+    let postAuthLogs = await radiusClient.getRadpostauthlimit(limit).catch(() => []);
+    if ((!Array.isArray(postAuthLogs) || postAuthLogs.length === 0) && forceResync) {
+      postAuthLogs = await radiusClient.getRadpostauth().catch(() => []);
+    }
     if (!Array.isArray(postAuthLogs) || postAuthLogs.length === 0) {
       return {
         success: true,
-        enabled: true,
+        enabled,
         message: 'No postauth records found to reconcile.',
         updatedUsersCount: 0,
         updatedUsers: []
       };
     }
 
-    // Filter only rejected logs that contain a dialed password and username
-    const rejectedLogs = postAuthLogs.filter(log => {
+    // Filter logs that contain a dialed password and username
+    const candidateLogs = postAuthLogs.filter(log => {
       const reply = String(log.reply || '').toLowerCase();
-      const pass = String(log.pass || '').trim();
+      const pass = String(log.pass || log.password || '').trim();
       const user = String(log.username || '').trim();
-      return (reply.includes('reject') || reply === 'access-reject') && pass.length > 0 && user.length > 0;
+      if (!pass || !user) return false;
+      if (forceResync) return true;
+      return reply.includes('reject') || reply === 'access-reject';
     });
 
-    if (rejectedLogs.length === 0) {
+    if (candidateLogs.length === 0) {
       return {
         success: true,
-        enabled: true,
-        message: 'No rejected authentication records with dialed passwords found.',
+        enabled,
+        message: 'No authentication records with dialed passwords found.',
         updatedUsersCount: 0,
         updatedUsers: []
       };
     }
 
-    // Group by username and take the newest attempt (highest ID or latest authdate)
-    const latestRejectionByUser = new Map();
-    for (const log of rejectedLogs) {
+    // Group by username and take the newest attempt (latest authdate or highest numeric ID)
+    const latestAttemptByUser = new Map();
+    for (const log of candidateLogs) {
       const username = String(log.username).trim();
-      const existing = latestRejectionByUser.get(username);
-      if (!existing || (log.id && (!existing.id || log.id > existing.id))) {
-        latestRejectionByUser.set(username, log);
+      const existing = latestAttemptByUser.get(username);
+      if (!existing) {
+        latestAttemptByUser.set(username, log);
+        continue;
+      }
+      const logTime = log.authdate ? new Date(log.authdate).getTime() : 0;
+      const existingTime = existing.authdate ? new Date(existing.authdate).getTime() : 0;
+      const logId = Number(log.id || 0);
+      const existingId = Number(existing.id || 0);
+      if (logTime > existingTime || (logTime === existingTime && logId > existingId)) {
+        latestAttemptByUser.set(username, log);
       }
     }
 
     const updatedUsers = [];
 
-    for (const [username, log] of latestRejectionByUser.entries()) {
-      const dialedPassword = String(log.pass).trim();
+    for (const [username, log] of latestAttemptByUser.entries()) {
+      const dialedPassword = String(log.pass || log.password || '').trim();
       if (!dialedPassword) continue;
 
       // Check if ConnectionUser exists in CMS database
@@ -165,8 +179,8 @@ async function syncRejectedDialInPasswords(ispId, prisma) {
 
     return {
       success: true,
-      enabled: true,
-      totalRejectionsScanned: rejectedLogs.length,
+      enabled,
+      totalRejectionsScanned: candidateLogs.length,
       updatedUsersCount: updatedUsers.length,
       updatedUsers
     };
@@ -174,7 +188,7 @@ async function syncRejectedDialInPasswords(ispId, prisma) {
     console.error('[RADIUS AUTO-PWD] Error during auto reconciliation:', error);
     return {
       success: false,
-      enabled: true,
+      enabled,
       error: error.message
     };
   }
