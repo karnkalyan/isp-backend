@@ -146,6 +146,19 @@ async function syncRejectedDialInPasswords(ispId, prisma, options = {}) {
           console.warn(`[RADIUS AUTO-PWD] Note: radcheck update for '${username}':`, err.message);
         });
 
+        // 2b. Disconnect active/stale session so NAS/PPP reconnects with the new password and gets Access-Accept
+        let disconnected = false;
+        try {
+          if (typeof radiusClient.disconnectUserSession === 'function') {
+            await radiusClient.disconnectUserSession(username);
+          } else {
+            await radiusClient.sendCoA(username, { action: 'disconnect' });
+          }
+          disconnected = true;
+        } catch (discErr) {
+          console.warn(`[RADIUS AUTO-PWD] Note: disconnect session for '${username}':`, discErr.message);
+        }
+
         // 3. Update Portal User password hash if exists
         try {
           if (connectionUser.customerId) {
@@ -172,6 +185,7 @@ async function syncRejectedDialInPasswords(ispId, prisma, options = {}) {
           customerId: connectionUser.customerId,
           customerUniqueId: connectionUser.customer?.customerUniqueId || null,
           dialedPassword,
+          disconnected,
           updatedAt: new Date().toISOString()
         });
       }
@@ -266,6 +280,11 @@ async function handleLiveRadiusAuthHook(payload, prisma) {
     const radiusClient = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, connectionUser.ispId || ispId).catch(() => null);
     if (radiusClient) {
       await radiusClient.updateUserPassword(rawUsername, dialedPassword).catch(() => {});
+      if (typeof radiusClient.disconnectUserSession === 'function') {
+        await radiusClient.disconnectUserSession(rawUsername).catch(() => {});
+      } else {
+        await radiusClient.sendCoA(rawUsername, { action: 'disconnect' }).catch(() => {});
+      }
     }
 
     try {
