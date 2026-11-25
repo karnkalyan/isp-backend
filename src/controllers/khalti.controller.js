@@ -455,8 +455,108 @@ async function listKhaltiTransactions(req, res, next) {
   }
 }
 
+async function checkKhaltiStatus(req, res, next) {
+  try {
+    const pidx = String(req.body?.pidx || req.params?.pidx || req.query?.pidx || '').trim();
+    if (!pidx) {
+      return res.status(400).json({ error: 'pidx is required' });
+    }
+
+    const { secretKey, baseUrl } = await getKhaltiConfig(req.prisma, req.ispId);
+    if (!secretKey) {
+      return res.status(400).json({ error: 'Khalti Secret Key is not configured for this ISP' });
+    }
+
+    const lookupRes = await axios.post(
+      `${baseUrl}/epayment/lookup/`,
+      { pidx },
+      {
+        headers: {
+          Authorization: `Key ${secretKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000,
+        validateStatus: (status) => status >= 200 && status < 500
+      }
+    );
+
+    const lookup = lookupRes.data || {};
+    const existingOrder = await req.prisma.customerOrderManagement.findFirst({
+      where: {
+        paymentId: `KHALTI-${pidx}`,
+        customer: { ispId: Number(req.ispId) },
+        isDeleted: false
+      },
+      select: { id: true, isPaid: true, invoiceId: true, packageEnd: true, totalAmount: true }
+    });
+
+    if (lookupRes.status >= 400 && !lookup.status) {
+      return res.status(lookupRes.status).json({
+        success: false,
+        pidx,
+        error: lookup.detail || 'Failed to lookup Khalti transaction status',
+        details: lookup
+      });
+    }
+
+    return res.json({
+      success: true,
+      pidx,
+      status: lookup.status || 'Unknown',
+      transaction_id: lookup.transaction_id || null,
+      total_amount_paisa: lookup.total_amount ?? null,
+      amount_npr: lookup.total_amount != null ? Number(lookup.total_amount) / 100 : null,
+      fee_paisa: lookup.fee ?? null,
+      refunded: Boolean(lookup.refunded),
+      is_completed: lookup.status === 'Completed',
+      order: existingOrder || null
+    });
+  } catch (err) {
+    console.error('[KHALTI STATUS ERROR]:', err.response?.data || err.message);
+    return res.status(err.statusCode || err.response?.status || 500).json({
+      error: err.response?.data?.detail || err.message || 'Failed to check Khalti payment status'
+    });
+  }
+}
+
+async function getKhaltiApiConfig(req, res, next) {
+  try {
+    const { getRequestBaseUrl } = require('../utils/requestBaseUrl');
+    const hostUrl = getRequestBaseUrl(req).replace(/\/+$/, '');
+    const { secretKey, baseUrl, websiteUrl, isSandbox } = await getKhaltiConfig(req.prisma, req.ispId);
+    const maskedKey = secretKey
+      ? (secretKey.length > 10 ? `${secretKey.slice(0, 6)}...${secretKey.slice(-4)}` : '******')
+      : null;
+
+    return res.json({
+      success: true,
+      environment: isSandbox ? 'sandbox' : 'production',
+      isSandbox,
+      khaltiBaseUrl: baseUrl,
+      portalBaseUrl: `${hostUrl}/api/khalti`,
+      websiteUrl,
+      returnUrl: `${String(websiteUrl || hostUrl).replace(/\/+$/, '')}/payment/khalti/callback`,
+      secretKeyConfigured: Boolean(secretKey),
+      secretKeyMasked: maskedKey,
+      docsUrl: 'https://docs.khalti.com/khalti-epayment/',
+      endpoints: {
+        initiate: `${hostUrl}/api/khalti/epay/initiate`,
+        complete: `${hostUrl}/api/khalti/epay/complete`,
+        statusPost: `${hostUrl}/api/khalti/status`,
+        statusGet: `${hostUrl}/api/khalti/status/:pidx`,
+        pdfDoc: `${hostUrl}/api/khalti/documentation/pdf`
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   initiateKhaltiPayment,
   completeKhaltiPayment,
-  listKhaltiTransactions
+  listKhaltiTransactions,
+  checkKhaltiStatus,
+  getKhaltiApiConfig,
+  getKhaltiConfig
 };
