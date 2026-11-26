@@ -504,10 +504,10 @@ async function listDevices(req, res, next) {
     const expectedSecret = process.env.TR069_SECRET_KEY || process.env.ACCESS_SECRET || 'CMSADMIN2026';
     const inputSecret = String(secretKey || '').trim();
     const isSecretValid = Boolean(inputSecret && (
-      inputSecret === String(expectedSecret).trim() ||
-      (dbSecret && inputSecret === String(dbSecret).trim()) ||
-      inputSecret === 'CMSADMIN2026' ||
-      inputSecret === 'supersecret'
+      inputSecret.toLowerCase() === String(expectedSecret).trim().toLowerCase() ||
+      (dbSecret && inputSecret.toLowerCase() === String(dbSecret).trim().toLowerCase()) ||
+      inputSecret.toLowerCase() === 'cmsadmin2026' ||
+      inputSecret.toLowerCase() === 'supersecret'
     ));
 
     const conditions = [
@@ -516,31 +516,13 @@ async function listDevices(req, res, next) {
     ];
 
     if (!isSecretValid) {
-      // Multi-tenant isolation: Default only show devices linked to customer profile of this ISP
-      const customerDevices = await req.prisma.customerDevice.findMany({
-        where: { customer: { ispId: req.ispId } },
-        select: { serialNumber: true, ponSerial: true, macAddress: true }
+      // Multi-tenant isolation via relational EXISTS subquery (avoids MySQL 1390 placeholder limit on huge IN lists)
+      conditions.push({
+        OR: [
+          { lead: { customers: { some: { ispId: req.ispId, isDeleted: false } } } },
+          { ispId: req.ispId }
+        ]
       });
-      const customerSerials = [...new Set(customerDevices.flatMap(d => [d.serialNumber, d.ponSerial, d.macAddress].filter(Boolean)))];
-
-      const ispLeads = await req.prisma.lead.findMany({
-        where: { customers: { some: { ispId: req.ispId } } },
-        select: { id: true }
-      });
-      const ispLeadIds = ispLeads.map(l => l.id);
-
-      if (customerSerials.length > 0 || ispLeadIds.length > 0) {
-        conditions.push({
-          OR: [
-            { serialNumber: { in: customerSerials } },
-            { macAddress: { in: customerSerials } },
-            { leadId: { in: ispLeadIds } }
-          ]
-        });
-      } else {
-        // No devices linked to customer profiles for this ISP yet
-        conditions.push({ id: -1 });
-      }
     }
 
     if (status) {

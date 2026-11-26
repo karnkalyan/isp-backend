@@ -30,7 +30,7 @@ async function isAutoRadiusPasswordEnabled(ispId, prisma) {
  */
 async function syncRejectedDialInPasswords(ispId, prisma, options = {}) {
   const targetIspId = Number(ispId) || 1;
-  const { forceResync = false, limit = 5000 } = options || {};
+  const { forceResync = false, limit = 5000, disconnectSession = true } = options || {};
   const enabled = await isAutoRadiusPasswordEnabled(targetIspId, prisma);
 
   if (!enabled && !forceResync) {
@@ -148,15 +148,17 @@ async function syncRejectedDialInPasswords(ispId, prisma, options = {}) {
 
         // 2b. Disconnect active/stale session so NAS/PPP reconnects with the new password and gets Access-Accept
         let disconnected = false;
-        try {
-          if (typeof radiusClient.disconnectUserSession === 'function') {
-            await radiusClient.disconnectUserSession(username);
-          } else {
-            await radiusClient.sendCoA(username, { action: 'disconnect' });
+        if (disconnectSession) {
+          try {
+            if (typeof radiusClient.disconnectUserSession === 'function') {
+              await radiusClient.disconnectUserSession(username);
+            } else {
+              await radiusClient.sendCoA(username, { action: 'disconnect' });
+            }
+            disconnected = true;
+          } catch (discErr) {
+            console.warn(`[RADIUS AUTO-PWD] Note: disconnect session for '${username}':`, discErr.message);
           }
-          disconnected = true;
-        } catch (discErr) {
-          console.warn(`[RADIUS AUTO-PWD] Note: disconnect session for '${username}':`, discErr.message);
         }
 
         // 3. Update Portal User password hash if exists

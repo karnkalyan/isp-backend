@@ -3116,9 +3116,19 @@ async function testSshConnection(req, res, next) {
       // Close connection
       driver.ssh.close();
 
+      await req.prisma.oLT.update({
+        where: { id: olt.id },
+        data: {
+          status: 'online',
+          lastSeen: new Date(),
+          ...(versionInfo ? { firmwareVersion: versionInfo.slice(0, 190) } : {})
+        }
+      }).catch(() => {});
+
       return res.json({
         success: true,
         message: "SSH connection successful",
+        status: "online",
         version: versionInfo || 'Unknown',
         output: version.substring(0, 500) // First 500 chars
       });

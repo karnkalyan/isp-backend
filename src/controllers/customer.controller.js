@@ -1905,18 +1905,16 @@ async function getRealtimeNetworkStatus(prisma, customer) {
           radiusClient.getRadacctByUsername(username).catch(() => []),
           radiusClient.getRadpostauthByUsername(username).catch(() => [])
         ]);
-        // For the customer profile, a successful RADIUS authentication is the
-        // source of truth requested by operations. Accounting records are used
-        // for traffic details only and do not decide the online/offline badge.
         const hasAccessAccept = Array.isArray(postAuthLogs) && postAuthLogs.some(
           log => String(log.reply || '').trim().toLowerCase() === 'access-accept'
         );
-        radiusRealtimeStatus = hasAccessAccept ? 'online' : 'offline';
+        const activeSession = Array.isArray(sessions) ? sessions.find(session => {
+          const stopTime = session.acctstoptime ?? session.acctStopTime;
+          return !stopTime || stopTime === '0000-00-00 00:00:00';
+        }) : null;
+        const isRadiusOnline = Boolean(activeSession) || (Array.isArray(sessions) && sessions.length === 0 && hasAccessAccept);
+        radiusRealtimeStatus = isRadiusOnline ? 'online' : 'offline';
         if (Array.isArray(sessions)) {
-          const activeSession = sessions.find(session => {
-            const stopTime = session.acctstoptime ?? session.acctStopTime;
-            return !stopTime || stopTime === '0000-00-00 00:00:00';
-          });
           const sortedSessions = [...sessions].sort((a, b) => {
             const timeA = a.acctstarttime ? new Date(a.acctstarttime).getTime() : 0;
             const timeB = b.acctstarttime ? new Date(b.acctstarttime).getTime() : 0;
@@ -1926,7 +1924,7 @@ async function getRealtimeNetworkStatus(prisma, customer) {
           const targetSession = activeSession || latestSession;
 
           radiusAccounting = {
-            status: hasAccessAccept ? 'online' : 'offline',
+            status: isRadiusOnline ? 'online' : 'offline',
             sessionDownload: targetSession ? (Number(targetSession.acctoutputoctets || 0) + Number(targetSession.acctoutputoctets64 || 0)) : 0,
             sessionUpload: targetSession ? (Number(targetSession.acctinputoctets || 0) + Number(targetSession.acctinputoctets64 || 0)) : 0,
             nasIp: targetSession ? (targetSession.nasipaddress || 'N/A') : 'N/A',
@@ -2439,6 +2437,7 @@ async function listCustomers(req, res, next) {
       oltPort,
       subBranchId,
       branchId: queryBranchId,
+      organizationId,
       area,
       packageId,
       planId,
@@ -2455,10 +2454,17 @@ async function listCustomers(req, res, next) {
     if (status && status !== 'all') where.status = status;
     if (onboardStatus && onboardStatus !== 'all') where.onboardStatus = onboardStatus;
 
-    // Extra filters for SMS campaign targeting
-    // Only apply query-provided branchId if branchFilter didn't already set one (i.e. admin/global users)
+    // Extra filters for SMS campaign targeting / Customer Management
     if (queryBranchId && queryBranchId !== 'all' && !branchFilter) {
-      where.branchId = parseInt(queryBranchId);
+      const bId = parseInt(queryBranchId);
+      if (!isNaN(bId)) {
+        andConditions.push({
+          OR: [
+            { branchId: bId },
+            { subBranchId: bId }
+          ]
+        });
+      }
     }
     if (subBranchId && subBranchId !== 'all') where.subBranchId = parseInt(subBranchId);
 
@@ -2593,10 +2599,38 @@ async function listCustomers(req, res, next) {
       }
     }
 
+    if (organizationId && organizationId !== 'all' && !branchFilter) {
+      const orgId = parseInt(organizationId);
+      if (!isNaN(orgId)) {
+        andConditions.push({
+          OR: [
+            { branchId: orgId },
+            { branch: { parentId: orgId } },
+            { subBranch: { parentId: orgId } }
+          ]
+        });
+      }
+    }
+
     if (andConditions.length > 0) {
       where.AND = andConditions;
     }
-    const [customers, total] = await Promise.all([
+    let activeUsernameSet = new Set();
+    try {
+      const { RadiusClient } = require('../services/radiusClient');
+      const radius = await RadiusClient.create(req.ispId);
+      if (radius) {
+        const sessions = await radius.getActiveSessions();
+        const active = Array.isArray(sessions)
+          ? sessions.filter(s => !s?.acctstoptime || s.acctstoptime === '0000-00-00 00:00:00')
+          : [];
+        activeUsernameSet = new Set(
+          active.map(s => String(s?.username || s?.UserName || '').trim().toLowerCase()).filter(Boolean)
+        );
+      }
+    } catch (_) {}
+
+    const [customers, total, statusGroups] = await Promise.all([
       req.prisma.customer.findMany({
         where,
         include: {
@@ -2625,7 +2659,12 @@ async function listCustomers(req, res, next) {
         orderBy: { [sortBy]: sortOrder },
         ...(fetchAll ? {} : { skip, take: parsedLimit })
       }),
-      req.prisma.customer.count({ where })
+      req.prisma.customer.count({ where }),
+      req.prisma.customer.groupBy({
+        by: ['status'],
+        where: { isDeleted: false, ispId: req.ispId, ...(branchFilter || {}) },
+        _count: { _all: true }
+      }).catch(() => [])
     ]);
 
     // Enrich serviceDetails with VLAN objects
@@ -2649,8 +2688,10 @@ async function listCustomers(req, res, next) {
     const transformed = customers.map(c => {
       const meta = c.lead?.metadata ? (typeof c.lead.metadata === 'string' ? JSON.parse(c.lead.metadata) : c.lead.metadata) : null;
       const portalUser = portalUserMap.get(c.id) || null;
+      const isRadiusOnline = (c.connectionUsers || []).some(cu => activeUsernameSet.has(String(cu.username || '').trim().toLowerCase()));
       return {
         ...c,
+        radiusRealtimeStatus: (c.connectionUsers && c.connectionUsers.length > 0) ? (isRadiusOnline ? 'online' : 'offline') : 'N/A',
         portalUser,
         profilePicture: portalUser?.profilePicture || null,
         firstName: c.lead?.firstName,
@@ -2676,6 +2717,18 @@ async function listCustomers(req, res, next) {
       };
     });
 
+    const summaryCounts = { total: 0, active: 0, inactive: 0, suspended: 0 };
+    if (Array.isArray(statusGroups)) {
+      for (const g of statusGroups) {
+        const cnt = Number(g._count?._all || 0);
+        const st = String(g.status || '').toLowerCase();
+        summaryCounts.total += cnt;
+        if (st === 'active') summaryCounts.active += cnt;
+        else if (st === 'suspended') summaryCounts.suspended += cnt;
+        else summaryCounts.inactive += cnt;
+      }
+    }
+
     return res.json({
       data: transformed,
       pagination: {
@@ -2683,6 +2736,10 @@ async function listCustomers(req, res, next) {
         limit: fetchAll ? total : parsedLimit,
         total,
         totalPages: fetchAll ? 1 : Math.ceil(total / parsedLimit)
+      },
+      summary: {
+        ...summaryCounts,
+        online: activeUsernameSet.size
       }
     });
   } catch (err) {
