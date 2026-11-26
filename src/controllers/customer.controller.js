@@ -2547,6 +2547,7 @@ async function listCustomers(req, res, next) {
     const skip = (parsedPage - 1) * parsedLimit;
 
     const onlineFilter = String(onlineStatus || 'all').trim().toLowerCase();
+    let prefetchedActiveUsernameSet = null;
     if (onlineFilter === 'online' || onlineFilter === 'offline') {
       let activeUsernames = [];
       try {
@@ -2560,6 +2561,7 @@ async function listCustomers(req, res, next) {
           activeUsernames = Array.from(new Set(
             active.map(s => String(s?.username || s?.UserName || '').trim()).filter(Boolean)
           ));
+          prefetchedActiveUsernameSet = new Set(activeUsernames.map(u => u.toLowerCase()));
         }
       } catch (rErr) {
         console.warn('[listCustomers] onlineStatus lookup warning:', rErr.message);
@@ -2615,20 +2617,22 @@ async function listCustomers(req, res, next) {
     if (andConditions.length > 0) {
       where.AND = andConditions;
     }
-    let activeUsernameSet = new Set();
-    try {
-      const { RadiusClient } = require('../services/radiusClient');
-      const radius = await RadiusClient.create(req.ispId);
-      if (radius) {
-        const sessions = await radius.getActiveSessions();
-        const active = Array.isArray(sessions)
-          ? sessions.filter(s => !s?.acctstoptime || s.acctstoptime === '0000-00-00 00:00:00')
-          : [];
-        activeUsernameSet = new Set(
-          active.map(s => String(s?.username || s?.UserName || '').trim().toLowerCase()).filter(Boolean)
-        );
-      }
-    } catch (_) {}
+    let activeUsernameSet = prefetchedActiveUsernameSet || new Set();
+    if (!prefetchedActiveUsernameSet) {
+      try {
+        const { RadiusClient } = require('../services/radiusClient');
+        const radius = await RadiusClient.create(req.ispId);
+        if (radius) {
+          const sessions = await radius.getActiveSessions();
+          const active = Array.isArray(sessions)
+            ? sessions.filter(s => !s?.acctstoptime || s.acctstoptime === '0000-00-00 00:00:00')
+            : [];
+          activeUsernameSet = new Set(
+            active.map(s => String(s?.username || s?.UserName || '').trim().toLowerCase()).filter(Boolean)
+          );
+        }
+      } catch (_) {}
+    }
 
     const [customers, total, statusGroups] = await Promise.all([
       req.prisma.customer.findMany({
