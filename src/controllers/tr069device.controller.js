@@ -515,16 +515,6 @@ async function listDevices(req, res, next) {
       { isDeleted: false }
     ];
 
-    if (!isSecretValid) {
-      // Multi-tenant isolation via relational EXISTS subquery (avoids MySQL 1390 placeholder limit on huge IN lists)
-      conditions.push({
-        OR: [
-          { lead: { customers: { some: { ispId: req.ispId, isDeleted: false } } } },
-          { ispId: req.ispId }
-        ]
-      });
-    }
-
     if (status) {
       conditions.push({ status });
     }
