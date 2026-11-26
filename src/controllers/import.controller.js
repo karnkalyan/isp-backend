@@ -4531,10 +4531,16 @@ async function importOlts(req, res, next) {
             const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
             const sheetName = workbook.SheetNames[0];
             rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
-        } else if (Array.isArray(req.body.rows)) {
+        } else if (Array.isArray(req.body?.items)) {
+            rows = req.body.items;
+        } else if (Array.isArray(req.body?.rows)) {
             rows = req.body.rows;
+        } else if (Array.isArray(req.body?.data)) {
+            rows = req.body.data;
         } else if (Array.isArray(req.body)) {
             rows = req.body;
+        } else if (req.body && (req.body.name || req.body.oltName || req.body['OLT Name'] || req.body.ipAddress || req.body['IP Address'])) {
+            rows = [req.body];
         }
 
         if (!rows || rows.length === 0) {
