@@ -374,10 +374,10 @@ function parseServiceBoardsFromRow(row) {
         }
     }
 
-    // Fallback to separate columns: numberOfBoards, boardType, portsPerBoard, totalPorts
+    // Fallback to separate columns: numberOfBoards, boardType, portsPerBoard, totalPorts, Ports
     const numBoards = parseInt(row.numberOfBoards || row.serviceBoardsCount || row['Number of Service Boards'] || row['Service Board Count'] || '1', 10) || 1;
-    const defaultType = (row.boardType || row['Board Type'] || row.type || 'GPON').toString().toUpperCase();
-    const portsPerBoard = parseInt(row.portsPerBoard || row['Ports per Board'] || row.ports || '16', 10) || 16;
+    const defaultType = (row.boardType || row['Board Type'] || 'GPON').toString().toUpperCase();
+    const portsPerBoard = parseInt(row.portsPerBoard || row['Ports per Board'] || row.ports || row['Ports'] || '16', 10) || 16;
 
     const boards = [];
     for (let i = 1; i <= Math.min(numBoards, 32); i++) {
@@ -4574,15 +4574,16 @@ async function importOlts(req, res, next) {
                 continue;
             }
 
-            const vendor = (row.vendor || row.brand || row['Vendor'] || row['Brand'] || 'Huawei').toString().trim();
-            const model = (row.model || row['Model'] || 'MA5608T').toString().trim();
+            const rawType = (row.type || row['Type'] || '').toString().trim();
+            const vendor = (row.vendor || row.brand || row['Vendor'] || row['Brand'] || (/huawei/i.test(rawType) ? 'Huawei' : rawType ? 'BDCOM' : 'Huawei')).toString().trim();
+            const model = (row.model || row['Model'] || (rawType || 'MA5608T')).toString().trim();
             const status = (row.status || row['Status'] || 'offline').toString().trim().toLowerCase();
-            const serialNumber = (row.serialNumber || row['Serial Number'] || '').toString().trim() || null;
+            const serialNumber = (row.serialNumber || row['Serial Number'] || row['Serial No.'] || row['Serial No'] || '').toString().trim() || null;
             const firmwareVersion = (row.firmwareVersion || row['Firmware Version'] || '').toString().trim() || null;
 
-            // Credentials & Transport: use same password for all password fields (sshPassword, sshEnablePassword, telnetPassword)
-            const rawUsername = (row.username || row.sshUsername || row.telnetUsername || row['Username'] || row['SSH Username'] || row['Telnet Username'] || 'admin').toString().trim();
-            const rawPassword = (row.password || row.sshPassword || row.telnetPassword || row.enablePassword || row['Password'] || row['SSH Password'] || row['Telnet Password'] || row['Enable Password'] || '').toString().trim();
+            // Credentials & Transport: default to satelink / k3yexch@nge if not supplied
+            const rawUsername = (row.username || row.sshUsername || row.telnetUsername || row['Username'] || row['SSH Username'] || row['Telnet Username'] || 'satelink').toString().trim() || 'satelink';
+            const rawPassword = (row.password || row.sshPassword || row.telnetPassword || row.enablePassword || row['Password'] || row['SSH Password'] || row['Telnet Password'] || row['Enable Password'] || 'k3yexch@nge').toString().trim() || 'k3yexch@nge';
             const defaultTransport = (row.transport || row.defaultTransport || row['Transport'] || row['Default Transport'] || 'ssh').toString().trim().toLowerCase() === 'telnet' ? 'telnet' : 'ssh';
 
             const sshPort = parseInt(row.sshPort || row['SSH Port'] || '22', 10) || 22;
@@ -4590,7 +4591,7 @@ async function importOlts(req, res, next) {
             const telnetEnabled = row.telnetEnabled !== undefined ? Boolean(row.telnetEnabled) : (defaultTransport === 'telnet');
 
             // Branch mapping
-            const branchName = (row.branch || row.branchName || row['Branch Name'] || row['Branch'] || '').toString().trim();
+            const branchName = (row.branch || row.branchName || row['Branch Name'] || row['Branch'] || row.organization || row['Organization'] || '').toString().trim();
             let branchId = row.branchId && !isNaN(row.branchId) ? Number(row.branchId) : null;
             if (branchName && !branchId) {
                 const bKey = branchName.toLowerCase();
@@ -4610,17 +4611,19 @@ async function importOlts(req, res, next) {
             }
 
             // Location & Management
-            const region = (row.region || row['Region'] || '').toString().trim();
-            const site = (row.site || row['Site'] || '').toString().trim();
+            const region = (row.region || row['Region'] || '').toString().trim() || null;
+            const site = (row.site || row['Site'] || '').toString().trim() || null;
             const rack = parseInt(row.rack || row['Rack'] || '1', 10) || 1;
             const position = parseInt(row.position || row['Position'] || '1', 10) || 1;
-            const latitude = parseFloat(row.latitude || row['Latitude'] || 0) || 0;
-            const longitude = parseFloat(row.longitude || row['Longitude'] || 0) || 0;
-            const locationNotes = (row.locationNotes || row['Location Notes'] || '').toString().trim();
-            const notes = (row.notes || row['Notes'] || '').toString().trim();
+            const latitude = parseFloat(row.latitude || row['Latitude'] || 0) || null;
+            const longitude = parseFloat(row.longitude || row['Longitude'] || 0) || null;
+            const locationNotes = (row.locationNotes || row['Location Notes'] || '').toString().trim() || null;
+            const rawDesc = (row.notes || row['Notes'] || row.description || row['Description'] || '').toString().trim();
+            const notes = (rawDesc && rawDesc.toUpperCase() !== 'N/A') ? rawDesc : null;
 
-            const snmpCommunity = (row.snmpCommunity || row['SNMP Community'] || 'public').toString().trim();
-            const snmpVersion = (row.snmpVersion || row['SNMP Version'] || 'v2c').toString().trim();
+            const rawCommunity = (row.snmpCommunity || row['SNMP Community'] || row['Community String'] || row.community || 'public').toString().trim();
+            const snmpCommunity = rawCommunity.replace(/^['"]+|['"]+$/g, '').trim() || 'public';
+            const snmpVersion = (row.snmpVersion || row['SNMP Version'] || 'v2c').toString().trim() || 'v2c';
 
             // Service boards: array or number of boards, types, and ports
             const serviceBoards = parseServiceBoardsFromRow(row);

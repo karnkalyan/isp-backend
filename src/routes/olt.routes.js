@@ -17,6 +17,9 @@ const {
   syncOntDetailsFromOlt,     // New: Sync specific ONT details
   syncAllOntDetailsFromOlt,  // New: Sync all ONT details (bulk)
   testSshConnection,
+  testSnmpConnection,
+  getOltSnmpInfo,
+  syncOntsViaSnmp,
   getOltSystemInfo,
   getGponPortInfo,
   executeBatchCommands,
@@ -69,8 +72,11 @@ module.exports = (prisma) => {
   router.post('/:id/onts/:ontId/sync-details', checkPermission('olt_update'), syncOntDetailsFromOlt); // New: Sync specific ONT details
   router.post('/:id/onts/sync-all-details', checkPermission('olt_update'), syncAllOntDetailsFromOlt); // New: Sync all ONT details (bulk)
 
-  // OLT SSH/Connection Testing
+  // OLT SSH/SNMP Connection Testing & Sync
   router.post('/:id/test-ssh', checkPermission('olt_read'), testSshConnection);
+  router.post('/:id/test-snmp', checkPermission('olt_read'), testSnmpConnection);
+  router.get('/:id/snmp-info', checkPermission('olt_read'), getOltSnmpInfo);
+  router.post('/:id/onts/sync-snmp', checkPermission('olt_update'), syncOntsViaSnmp);
 
   // OLT System Info and Sessions
   router.get('/:id/system-info', checkPermission('olt_read'), getOltSystemInfo);

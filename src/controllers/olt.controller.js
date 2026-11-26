@@ -4191,7 +4191,112 @@ async function deleteOltLoadFile(req, res, next) {
 }
 
 
+async function testSnmpConnection(req, res, next) {
+  try {
+    const oltId = parseInt(req.params.id, 10);
+    if (isNaN(oltId)) return res.status(400).json({ error: "Invalid OLT ID" });
+
+    const olt = await req.prisma.oLT.findFirst({
+      where: { id: oltId, isDeleted: false, ispId: req.ispId }
+    });
+    if (!olt) return res.status(404).json({ error: "OLT not found" });
+
+    const { fetchOltSystemInfoViaSnmp } = require("../services/snmpService");
+    const info = await fetchOltSystemInfoViaSnmp(olt);
+
+    await req.prisma.oLT.update({
+      where: { id: olt.id },
+      data: {
+        status: "online",
+        lastSeen: new Date(),
+        ...(info.sysDescr ? { firmwareVersion: String(info.sysDescr).slice(0, 190) } : {})
+      }
+    }).catch(() => {});
+
+    return res.json({ success: true, protocol: "snmp", data: info });
+  } catch (err) {
+    return res.status(502).json({ success: false, error: err.message || "SNMP connection failed" });
+  }
+}
+
+async function getOltSnmpInfo(req, res, next) {
+  return testSnmpConnection(req, res, next);
+}
+
+async function syncOntsViaSnmp(req, res, next) {
+  try {
+    const oltId = parseInt(req.params.id, 10);
+    if (isNaN(oltId)) return res.status(400).json({ error: "Invalid OLT ID" });
+
+    const olt = await req.prisma.oLT.findFirst({
+      where: { id: oltId, isDeleted: false, ispId: req.ispId }
+    });
+    if (!olt) return res.status(404).json({ error: "OLT not found" });
+
+    const { fetchOntsViaSnmp } = require("../services/snmpService");
+    const discovered = await fetchOntsViaSnmp(olt);
+
+    let synced = 0;
+    for (const item of discovered) {
+      const existing = await req.prisma.oNT.findFirst({
+        where: {
+          oltId: olt.id,
+          serialNumber: item.serialNumber
+        }
+      });
+      if (existing) {
+        await req.prisma.oNT.update({
+          where: { id: existing.id },
+          data: {
+            status: item.status,
+            rxPower: item.rxPower,
+            txPower: item.txPower,
+            lastSeen: item.status === "online" ? new Date() : existing.lastSeen
+          }
+        });
+      } else {
+        await req.prisma.oNT.create({
+          data: {
+            oltId: olt.id,
+            ontId: item.ontId,
+            serialNumber: item.serialNumber,
+            servicePort: String(item.servicePort || "0/0/0"),
+            status: item.status,
+            rxPower: item.rxPower,
+            txPower: item.txPower,
+            lastSeen: item.status === "online" ? new Date() : null
+          }
+        }).catch(() => {});
+      }
+      synced++;
+    }
+
+    await req.prisma.oLT.update({
+      where: { id: olt.id },
+      data: {
+        status: "online",
+        lastSeen: new Date(),
+        totalSubscribers: discovered.length,
+        activeSubscribers: discovered.filter(d => d.status === "online").length
+      }
+    }).catch(() => {});
+
+    return res.json({
+      success: true,
+      protocol: "snmp",
+      discoveredCount: discovered.length,
+      syncedCount: synced,
+      onts: discovered
+    });
+  } catch (err) {
+    return res.status(502).json({ success: false, error: err.message || "SNMP ONT sync failed" });
+  }
+}
+
 module.exports = {
+  testSnmpConnection,
+  getOltSnmpInfo,
+  syncOntsViaSnmp,
   listOlts,
   getOltById,
   createOlt,
