@@ -639,10 +639,23 @@ class RadiusClient {
     return this.#apiRequest('get', `/api/radacct/${id}`);
   }
 
+  static #tableCache = new Map();
+
+  async #getCachedTable(cacheKey, fetcher, ttlMs = 10000) {
+    const fullKey = `${this.baseUrl || ""}:${cacheKey}`;
+    const cached = RadiusClient.#tableCache.get(fullKey);
+    if (cached && Date.now() - cached.ts < ttlMs) return cached.data;
+    const data = await fetcher();
+    if (Array.isArray(data)) RadiusClient.#tableCache.set(fullKey, { ts: Date.now(), data });
+    return data;
+  }
+
   // Get radacct by username
-  async getRadacctByUsername(username, limit = 10000) {
+  async getRadacctByUsername(username, limit = 1000) {
     try {
-      const allAcct = await this.getRadacctlimit(limit);
+      const direct = await this.#apiRequest('get', `/api/radacct?username=${encodeURIComponent(username)}&limit=${Math.min(limit, 200)}`).catch(() => null);
+      if (Array.isArray(direct) && (direct.length === 0 || direct.every(e => e.username === username))) return direct.slice(0, limit);
+      const allAcct = await this.#getCachedTable(`radacct:${limit}`, () => this.getRadacctlimit(limit));
       console.log('total', allAcct.length);
       if (Array.isArray(allAcct)) {
         return allAcct
@@ -665,9 +678,11 @@ class RadiusClient {
   }
 
   // Get radpostauth by username
-  async getRadpostauthByUsername(username, limit = 10000) {
+  async getRadpostauthByUsername(username, limit = 1000) {
     try {
-      const allPostAuth = await this.getRadpostauthlimit(limit);
+      const direct = await this.#apiRequest('get', `/api/radpostauth?username=${encodeURIComponent(username)}&limit=${Math.min(limit, 200)}`).catch(() => null);
+      if (Array.isArray(direct) && (direct.length === 0 || direct.every(e => e.username === username))) return direct.slice(0, limit);
+      const allPostAuth = await this.#getCachedTable(`radpostauth:${limit}`, () => this.getRadpostauthlimit(limit));
       if (Array.isArray(allPostAuth)) {
         return allPostAuth
           .filter(entry => entry.username === username)
