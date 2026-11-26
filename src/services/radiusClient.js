@@ -695,9 +695,14 @@ class RadiusClient {
   }
 
   // Get active sessions
-  async getActiveSessions() {
+  async getActiveSessions(limit = 20000) {
     try {
-      const allAcct = await this.getRadacct();
+      const allAcct = await this.#getCachedTable(
+        `active_sessions:${limit}`,
+        () => this.#apiRequest('get', `/api/radacct?active=true&limit=${limit}`)
+          .catch(() => this.getRadacctlimit(limit)),
+        10000
+      );
       if (Array.isArray(allAcct)) {
         return allAcct.filter(entry =>
           !entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00'
