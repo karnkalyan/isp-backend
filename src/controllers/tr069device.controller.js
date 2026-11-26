@@ -497,9 +497,18 @@ async function listDevices(req, res, next) {
     const { search, status, secretKey, page = 1, limit = 50 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const dbSecretSetting = await req.prisma.iSPSettings.findFirst({
-      where: { key: 'tr069SecretKey' }
-    });
+    const [dbSecretSetting, vpsSetting] = await Promise.all([
+      req.prisma.iSPSettings.findFirst({
+        where: { key: 'tr069SecretKey' }
+      }),
+      req.prisma.iSPSettings.findFirst({
+        where: {
+          key: 'isVpsVersion',
+          ...(req.ispId ? { ispId: req.ispId } : {})
+        }
+      })
+    ]);
+    const isVpsVersion = vpsSetting ? String(vpsSetting.value).trim().toLowerCase() !== 'false' : true;
     const dbSecret = dbSecretSetting?.value || null;
     const expectedSecret = process.env.TR069_SECRET_KEY || process.env.ACCESS_SECRET || 'CMSADMIN2026';
     const inputSecret = String(secretKey || '').trim();
@@ -509,6 +518,20 @@ async function listDevices(req, res, next) {
       inputSecret.toLowerCase() === 'cmsadmin2026' ||
       inputSecret.toLowerCase() === 'supersecret'
     ));
+
+    if (!isVpsVersion && !isSecretValid) {
+      return res.json({
+        data: [],
+        pagination: {
+          total: 0,
+          page: Number(page),
+          limit: Number(limit),
+          totalPages: 0
+        },
+        requiresSecretKey: true,
+        isVpsVersion: false
+      });
+    }
 
     const conditions = [
       { ispId: req.ispId },
