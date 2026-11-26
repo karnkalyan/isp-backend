@@ -2689,13 +2689,44 @@ async function listCustomers(req, res, next) {
     });
     const portalUserMap = new Map(portalUsers.map(user => [user.customerId, user]));
 
+    // Batch-lookup TR-069 / ACS online status for the current page's devices
+    const pageSerials = Array.from(new Set(
+      customers.flatMap(c => (c.devices || []).map(d => String(d?.serialNumber || '').trim()))
+        .filter(s => s && !['null', 'undefined', 'n/a'].includes(s.toLowerCase()))
+    ));
+    const tr069StatusBySerial = new Map();
+    if (pageSerials.length > 0 && req.prisma.tr069Device) {
+      try {
+        const acsRows = await req.prisma.tr069Device.findMany({
+          where: { serialNumber: { in: pageSerials }, isDeleted: false },
+          select: { serialNumber: true, status: true, lastContact: true }
+        });
+        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+        for (const row of acsRows) {
+          const isOnline =
+            String(row.status || '').toLowerCase() === 'online' ||
+            (row.lastContact && new Date(row.lastContact).getTime() > fiveMinAgo);
+          tr069StatusBySerial.set(String(row.serialNumber).trim().toLowerCase(), isOnline ? 'online' : 'offline');
+        }
+      } catch (_) {}
+    }
+
     const transformed = customers.map(c => {
       const meta = c.lead?.metadata ? (typeof c.lead.metadata === 'string' ? JSON.parse(c.lead.metadata) : c.lead.metadata) : null;
       const portalUser = portalUserMap.get(c.id) || null;
       const isRadiusOnline = (c.connectionUsers || []).some(cu => activeUsernameSet.has(String(cu.username || '').trim().toLowerCase()));
+      const validDeviceSerials = (c.devices || [])
+        .map(d => String(d?.serialNumber || '').trim())
+        .filter(s => s && !['null', 'undefined', 'n/a'].includes(s.toLowerCase()));
+      let ontRealtimeStatus = 'N/A';
+      if (validDeviceSerials.length > 0) {
+        const anyAcsOnline = validDeviceSerials.some(s => tr069StatusBySerial.get(s.toLowerCase()) === 'online');
+        ontRealtimeStatus = anyAcsOnline ? 'online' : 'offline';
+      }
       return {
         ...c,
         radiusRealtimeStatus: (c.connectionUsers && c.connectionUsers.length > 0) ? (isRadiusOnline ? 'online' : 'offline') : 'N/A',
+        ontRealtimeStatus,
         portalUser,
         profilePicture: portalUser?.profilePicture || null,
         firstName: c.lead?.firstName,
