@@ -694,21 +694,63 @@ class RadiusClient {
     }
   }
 
-  // Get active sessions
+  // Get active sessions (paginated to bypass RADIUS API per-request limit caps)
   async getActiveSessions(limit = 20000) {
     try {
-      const allAcct = await this.#getCachedTable(
+      return await this.#getCachedTable(
         `active_sessions:${limit}`,
-        () => this.#apiRequest('get', `/api/radacct?active=true&limit=${limit}`)
-          .catch(() => this.getRadacctlimit(limit)),
+        async () => {
+          const pageSize = 1000;
+          const active = [];
+          const seenFirstKeys = new Set();
+          let offset = 0;
+          let totalFetched = 0;
+          let consecutiveZeroActivePages = 0;
+          let useActiveParam = true;
+
+          while (totalFetched < limit) {
+            let page = null;
+            if (useActiveParam) {
+              page = await this.#apiRequest('get', `/api/radacct?active=true&limit=${pageSize}&offset=${offset}`).catch(() => null);
+              if (!Array.isArray(page)) {
+                useActiveParam = false;
+              }
+            }
+            if (!useActiveParam) {
+              page = await this.#apiRequest('get', `/api/radacct?limit=${pageSize}&offset=${offset}`);
+            }
+            if (!Array.isArray(page) || page.length === 0) break;
+
+            const firstKey = page[0]?.radacctid ?? page[0]?.id ?? page[0]?.acctuniqueid ?? page[0]?.acctsessionid;
+            if (firstKey !== undefined && seenFirstKeys.has(firstKey)) {
+              // RADIUS API ignored offset and returned the same page; avoid infinite loop.
+              break;
+            }
+            if (firstKey !== undefined) seenFirstKeys.add(firstKey);
+
+            let activeInPage = 0;
+            for (const entry of page) {
+              if (!entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00') {
+                active.push(entry);
+                activeInPage++;
+              }
+            }
+
+            totalFetched += page.length;
+            offset += page.length;
+
+            if (activeInPage === 0 && active.length > 0) {
+              consecutiveZeroActivePages++;
+              if (consecutiveZeroActivePages >= 5) break;
+            } else {
+              consecutiveZeroActivePages = 0;
+            }
+          }
+
+          return active;
+        },
         10000
       );
-      if (Array.isArray(allAcct)) {
-        return allAcct.filter(entry =>
-          !entry.acctstoptime || entry.acctstoptime === '0000-00-00 00:00:00'
-        );
-      }
-      return [];
     } catch (error) {
       throw new Error(`Failed to get active sessions: ${error.message}`);
     }
