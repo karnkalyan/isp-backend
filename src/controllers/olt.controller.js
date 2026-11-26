@@ -181,6 +181,7 @@ async function listOlts(req, res, next) {
       };
     });
 
+    const totalPages = Math.max(1, Math.ceil(total / Number(limit || 10)));
     return res.json({
       success: true,
       data,
@@ -188,7 +189,9 @@ async function listOlts(req, res, next) {
         page: Number(page),
         limit: Number(limit),
         total,
-        totalPages: Math.ceil(total / limit)
+        totalPages,
+        hasNextPage: Number(page) < totalPages,
+        hasPreviousPage: Number(page) > 1
       }
     });
 
