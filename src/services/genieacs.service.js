@@ -284,6 +284,9 @@ class GenieACSClient {
 
             const cleanProj = (projection || defaultProjection).replace(/\s+/g, '');
             const rawSerial = String(serialNumber || '').trim();
+            if (!rawSerial || ['null', 'undefined', 'n/a'].includes(rawSerial.toLowerCase())) {
+                throw new Error(`Device with serial ${serialNumber} not found`);
+            }
             const upperSerial = rawSerial.toUpperCase();
             const lowerSerial = rawSerial.toLowerCase();
             const escaped = rawSerial.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
