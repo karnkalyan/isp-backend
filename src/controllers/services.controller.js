@@ -5483,6 +5483,130 @@ class ServiceController {
     }
   }
 
+  async deduplicateRadiusEntries(req, res) {
+    try {
+      const ispId = req.ispId || 1;
+      const dryRun = req.body?.dryRun === true;
+      const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
+      if (!client) {
+        return res.status(404).json({ success: false, error: 'RADIUS service not configured' });
+      }
+
+      const fetchAllPages = async (fetchPage) => {
+        const rows = [];
+        const seenFirstIds = new Set();
+        let offset = 0;
+        const limit = 1000;
+        while (true) {
+          const page = await fetchPage(limit, offset);
+          if (!Array.isArray(page) || page.length === 0) break;
+          const firstId = page[0]?.id;
+          if (firstId !== undefined && seenFirstIds.has(firstId)) break;
+          if (firstId !== undefined) seenFirstIds.add(firstId);
+          rows.push(...page);
+          offset += page.length;
+        }
+        return rows;
+      };
+
+      const findDuplicatesToDelete = (rows, keyFn) => {
+        const groups = new Map();
+        for (const row of rows) {
+          if (!row || row.id == null) continue;
+          const key = keyFn(row);
+          if (!key) continue;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(row);
+        }
+        const toDelete = [];
+        for (const list of groups.values()) {
+          if (list.length <= 1) continue;
+          list.sort((a, b) => Number(b.id) - Number(a.id)); // Keep newest (highest id), delete older
+          toDelete.push(...list.slice(1));
+        }
+        return toDelete;
+      };
+
+      const deleteInBatches = async (rows, deleteFn) => {
+        if (dryRun || rows.length === 0) return 0;
+        let deleted = 0;
+        for (let i = 0; i < rows.length; i += 20) {
+          const chunk = rows.slice(i, i + 20);
+          const results = await Promise.all(
+            chunk.map(row => deleteFn(row.id).then(() => 1).catch(() => 0))
+          );
+          deleted += results.reduce((sum, v) => sum + v, 0);
+        }
+        return deleted;
+      };
+
+      const [radcheckRows, radusergroupRows, radgroupreplyRows] = await Promise.all([
+        fetchAllPages((limit, offset) => client.getRadcheck(limit, offset)),
+        fetchAllPages((limit, offset) => client.getRadusergroup(limit, offset)),
+        fetchAllPages((limit, offset) => client.getRadgroupreply(limit, offset)),
+      ]);
+
+      const radcheckDupes = findDuplicatesToDelete(
+        radcheckRows,
+        (r) => {
+          const u = String(r.username || '').trim().toLowerCase();
+          const a = String(r.attribute || '').trim().toLowerCase();
+          return u && a ? `${u}::${a}` : null;
+        }
+      );
+
+      const radusergroupDupes = findDuplicatesToDelete(
+        radusergroupRows,
+        (r) => String(r.username || '').trim().toLowerCase() || null
+      );
+
+      const radgroupreplyDupes = findDuplicatesToDelete(
+        radgroupreplyRows,
+        (r) => {
+          const g = String(r.groupname || '').trim().toLowerCase();
+          const a = String(r.attribute || '').trim().toLowerCase();
+          if (!g || !a) return null;
+          if (String(r.op || '').trim() === '+=') {
+            const subKey = String(r.value || '').split('=')[0].trim().toLowerCase();
+            return `${g}::${a}::+=::${subKey}`;
+          }
+          return `${g}::${a}`;
+        }
+      );
+
+      const [radcheckDeleted, radusergroupDeleted, radgroupreplyDeleted] = await Promise.all([
+        deleteInBatches(radcheckDupes, (id) => client.deleteRadcheck(id)),
+        deleteInBatches(radusergroupDupes, (id) => client.deleteRadusergroup(id)),
+        deleteInBatches(radgroupreplyDupes, (id) => client.deleteRadgroupreply(id)),
+      ]);
+
+      return res.json({
+        success: true,
+        dryRun,
+        radcheck: {
+          total: radcheckRows.length,
+          duplicatesFound: radcheckDupes.length,
+          deleted: radcheckDeleted,
+        },
+        radusergroup: {
+          total: radusergroupRows.length,
+          duplicatesFound: radusergroupDupes.length,
+          deleted: radusergroupDeleted,
+        },
+        radgroupreply: {
+          total: radgroupreplyRows.length,
+          duplicatesFound: radgroupreplyDupes.length,
+          deleted: radgroupreplyDeleted,
+        },
+        totalDuplicatesFound: radcheckDupes.length + radusergroupDupes.length + radgroupreplyDupes.length,
+        totalDeleted: radcheckDeleted + radusergroupDeleted + radgroupreplyDeleted,
+      });
+    } catch (error) {
+      console.error('Error deduplicating RADIUS entries:', error);
+      return res.status(500).json({ success: false, error: 'Failed to deduplicate RADIUS entries', message: error.message });
+    }
+  }
+
 }
 
 module.exports = { ServiceController };

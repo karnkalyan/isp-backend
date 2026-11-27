@@ -118,6 +118,7 @@ module.exports = (prisma) => {
     router.post('/radius/users/:username/coa', checkPermission('services_manage'), serviceController.sendRadiusCoA.bind(serviceController));
     router.post('/radius/test-auth', checkPermission('services_test'), serviceController.testRadiusAuth.bind(serviceController));
     router.post('/radius/auto-sync-passwords', checkPermission('services_manage'), serviceController.syncAutoRadiusPasswords.bind(serviceController));
+    router.post('/radius/deduplicate', checkPermission('services_manage'), serviceController.deduplicateRadiusEntries.bind(serviceController));
     router.get('/radius/auto-sync-status', checkPermission('services_read'), serviceController.getRadiusAutoPasswordStatus.bind(serviceController));
 
     // eSewa Operations
