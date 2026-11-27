@@ -1795,12 +1795,22 @@ async function findPortalUserForCustomer(prisma, customer) {
 async function upsertRadiusPassword(ispId, username, password) {
   const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, ispId);
   const entries = await client.getRadcheckByUsername(username);
-  const passwordEntry = Array.isArray(entries)
-    ? entries.find((entry) => ['Cleartext-Password', 'User-Password', 'Password'].includes(entry.attribute))
-    : null;
+  const passwordEntries = Array.isArray(entries)
+    ? entries.filter((entry) => ['cleartext-password', 'user-password', 'md5-password', 'password'].includes(String(entry.attribute || '').toLowerCase()))
+    : [];
 
-  if (passwordEntry) {
-    return client.updateRadcheck(passwordEntry.id, { value: password, op: passwordEntry.op || ':=' });
+  if (passwordEntries.length > 0) {
+    const [primary, ...duplicates] = passwordEntries;
+    const updated = await client.updateRadcheck(primary.id, {
+      username,
+      attribute: 'Cleartext-Password',
+      value: password,
+      op: primary.op || ':='
+    });
+    for (const dup of duplicates) {
+      if (dup?.id) await client.deleteRadcheck(dup.id).catch(() => {});
+    }
+    return updated;
   }
 
   return client.createRadcheck({

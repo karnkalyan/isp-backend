@@ -482,23 +482,26 @@ class RadiusClient {
     return this.#apiRequest('get', `/api/radcheck/${id}`);
   }
 
-  // Get radcheck by username
+  // Get radcheck by username (direct query fast path + pagination fallback)
   async getRadcheckByUsername(username) {
     try {
+      const direct = await this.#apiRequest('get', `/api/radcheck?username=${encodeURIComponent(username)}&limit=500`).catch(() => null);
+      if (Array.isArray(direct) && direct.length > 0 && direct.every(entry => entry.username === username)) {
+        return direct;
+      }
       const matches = [];
       let offset = 0;
-      const limit = 500;
+      const limit = 1000;
       const seen = new Set();
       while (true) {
         const page = await this.getRadcheck(limit, offset);
         if (!Array.isArray(page) || page.length === 0) break;
-        // Some RADIUS APIs cap the requested page size. Advance by the actual size.
         for (const entry of page) {
           if (entry.username === username) matches.push(entry);
         }
         const firstId = page[0]?.id;
-        if (seen.has(firstId)) throw new Error('RADIUS radcheck pagination did not advance');
-        seen.add(firstId);
+        if (firstId !== undefined && seen.has(firstId)) break;
+        if (firstId !== undefined) seen.add(firstId);
         offset += page.length;
       }
       return matches;
@@ -914,18 +917,21 @@ class RadiusClient {
     }
 
     try {
-      const radcheckEntries = await this.getRadcheckByUsername(username).catch(() => []);
+      const radcheckEntries = await this.getRadcheckByUsername(username);
       const passwordEntries = (Array.isArray(radcheckEntries) ? radcheckEntries : []).filter(
-        entry => ['cleartext-password', 'user-password', 'md5-password'].includes(String(entry.attribute || '').toLowerCase())
+        entry => ['cleartext-password', 'user-password', 'md5-password', 'password'].includes(String(entry.attribute || '').toLowerCase())
       );
 
       if (passwordEntries.length > 0) {
-        for (const entry of passwordEntries) {
-          await this.updateRadcheck(entry.id, {
-            attribute: 'Cleartext-Password',
-            op: ':=',
-            value: String(newPassword)
-          });
+        const [primary, ...duplicates] = passwordEntries;
+        await this.updateRadcheck(primary.id, {
+          username,
+          attribute: 'Cleartext-Password',
+          op: ':=',
+          value: String(newPassword)
+        });
+        for (const dup of duplicates) {
+          if (dup?.id) await this.deleteRadcheck(dup.id).catch(() => {});
         }
         console.log(`[RADIUS] Updated existing password radcheck for ${username}`);
       } else {
