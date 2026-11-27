@@ -304,18 +304,36 @@ class RadiusClient {
   // ---------------- RADGROUPREPLY API METHODS ----------------
 
   // Get all radgroupreply
-  async getRadgroupreply() {
-    return this.#apiRequest('get', '/api/radgroupreply');
+  async getRadgroupreply(limit = 10000, offset = 0) {
+    const params = {};
+    if (limit) params.limit = limit;
+    if (offset) params.offset = offset;
+    return this.#apiRequest('get', '/api/radgroupreply', params);
   }
 
-  // Get radgroupreply by groupname
+  // Get radgroupreply by groupname (with direct query + pagination fallback)
   async getRadgroupreplyByGroupname(groupname) {
     try {
-      const all = await this.getRadgroupreply();
-      if (Array.isArray(all)) {
-        return all.filter(entry => entry.groupname === groupname);
+      const direct = await this.#apiRequest('get', `/api/radgroupreply?groupname=${encodeURIComponent(groupname)}&limit=500`).catch(() => null);
+      if (Array.isArray(direct) && direct.length > 0 && direct.every(entry => entry.groupname === groupname)) {
+        return direct;
       }
-      return [];
+      const matches = [];
+      const seenFirstIds = new Set();
+      let offset = 0;
+      const limit = 1000;
+      while (true) {
+        const page = await this.getRadgroupreply(limit, offset);
+        if (!Array.isArray(page) || page.length === 0) break;
+        const firstId = page[0]?.id;
+        if (firstId !== undefined && seenFirstIds.has(firstId)) break;
+        if (firstId !== undefined) seenFirstIds.add(firstId);
+        for (const entry of page) {
+          if (entry.groupname === groupname) matches.push(entry);
+        }
+        offset += page.length;
+      }
+      return matches;
     } catch (error) {
       throw new Error(`Failed to get radgroupreply for group ${groupname}: ${error.message}`);
     }
@@ -544,8 +562,11 @@ class RadiusClient {
   }
 
   // Get all radusergroup entries
-  async getRadusergroup() {
-    return this.#apiRequest('get', '/api/radusergroup');
+  async getRadusergroup(limit = 10000, offset = 0) {
+    const params = {};
+    if (limit) params.limit = limit;
+    if (offset) params.offset = offset;
+    return this.#apiRequest('get', '/api/radusergroup', params);
   }
 
   // Get radusergroup by ID
@@ -553,14 +574,29 @@ class RadiusClient {
     return this.#apiRequest('get', `/api/radusergroup/${id}`);
   }
 
-  // Get radusergroup by username
+  // Get radusergroup by username (with direct query + pagination fallback)
   async getRadusergroupByUsername(username) {
     try {
-      const allGroups = await this.getRadusergroup();
-      if (Array.isArray(allGroups)) {
-        return allGroups.filter(entry => entry.username === username);
+      const direct = await this.#apiRequest('get', `/api/radusergroup?username=${encodeURIComponent(username)}&limit=500`).catch(() => null);
+      if (Array.isArray(direct) && direct.length > 0 && direct.every(entry => entry.username === username)) {
+        return direct;
       }
-      return [];
+      const matches = [];
+      const seenFirstIds = new Set();
+      let offset = 0;
+      const limit = 1000;
+      while (true) {
+        const page = await this.getRadusergroup(limit, offset);
+        if (!Array.isArray(page) || page.length === 0) break;
+        const firstId = page[0]?.id;
+        if (firstId !== undefined && seenFirstIds.has(firstId)) break;
+        if (firstId !== undefined) seenFirstIds.add(firstId);
+        for (const entry of page) {
+          if (entry.username === username) matches.push(entry);
+        }
+        offset += page.length;
+      }
+      return matches;
     } catch (error) {
       throw new Error(`Failed to get radusergroup for username ${username}: ${error.message}`);
     }
@@ -839,16 +875,21 @@ class RadiusClient {
         }
       }
 
-      // 3. Add to groups if provided
-      if (groups.length > 0) {
+      // 3. Sync groups if provided (update in-place when single group to prevent duplicates)
+      if (groups.length === 1) {
+        const groupResult = await this.updateUserGroup(username, groups[0]);
+        results.radusergroup = groupResult ? [groupResult] : [];
+      } else if (groups.length > 1) {
+        const existing = await this.getRadusergroupByUsername(username).catch(() => []);
+        for (const entry of existing) {
+          if (entry.id && !groups.includes(entry.groupname)) {
+            await this.deleteRadusergroup(entry.id).catch(() => {});
+          }
+        }
         results.radusergroup = [];
         for (const groupname of groups) {
-          const groupData = {
-            username: username,
-            groupname: groupname,
-            priority: 0
-          };
-          const groupResult = await this.createRadusergroup(groupData);
+          if (existing.some(e => e.groupname === groupname)) continue;
+          const groupResult = await this.createRadusergroup({ username, groupname, priority: 0 });
           results.radusergroup.push(groupResult);
         }
       }
@@ -913,17 +954,29 @@ class RadiusClient {
   async updateUserGroup(username, groupname) {
     try {
       const existingEntries = await this.getRadusergroupByUsername(username).catch(() => []);
-      for (const entry of existingEntries) {
-        if (entry.id) {
-          await this.deleteRadusergroup(entry.id).catch(() => {});
-        }
-      }
       if (groupname) {
+        if (existingEntries.length > 0) {
+          const [primary, ...duplicates] = existingEntries;
+          const updated = await this.updateRadusergroup(primary.id, {
+            username,
+            groupname,
+            priority: primary.priority ?? 0
+          });
+          for (const dup of duplicates) {
+            if (dup.id) await this.deleteRadusergroup(dup.id).catch(() => {});
+          }
+          return updated;
+        }
         return await this.createRadusergroup({
           username,
           groupname,
           priority: 0
         });
+      }
+      for (const entry of existingEntries) {
+        if (entry.id) {
+          await this.deleteRadusergroup(entry.id).catch(() => {});
+        }
       }
       return null;
     } catch (error) {

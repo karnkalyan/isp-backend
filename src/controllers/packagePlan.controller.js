@@ -372,18 +372,47 @@ async function updatePackagePlan(req, res, next) {
       }
     }
 
+async function syncGroupReplyAttributes(client, oldGroupname, newGroupname, replyAttrs) {
+  const existingMap = new Map();
+  const oldReplies = await client.getRadgroupreplyByGroupname(oldGroupname).catch(() => []);
+  for (const r of (Array.isArray(oldReplies) ? oldReplies : [])) {
+    if (r?.id) existingMap.set(r.id, r);
+  }
+  if (newGroupname && newGroupname !== oldGroupname) {
+    const newReplies = await client.getRadgroupreplyByGroupname(newGroupname).catch(() => []);
+    for (const r of (Array.isArray(newReplies) ? newReplies : [])) {
+      if (r?.id) existingMap.set(r.id, r);
+    }
+  }
+
+  const existingList = Array.from(existingMap.values()).sort((a, b) => Number(a.id) - Number(b.id));
+  let firstId = null;
+
+  for (let i = 0; i < replyAttrs.length; i++) {
+    const attr = replyAttrs[i];
+    const payload = { groupname: newGroupname, ...attr };
+    if (i < existingList.length) {
+      const target = existingList[i];
+      await client.updateRadgroupreply(target.id, payload);
+      if (!firstId) firstId = target.id;
+    } else {
+      const result = await client.createRadgroupreply(payload);
+      if (!firstId) firstId = result.id;
+    }
+  }
+
+  for (let i = replyAttrs.length; i < existingList.length; i++) {
+    await client.deleteRadgroupreply(existingList[i].id).catch(() => {});
+  }
+
+  return firstId;
+}
+
     try {
       const client = await ServiceFactory.getClient(SERVICE_CODES.RADIUS, req.ispId);
       if (client) {
-        const existingReplies = await client.getRadgroupreplyByGroupname(existing.planCode);
-        for (const r of existingReplies) await client.deleteRadgroupreply(r.id);
-
         const replyAttrs = await generateRadiusAttributes(updated);
-        let firstId = null;
-        for (const attr of replyAttrs) {
-          const result = await client.createRadgroupreply({ groupname: updated.planCode, ...attr });
-          if (!firstId) firstId = result.id;
-        }
+        const firstId = await syncGroupReplyAttributes(client, existing.planCode, updated.planCode, replyAttrs);
         if (firstId) await req.prisma.PackagePlan.update({ where: { id }, data: { radgroupreplyId: firstId } });
       }
     } catch (err) { console.error("Radius update failed:", err); }
@@ -422,16 +451,8 @@ async function resyncPackagePlan(req, res, next) {
     let createdRadius = 0;
 
     for (const local of localList) {
-      // Refresh logic as recommended in plan
-      const existingReplies = await client.getRadgroupreplyByGroupname(local.planCode);
-      for (const r of existingReplies) await client.deleteRadgroupreply(r.id);
-
       const replyAttrs = await generateRadiusAttributes(local);
-      let firstId = null;
-      for (const attr of replyAttrs) {
-        const result = await client.createRadgroupreply({ groupname: local.planCode, ...attr });
-        if (!firstId) firstId = result.id;
-      }
+      const firstId = await syncGroupReplyAttributes(client, local.planCode, local.planCode, replyAttrs);
       if (firstId) await req.prisma.PackagePlan.update({ where: { id: local.id }, data: { radgroupreplyId: firstId } });
       createdRadius++;
     }
